@@ -440,9 +440,10 @@ class SetFolderStmt(Statement):
 
 @dataclass
 class CatStmt(Statement):
-    """CAT [path] — list category contents"""
+    """CAT/LS [path] [*pattern*] — list category contents"""
     path: Expr = None
     entity_type: str = ""  # FLOWS, PROCESSES, SYSTEMS, or empty
+    filter_pattern: str = ""  # wildcard filter like *concrete*
 
 
 @dataclass
@@ -460,6 +461,12 @@ class CdStmt(Statement):
 @dataclass
 class UpStmt(Statement):
     """UP — go up one level"""
+    pass
+
+
+@dataclass
+class PwdStmt(Statement):
+    """PWD — show current folders"""
     pass
 
 

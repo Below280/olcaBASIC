@@ -286,6 +286,12 @@ class Interpreter:
         elif isinstance(stmt, CdStmt):
             self._exec_dir_nav(stmt)  # undocumented alias
 
+        elif isinstance(stmt, PwdStmt):
+            pf = self.runtime.process_folder or "(root)"
+            ff = self.runtime.flow_folder or "(root)"
+            print(f"  Process folder: {pf}")
+            print(f"  Flow folder:    {ff}")
+
         elif isinstance(stmt, UpStmt):
             self._exec_up()
 
@@ -766,12 +772,26 @@ class Interpreter:
 
         # Build parameter dicts from local LET statements
         parameters = []
+        param_names = set()
         for let_stmt in stmt.local_params:
             val = self._eval(let_stmt.expr)
             parameters.append({
                 "name": let_stmt.name,
                 "value": float(val) if isinstance(val, (int, float)) else 0,
             })
+            param_names.add(let_stmt.name)
+
+        # Auto-add parameters referenced in exchange formulas
+        for ex_dict in exchanges:
+            formula = ex_dict.get("formula", "")
+            if formula:
+                for var_name, var_val in self.runtime.get_numeric_globals().items():
+                    if var_name in formula and var_name not in param_names:
+                        parameters.append({
+                            "name": var_name,
+                            "value": float(var_val),
+                        })
+                        param_names.add(var_name)
 
         result = self.bridge.create_process(
             name, folder, exchanges, parameters or None,
@@ -993,6 +1013,8 @@ class Interpreter:
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         print(f"  Deleted: {result.get('name', ref)}")
+        # Auto-refresh cache so the deleted entity disappears
+        self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
         self._require_bridge(stmt.line)
@@ -1096,7 +1118,7 @@ class Interpreter:
         print("  EDIT PROCESS: not yet fully implemented in v0.1")
 
     def _exec_cat(self, stmt):
-        """CAT — list category contents."""
+        """CAT/LS — list category contents, with optional wildcard filter."""
         self._require_bridge(stmt.line)
         if stmt.path:
             path = self._eval_str(stmt.path)
@@ -1106,25 +1128,47 @@ class Interpreter:
         result = self.bridge.list_category_contents(
             path, stmt.entity_type)
 
-        print(f"  {result['path']}")
+        # Apply wildcard filter if specified
+        from fnmatch import fnmatch
+        pattern = stmt.filter_pattern.lower() if stmt.filter_pattern else ""
+
+        if pattern:
+            print(f"  {result['path']}  (filter: {stmt.filter_pattern})")
+        else:
+            print(f"  {result['path']}")
         print()
 
+        shown_folders = 0
         if result["subfolders"]:
             for sf in result["subfolders"]:
                 last = sf.split("/")[-1]
+                if pattern and not fnmatch(last.lower(), pattern):
+                    continue
                 print(f"    [DIR]  {last}/")
+                shown_folders += 1
 
+        shown_entities = 0
         if result["entities"]:
             for e in result["entities"]:
+                if pattern and not fnmatch(e["name"].lower(), pattern):
+                    continue
                 tag = e["type"][0].upper()
                 print(f"    [{tag}]    {e['name']}")
+                shown_entities += 1
 
-        if not result["subfolders"] and not result["entities"]:
-            print("    (empty)")
+        if shown_folders == 0 and shown_entities == 0:
+            if pattern:
+                print(f"    No matches for {stmt.filter_pattern}")
+            else:
+                print("    (empty)")
 
         print()
-        print(f"  {result['subfolder_count']} folders, "
-              f"{result['entity_count']} entities")
+        if pattern:
+            print(f"  {shown_folders} folders, "
+                  f"{shown_entities} entities (filtered)")
+        else:
+            print(f"  {result['subfolder_count']} folders, "
+                  f"{result['entity_count']} entities")
 
     def _navigate_to(self, path: str):
         """Internal: navigate to a folder, saving previous for BACK."""

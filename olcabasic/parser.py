@@ -397,11 +397,19 @@ class Parser:
         if kw == "CAT":
             return self.parse_cat(line)
 
+        if kw == "LS":
+            return self.parse_cat(line)  # Linux alias
+
         if kw == "DIR":
             return self.parse_dir_nav(line)
 
         if kw == "CD":
             return self.parse_dir_nav(line)  # undocumented alias
+
+        if kw == "PWD":
+            self.advance()
+            self.expect_newline()
+            return PwdStmt(line=line)
 
         if kw == "UP":
             self.advance()
@@ -1221,20 +1229,42 @@ class Parser:
         return None
 
     def parse_cat(self, line: int) -> CatStmt:
-        """CAT [FLOWS|PROCESSES|SYSTEMS] ["path"]"""
-        self.advance()  # CAT
+        """CAT/LS [FLOWS|PROCESSES|SYSTEMS] ["path"] [*pattern*]"""
+        self.advance()  # CAT or LS
         entity_type = ""
         path = None
+        filter_pattern = ""
+
         if self.at_keyword("FLOWS"):
             entity_type = self.advance().upper()
         elif self.at_keyword("PROCESSES"):
             entity_type = self.advance().upper()
         elif self.at_keyword("SYSTEMS"):
             entity_type = self.advance().upper()
-        if self.peek().type == TokenType.STRING:
-            path = self.parse_string_or_expr()
+
+        # Check for wildcard pattern: *term* or *term
+        # Tokenises as STAR IDENTIFIER [STAR]
+        if self.peek().type == TokenType.STAR:
+            self.advance()  # consume first *
+            if self.peek().type in (TokenType.IDENTIFIER,
+                                     TokenType.KEYWORD):
+                term = self.advance().value
+                filter_pattern = "*" + term
+                if self.peek().type == TokenType.STAR:
+                    self.advance()  # consume trailing *
+                    filter_pattern += "*"
+        elif self.peek().type == TokenType.STRING:
+            val = self.peek().value
+            if "*" in val:
+                # Quoted wildcard: "*concrete*"
+                filter_pattern = self.advance().value
+            else:
+                path = self.parse_string_or_expr()
+
         self.expect_newline()
-        return CatStmt(line=line, path=path, entity_type=entity_type)
+        return CatStmt(line=line, path=path,
+                        entity_type=entity_type,
+                        filter_pattern=filter_pattern)
 
     def parse_dir_nav(self, line: int) -> Statement:
         """DIR "path" or DIR (show current) or CD "path" or CD .."""
