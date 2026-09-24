@@ -8,8 +8,8 @@
            \___/|_____\____/_/   \_\____/_/   \_\____/|_|\____|
 ```
 
-**A simplified language to control openLCA, borrowing heavily from
-the BASIC programming language (1964)**
+**A simplified language to control openLCA, borrowing heavily
+from the BASIC programming language (1964)**
 
 olcaBASIC lets LCA practitioners build models, run calculations, and
 analyse results without writing Python. It connects to openLCA via the
@@ -26,63 +26,50 @@ Start the IPC server in openLCA (Tools > Developer Tools > IPC Server),
 then:
 
 ```
-olcabasic
+python -m olcabasic
 ```
 
 ```
-olcaBASIC v0.1.0
-Connected to openLCA on port 8080 (ecoinvent 3.10)
+olcaBASIC v0.1.5
+Connected to openLCA on port 8080
 Ready.
 
-> PRINT PROCESSES("electricity", "", "GB")
-  electricity production, wind, 1-3MW | GB
-  electricity production, natural gas | GB
-  ...
+> PRINT DATABASE
+  Processes:       2608
+  Flows:           177294
+  Impact methods:  8
+  Family:          flcac
 
-> PRINT METHODS("ReCiPe")
-  ReCiPe 2016 Midpoint (H)
-  ReCiPe 2016 Endpoint (H)
+> FIND PROCESS "cement"
+  Portland cement; at plant    31-33: Manufacturing/3273: Cement and Co
 
-> CALCULATE "My System" USING "ReCiPe 2016 Midpoint (H)"
-  Climate change:    247.3 kg CO2-eq
-  Ozone depletion:   3.21e-6 kg CFC-11-eq
-  ...
+> CALCULATE "Ready-mix concrete" USING "IPCC"
+  AR6-100    1.769261 kg CO2 eq
 ```
 
 ## Write programs
 
-Save as `mymodel.baslca` and run with `olcabasic run mymodel.baslca`:
+Save as `mymodel.baslca` and run with `python -m olcabasic run mymodel.baslca`:
 
 ```basic
-REM Concrete block EPD model
+REM Concrete block model
 
 LET cement_mass = 300
-LET water_cement_ratio = 0.45
-LET mixing_energy = 12
+LET sand_mass = 800
 
-FLOW "Concrete block", m3, PRODUCT
+SET PROCESS FOLDER "00: My Project"
+SET FLOW FOLDER "00: My Project/Flows"
 
-BRIDGE "BRIDGE | Cement | kg", kg
-  FOLDER "00: Concrete/Bridges"
-  PROVIDER "cement production, Portland | GB"
-END BRIDGE
-
-PROCESS "A1: Raw materials" LOCATION "GB"
-  FOLDER "00: Concrete/A1"
-  OUTPUT "Concrete block", 1, m3, PRODUCT
-  INPUT "BRIDGE | Cement | kg", cement_mass, kg
-  INPUT "BRIDGE | Sand | kg", 800, kg
-  INPUT "BRIDGE | UK grid | kWh", mixing_energy, kWh
+PROCESS "Concrete block; at plant"
+  OUTPUT NEW "Concrete block", 1, m3, PRODUCT
+  INPUT "Portland cement; at plant", cement_mass, kg
+  INPUT "Construction sand and gravel; at mine", sand_mass, kg
 END PROCESS
 
-SYSTEM "A1: Raw materials"
-CALCULATE "A1: Raw materials" USING "EN15804+A2 (EF 3.1)"
+SYSTEM "Concrete block; at plant"
+CALCULATE "Concrete block; at plant" USING "IPCC"
 PRINT RESULTS
-
-SENSITIVITY ON "A1: Raw materials" USING "EN15804+A2 (EF 3.1)" BY 20%
-  VARY cement_mass
-  VARY mixing_energy
-END SENSITIVITY
+SAVE RESULTS "concrete_results.csv"
 
 SCENARIO "Baseline"
 END SCENARIO
@@ -91,15 +78,96 @@ SCENARIO "Low cement"
   LET cement_mass = 240
 END SCENARIO
 
-RUN SCENARIOS ON "A1: Raw materials" USING "EN15804+A2 (EF 3.1)"
-SAVE RESULTS "scenarios.csv"
+RUN SCENARIOS ON "Concrete block; at plant" USING "IPCC"
 ```
+
+## How INPUT and OUTPUT work
+
+By default, `INPUT` finds existing flows and processes in the database
+and wires them up as providers automatically. This is what connects your
+foreground model to the background supply chain.
+
+`OUTPUT NEW` creates a new foreground product flow. `INPUT NEW` creates
+a fresh flow without linking to a provider.
+
+```basic
+OUTPUT NEW "My product", 1, kg, PRODUCT    ' creates your product
+INPUT "Portland cement; at plant", 300, kg  ' finds and links to database
+INPUT NEW "Custom blend", 50, kg            ' creates a new flow
+```
+
+## Navigation
+
+olcaBASIC includes folder navigation inspired by the Acorn Electron:
+
+```
+CAT                         List current folder contents
+CAT *concrete*              Filter by wildcard
+DIR "31-33: Manufacturing"  Navigate to folder
+UP                          Go up one level
+BACK                        Toggle to previous folder
+CDIR "My Model"             Create and enter a folder
+PWD                         Show current folders
+```
+
+`LS` works as an alias for `CAT`. `CD` works as an alias for `DIR`.
+
+## Parameters
+
+Variables defined with `LET` become openLCA parameters. Use them in
+exchange amounts and they flow through to scenarios and sensitivity
+analysis:
+
+```basic
+LET cement_mass = 300
+LET water_ratio = 0.45
+LET water_mass = cement_mass * water_ratio
+
+PROCESS "Mixing"
+  INPUT "Portland cement; at plant", cement_mass, kg
+  INPUT "Water", water_mass, kg
+  OUTPUT NEW "Concrete", 1, m3, PRODUCT
+END PROCESS
+```
+
+## Scenarios
+
+```basic
+SCENARIO "Baseline"
+END SCENARIO
+
+SCENARIO "Low cement"
+  LET cement_mass = 240
+END SCENARIO
+
+SCENARIO "High cement"
+  LET cement_mass = 380
+END SCENARIO
+
+RUN SCENARIOS ON "My System" USING "IPCC"
+```
+
+## Sensitivity
+
+```basic
+SENSITIVITY ON "My System" USING "IPCC" BY 20%
+  VARY cement_mass
+  VARY sand_mass
+END SENSITIVITY
+```
+
+## Full command reference
+
+Type `HELP` in the REPL for the command list, or `HELP PROCESS`,
+`HELP FOLDER`, `HELP NEW`, `HELP SCENARIO`, `HELP SENSITIVITY` for
+detailed guidance on each topic.
 
 ## Why?
 
-This exists to make LCA easy to do programmatically. 
-
-There was no sensible reason why we made this. 
+Brightway is powerful but requires Python fluency. SimaPro is
+point-and-click but not scriptable. olcaBASIC sits in between:
+programmatic, reproducible LCA work that any environmental scientist
+can read and write on day one.
 
 ## Requirements
 
@@ -113,10 +181,10 @@ MPL-2.0
 
 ## Links
 
-- [Language specification](./olcaBASIC_Language_Specification_v1.md)
 - [B280 openLCA MCP](https://github.com/Below280/B280-olca-MCP)
 - [B280 Python IPC tools](https://github.com/Below280/openLCA-IPC-tools-python)
 - [Below280](https://below280.com)
 
 *Built by Below280. openLCA is developed by GreenDelta.*
 *BASIC was created by Kemeny and Kurtz at Dartmouth College, 1964.*
+*Navigation commands inspired by the Acorn Electron (1983).*
