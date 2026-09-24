@@ -164,10 +164,10 @@ detailed guidance on each topic.
 
 ## Why?
 
-Brightway is powerful but requires Python fluency. SimaPro is
-point-and-click but not scriptable. olcaBASIC sits in between:
-programmatic, reproducible LCA work that any environmental scientist
-can read and write on day one.
+Whilst openLCA has a wonderful set of scripting options, you need to have a good idea about programming to avoid making mistakes
+This is a quick way to control by command line, with the complex bits hidden.
+
+There was probably no good reason for this, but we wanted to make it. 
 
 ## Requirements
 
