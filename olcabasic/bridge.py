@@ -147,6 +147,45 @@ class LCABridge:
         proc = self.lca._resolve_process(name_or_id)
         return proc.id if proc else None
 
+    def find_flow(self, name: str, unit: str = "",
+                  category: str = "") -> Optional[Dict]:
+        """Find an existing flow by name. Returns dict with flow_id or None."""
+        self._require_connection()
+        import olca_schema as o
+        flows = self.lca._get_descriptors(o.Flow)
+        for f in flows:
+            if f.name == name:
+                return {"flow_id": f.id, "flow_name": f.name,
+                        "already_existed": True}
+        # Substring match fallback
+        for f in flows:
+            if name.lower() in f.name.lower():
+                return {"flow_id": f.id, "flow_name": f.name,
+                        "already_existed": True}
+        return None
+
+    def find_process_qref_flow(self, process_name: str) -> Optional[Dict]:
+        """Find a process by name and return its quantitative reference
+        flow ID and the process ID (for use as default provider)."""
+        self._require_connection()
+        import olca_schema as o
+        proc_desc = self.lca._resolve_process(process_name)
+        if not proc_desc:
+            return None
+        proc = self.lca.client.get(o.Process, proc_desc.id)
+        if not proc or not proc.exchanges:
+            return None
+        for ex in proc.exchanges:
+            if getattr(ex, "is_quantitative_reference", False) and ex.flow:
+                return {
+                    "flow_id": ex.flow.id,
+                    "flow_name": ex.flow.name,
+                    "process_id": proc_desc.id,
+                    "process_name": proc_desc.name,
+                    "unit": ex.unit.name if ex.unit else "",
+                }
+        return None
+
     # ── Process creation ─────────────────────────────────
 
     def create_process(self, name: str, category: str,
@@ -269,3 +308,64 @@ class LCABridge:
         if self.lca:
             self.lca._cache.clear()
             self.lca._cache_ts.clear()
+
+    def list_category_contents(self, path: str = "",
+                                entity_type: str = "") -> Dict:
+        """List processes, flows, or systems in a category folder.
+        Returns immediate children (subfolders and entities)."""
+        self._require_connection()
+        import olca_schema as o
+
+        # Decide which entity types to scan
+        types_to_scan = []
+        if entity_type == "FLOWS":
+            types_to_scan = [(o.Flow, "flow")]
+        elif entity_type == "SYSTEMS":
+            types_to_scan = [(o.ProductSystem, "system")]
+        elif entity_type == "PROCESSES":
+            types_to_scan = [(o.Process, "process")]
+        else:
+            types_to_scan = [
+                (o.Process, "process"),
+                (o.Flow, "flow"),
+                (o.ProductSystem, "system"),
+            ]
+
+        subfolders = set()
+        entities = []
+        path_lower = path.lower().rstrip("/") if path else ""
+
+        for otype, label in types_to_scan:
+            for desc in self.lca._get_descriptors(otype):
+                cat = getattr(desc, "category", "") or ""
+                cat_lower = cat.lower()
+
+                if path_lower:
+                    if not cat_lower.startswith(path_lower):
+                        continue
+                    remainder = cat[len(path):].strip("/")
+                else:
+                    remainder = cat
+
+                if not remainder:
+                    # Entity is directly in this folder
+                    entities.append({
+                        "name": desc.name,
+                        "type": label,
+                        "category": cat,
+                    })
+                else:
+                    # Entity is in a subfolder
+                    top_segment = remainder.split("/")[0]
+                    if path:
+                        subfolders.add(path.rstrip("/") + "/" + top_segment)
+                    else:
+                        subfolders.add(top_segment)
+
+        return {
+            "path": path or "(root)",
+            "subfolders": sorted(subfolders),
+            "entities": entities[:50],
+            "entity_count": len(entities),
+            "subfolder_count": len(subfolders),
+        }

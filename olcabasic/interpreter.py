@@ -264,8 +264,36 @@ class Interpreter:
         elif isinstance(stmt, ConfirmDeleteStmt):
             self.runtime.confirm_delete = stmt.enabled
 
+        elif isinstance(stmt, SetFolderStmt):
+            folder = self._eval_str(stmt.folder)
+            if stmt.target == "FLOW":
+                self.runtime.flow_folder = folder
+                print(f"  Flow folder set: {folder}")
+            else:
+                self.runtime.previous_folder = self.runtime.process_folder
+                self.runtime.process_folder = folder
+                print(f"  Process folder set: {folder}")
+
         elif isinstance(stmt, HelpStmt):
             self._exec_help(stmt)
+
+        elif isinstance(stmt, CatStmt):
+            self._exec_cat(stmt)
+
+        elif isinstance(stmt, DirStmt):
+            self._exec_dir_nav(stmt)
+
+        elif isinstance(stmt, CdStmt):
+            self._exec_dir_nav(stmt)  # undocumented alias
+
+        elif isinstance(stmt, UpStmt):
+            self._exec_up()
+
+        elif isinstance(stmt, BackStmt):
+            self._exec_back()
+
+        elif isinstance(stmt, CdirStmt):
+            self._exec_cdir(stmt)
 
         elif isinstance(stmt, ClearStmt):
             os.system("cls" if os.name == "nt" else "clear")
@@ -553,7 +581,7 @@ class Interpreter:
     def _exec_flow(self, stmt: FlowStmt):
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
-        folder = self._eval_str(stmt.folder) if stmt.folder else ""
+        folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.flow_folder
 
         ft = stmt.flow_type.lower()
         if stmt.direction:
@@ -569,18 +597,30 @@ class Interpreter:
         elif stmt.direction == "NATURE":
             folder = folder or "Elementary flows/resource/in ground"
 
-        result = self.bridge.create_flow(name, stmt.unit, folder, ft)
-        if "error" in result:
-            raise BasicError(result["error"], stmt.line)
-
-        existed = result.get("already_existed", False)
-        status = "exists" if existed else "created"
-        print(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
+        if stmt.is_new:
+            # NEW: always create
+            result = self.bridge.create_flow(name, stmt.unit, folder, ft)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            existed = result.get("already_existed", False)
+            status = "exists" if existed else "created"
+            print(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
+        else:
+            # Default: find existing
+            found = self.bridge.find_flow(name, stmt.unit)
+            if found:
+                print(f"  Flow found: {found['flow_name']}")
+            else:
+                # Not found: create it
+                result = self.bridge.create_flow(name, stmt.unit, folder, ft)
+                if "error" in result:
+                    raise BasicError(result["error"], stmt.line)
+                print(f"  Flow created: {name} ({stmt.unit}, {ft})")
 
     def _exec_bridge(self, stmt: BridgeStmt):
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
-        folder = self._eval_str(stmt.folder) if stmt.folder else ""
+        folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.process_folder
         provider_id = None
 
         if stmt.provider:
@@ -610,7 +650,7 @@ class Interpreter:
     def _exec_process(self, stmt: ProcessStmt):
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
-        folder = self._eval_str(stmt.folder) if stmt.folder else ""
+        folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.process_folder
         description = self._eval_str(stmt.description) if stmt.description else ""
         location = self._eval_str(stmt.location) if stmt.location else None
         flow_schema = self._eval_str(stmt.flow_schema) if stmt.flow_schema else None
@@ -656,14 +696,41 @@ class Interpreter:
             elif ex.direction == "OUTPUT":
                 flow_type = "product"
 
-            # Create or find the flow
-            flow_result = self.bridge.create_flow(
-                flow_name, unit, category, flow_type)
-            if "error" in flow_result:
-                raise BasicError(
-                    f"Flow '{flow_name}': {flow_result['error']}",
-                    stmt.line)
-            flow_id = flow_result["flow_id"]
+            # Resolve the flow: find existing or create new
+            flow_id = None
+            provider_id = None
+
+            if ex.is_new:
+                # NEW keyword: always create a fresh flow
+                flow_result = self.bridge.create_flow(
+                    flow_name, unit, category, flow_type)
+                if "error" in flow_result:
+                    raise BasicError(
+                        f"Flow '{flow_name}': {flow_result['error']}",
+                        stmt.line)
+                flow_id = flow_result["flow_id"]
+            else:
+                # Default: find the existing flow in the database
+                # First, try to match a process name and get its qref flow
+                # (this also gives us the provider for linking)
+                proc_match = self.bridge.find_process_qref_flow(flow_name)
+                if proc_match:
+                    flow_id = proc_match["flow_id"]
+                    provider_id = proc_match["process_id"]
+                else:
+                    # Try to find a flow by name directly
+                    flow_match = self.bridge.find_flow(flow_name, unit)
+                    if flow_match:
+                        flow_id = flow_match["flow_id"]
+                    else:
+                        # Nothing found: create it (foreground flow)
+                        flow_result = self.bridge.create_flow(
+                            flow_name, unit, category, flow_type)
+                        if "error" in flow_result:
+                            raise BasicError(
+                                f"Flow '{flow_name}': {flow_result['error']}",
+                                stmt.line)
+                        flow_id = flow_result["flow_id"]
 
             # Build exchange dict
             ex_dict = {
@@ -673,6 +740,10 @@ class Interpreter:
                 "is_input": ex.direction == "INPUT",
                 "is_qref": ex.is_product,
             }
+
+            # Set provider if we found a matching process
+            if provider_id and not ex.provider:
+                ex_dict["provider_id"] = provider_id
 
             # Handle amount: explicit formula, variable reference, or bare number
             if ex.formula:
@@ -684,7 +755,7 @@ class Interpreter:
                 # Bare number: auto-parametrised by LCAFunctions
                 ex_dict["amount"] = float(self._eval(ex.amount))
 
-            # Provider
+            # Explicit provider overrides auto-detected one
             if ex.provider:
                 prov_str = self._eval_str(ex.provider)
                 prov_id = self.bridge.resolve_process(prov_str)
@@ -1024,41 +1095,212 @@ class Interpreter:
         # TODO: full edit implementation
         print("  EDIT PROCESS: not yet fully implemented in v0.1")
 
-    def _exec_help(self, stmt: HelpStmt):
+    def _exec_cat(self, stmt):
+        """CAT — list category contents."""
+        self._require_bridge(stmt.line)
+        if stmt.path:
+            path = self._eval_str(stmt.path)
+        else:
+            path = self.runtime.process_folder
+
+        result = self.bridge.list_category_contents(
+            path, stmt.entity_type)
+
+        print(f"  {result['path']}")
+        print()
+
+        if result["subfolders"]:
+            for sf in result["subfolders"]:
+                last = sf.split("/")[-1]
+                print(f"    [DIR]  {last}/")
+
+        if result["entities"]:
+            for e in result["entities"]:
+                tag = e["type"][0].upper()
+                print(f"    [{tag}]    {e['name']}")
+
+        if not result["subfolders"] and not result["entities"]:
+            print("    (empty)")
+
+        print()
+        print(f"  {result['subfolder_count']} folders, "
+              f"{result['entity_count']} entities")
+
+    def _navigate_to(self, path: str):
+        """Internal: navigate to a folder, saving previous for BACK."""
+        self.runtime.previous_folder = self.runtime.process_folder
+        self.runtime.process_folder = path
+
+    def _exec_dir_nav(self, stmt):
+        """DIR "path" or DIR (show current)."""
+        if stmt.path is None:
+            pf = self.runtime.process_folder or "(root)"
+            ff = self.runtime.flow_folder or "(root)"
+            print(f"  Process folder: {pf}")
+            print(f"  Flow folder:    {ff}")
+            return
+
+        path = self._eval_str(stmt.path)
+
+        if path == "/" or path == "":
+            self._navigate_to("")
+        else:
+            current = self.runtime.process_folder
+            if current:
+                self._navigate_to(current.rstrip("/") + "/" + path)
+            else:
+                self._navigate_to(path)
+
+        pf = self.runtime.process_folder or "(root)"
+        print(f"  {pf}")
+
+    def _exec_up(self):
+        """UP — go up one level."""
+        current = self.runtime.process_folder
+        self.runtime.previous_folder = current
+        if "/" in current:
+            self.runtime.process_folder = current.rsplit("/", 1)[0]
+        else:
+            self.runtime.process_folder = ""
+        pf = self.runtime.process_folder or "(root)"
+        print(f"  {pf}")
+
+    def _exec_back(self):
+        """BACK — toggle to previous directory."""
+        prev = self.runtime.previous_folder
+        self.runtime.previous_folder = self.runtime.process_folder
+        self.runtime.process_folder = prev
+        pf = self.runtime.process_folder or "(root)"
+        print(f"  {pf}")
+
+    def _exec_cdir(self, stmt):
+        """CDIR — create a category folder."""
+        name = self._eval_str(stmt.name)
+        current = self.runtime.process_folder
+        if current:
+            new_path = current.rstrip("/") + "/" + name
+        else:
+            new_path = name
+        # openLCA creates categories on demand when entities are placed,
+        # so we just navigate there
+        self._navigate_to(new_path)
+        print(f"  Created and moved to: {new_path}")
+
+    def _exec_help(self, stmt):
         if stmt.topic:
-            print(f"  Help for: {stmt.topic}")
-            print("  (detailed help coming in v0.2)")
+            topic = stmt.topic.upper()
+            topics = {
+                "PROCESS": """
+  PROCESS "name" [LOCATION "code"]
+    FOLDER "path"
+    OUTPUT NEW "flow", amount, unit, PRODUCT
+    INPUT "existing process", amount, unit
+    INPUT NEW "new flow", amount, unit
+    LET param = value
+  END PROCESS
+
+  INPUT without NEW finds the existing process/flow and
+  wires it up as a provider automatically.
+  INPUT NEW creates a fresh flow (no provider link).
+  OUTPUT NEW creates your foreground product.""",
+                "FOLDER": """
+  SET PROCESS FOLDER "path"   Default folder for processes
+  SET FLOW FOLDER "path"      Default folder for new flows
+  DIR "folder"                Navigate into folder
+  DIR                         Show current folders
+  CAT                         List current folder contents
+  CAT "path"                  List specific folder
+  CAT FLOWS                   List flow categories
+  UP                          Go up one level
+  BACK                        Toggle to previous folder
+  CDIR "name"                 Create and enter a folder""",
+                "NEW": """
+  The NEW keyword controls whether flows are created or found.
+
+  INPUT "Portland cement; at plant", 300, kg
+    Finds the existing process, uses its output flow,
+    and sets it as default provider.
+
+  INPUT NEW "My custom flow", 300, kg
+    Creates a new flow (no provider link).
+
+  OUTPUT NEW "My product", 1, m3, PRODUCT
+    Creates a new foreground product flow.
+
+  FLOW NEW "name", unit, type
+    Creates a new flow outside a process.""",
+                "SCENARIO": """
+  SCENARIO "name"
+    LET param = value
+  END SCENARIO
+  RUN SCENARIOS ON "system" USING "method" """,
+                "SENSITIVITY": """
+  SENSITIVITY ON "system" USING "method" BY 20%
+    VARY param1
+    VARY param2
+  END SENSITIVITY""",
+            }
+            if topic in topics:
+                print(topics[topic])
+            else:
+                print(f"  No help for: {stmt.topic}")
+                print(f"  Try: HELP PROCESS, HELP FOLDER, HELP NEW, "
+                      f"HELP SCENARIO, HELP SENSITIVITY")
         else:
             print("""
   olcaBASIC Commands:
 
-  PRINT DATABASE              Database overview
-  PRINT PROCESSES("search")   Search processes
-  PRINT METHODS("search")     Search impact methods
-  PRINT SYSTEMS("search")     Search product systems
-  PRINT PARAMS("system")      System parameters
-  PRINT DETAILS("process")    Process details
+  Navigation:
+    DIR                           Show current folders
+    DIR "folder"                  Navigate into folder
+    CAT                           List current folder contents
+    CAT "path"                    List specific folder
+    CAT FLOWS                     List flow categories
+    CAT PROCESSES                 List process categories
+    UP                            Go up one level
+    BACK                          Toggle to previous folder
+    CDIR "name"                   Create and enter a folder
+    SET PROCESS FOLDER "path"     Default process folder
+    SET FLOW FOLDER "path"        Default flow folder
 
-  LET name = value            Define a parameter
-  FLOW "name", unit, type     Create a flow
-  BRIDGE "name", unit         Create a bridge
-  PROCESS "name" ... END PROCESS   Create a process
-  SYSTEM "process"            Create a product system
+  Database:
+    PRINT DATABASE              Database overview
+    PRINT PROCESSES("search")   Search processes
+    PRINT METHODS("search")     Search impact methods
+    PRINT DETAILS("process")    Process details
+    FIND PROCESS "search"       Find a process
+    FIND CHEMICAL "name"        Chemical synonym lookup
 
-  CALCULATE "sys" USING "method"   Run calculation
-  SENSITIVITY ON "sys" USING "method" BY 20%
-    VARY param1
-  END SENSITIVITY
+  Parameters:
+    LET name = value            Define a parameter
 
-  SCENARIO "name"             Define scenario overrides
-    LET param = value
-  END SCENARIO
-  RUN SCENARIOS ON "sys" USING "method"
+  Building:
+    FLOW NEW "name", unit, type Create a new flow
+    BRIDGE "name", unit         Create a bridge
+    PROCESS "name"              Create a process
+    SYSTEM "process"            Create a product system
 
-  PRINT RESULTS               Show last results
-  SAVE RESULTS "file.csv"     Export results
+  Exchanges (inside PROCESS):
+    INPUT "name", amt, unit         Find existing flow/process
+    INPUT NEW "name", amt, unit     Create a new flow
+    OUTPUT NEW "name", 1, u, PRODUCT  New output (qref)
 
-  RUN "file.baslca"            Run a program
-  HELP                        This message
-  EXIT                        Quit
+  Calculations:
+    CALCULATE "sys" USING "method"
+    CONTRIBUTION "sys" USING "method" TOP 10
+    MONTECARLO "sys" USING "method" RUNS 1000
+
+  Scenarios and sensitivity:
+    SCENARIO "name" ... END SCENARIO
+    RUN SCENARIOS ON "sys" USING "method"
+    SENSITIVITY ON "sys" USING "method" BY 20%
+
+  Output:
+    PRINT RESULTS               Show last results
+    SAVE RESULTS "file.csv"     Export to CSV
+
+  Other:
+    RUN "file.baslca"           Run a program file
+    HELP [topic]                Help (PROCESS, FOLDER, NEW)
+    EXIT                        Quit
 """)

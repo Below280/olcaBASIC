@@ -391,6 +391,34 @@ class Parser:
         if kw == "FIND":
             return self.parse_find(line)
 
+        if kw == "SET":
+            return self.parse_set(line)
+
+        if kw == "CAT":
+            return self.parse_cat(line)
+
+        if kw == "DIR":
+            return self.parse_dir_nav(line)
+
+        if kw == "CD":
+            return self.parse_dir_nav(line)  # undocumented alias
+
+        if kw == "UP":
+            self.advance()
+            self.expect_newline()
+            return UpStmt(line=line)
+
+        if kw == "BACK":
+            self.advance()
+            self.expect_newline()
+            return BackStmt(line=line)
+
+        if kw == "CDIR":
+            self.advance()
+            name = self.parse_string_or_expr()
+            self.expect_newline()
+            return CdirStmt(line=line, name=name)
+
         if kw == "DATABASE":
             return self.parse_database_cmd(line)
 
@@ -506,6 +534,12 @@ class Parser:
 
     def parse_flow(self, line: int) -> FlowStmt:
         self.advance()  # consume FLOW
+
+        # Check for NEW keyword
+        is_new = False
+        if self.match_keyword("NEW"):
+            is_new = True
+
         name = self.parse_string_or_expr()
         if self.peek().type == TokenType.COMMA:
             self.advance()
@@ -555,7 +589,7 @@ class Parser:
         self.expect_newline()
         return FlowStmt(line=line, name=name, unit=unit,
                          flow_type=flow_type, folder=folder,
-                         direction=direction)
+                         direction=direction, is_new=is_new)
 
     def parse_bridge(self, line: int) -> BridgeStmt:
         self.advance()  # consume BRIDGE
@@ -708,6 +742,12 @@ class Parser:
     def parse_exchange(self) -> ExchangeDef:
         """Parse an INPUT or OUTPUT line inside a PROCESS block."""
         direction = self.advance().upper()  # INPUT or OUTPUT
+
+        # Check for NEW keyword
+        is_new = False
+        if self.match_keyword("NEW"):
+            is_new = True
+
         flow_name = self.parse_string_or_expr()
         if self.peek().type == TokenType.COMMA:
             self.advance()
@@ -769,7 +809,8 @@ class Parser:
 
         return ExchangeDef(
             direction=direction, flow_name=flow_name, amount=amount,
-            unit=unit, is_product=is_product, is_waste=is_waste,
+            unit=unit, is_new=is_new, is_product=is_product,
+            is_waste=is_waste,
             direction_compartment=compartment, provider=provider,
             formula=formula)
 
@@ -1142,6 +1183,76 @@ class Parser:
         return FindStmt(line=line, entity_type=entity_type,
                          search_term=search_term, location=location,
                          category=category)
+
+    def parse_set(self, line: int) -> Statement:
+        self.advance()  # SET
+        # SET FLOW FOLDER "path"
+        if self.at_keyword("FLOW"):
+            self.advance()
+            if self.match_keyword("FOLDER"):
+                folder = self.parse_string_or_expr()
+                self.expect_newline()
+                return SetFolderStmt(line=line, folder=folder,
+                                     target="FLOW")
+        # SET PROCESS FOLDER "path"
+        elif self.at_keyword("PROCESS"):
+            self.advance()
+            if self.match_keyword("FOLDER"):
+                folder = self.parse_string_or_expr()
+                self.expect_newline()
+                return SetFolderStmt(line=line, folder=folder,
+                                     target="PROCESS")
+        # SET FOLDER "path" (default: process folder)
+        elif self.match_keyword("FOLDER"):
+            folder = self.parse_string_or_expr()
+            self.expect_newline()
+            return SetFolderStmt(line=line, folder=folder,
+                                 target="PROCESS")
+        # Fallback: treat SET as LET (for scenario overrides at top level)
+        tok = self.peek()
+        if tok.type == TokenType.IDENTIFIER:
+            name = self.advance().value
+            if self.peek().type == TokenType.EQUALS:
+                self.advance()
+            expr = self.parse_expr()
+            self.expect_newline()
+            return LetStmt(line=line, name=name, expr=expr)
+        self.expect_newline()
+        return None
+
+    def parse_cat(self, line: int) -> CatStmt:
+        """CAT [FLOWS|PROCESSES|SYSTEMS] ["path"]"""
+        self.advance()  # CAT
+        entity_type = ""
+        path = None
+        if self.at_keyword("FLOWS"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("PROCESSES"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("SYSTEMS"):
+            entity_type = self.advance().upper()
+        if self.peek().type == TokenType.STRING:
+            path = self.parse_string_or_expr()
+        self.expect_newline()
+        return CatStmt(line=line, path=path, entity_type=entity_type)
+
+    def parse_dir_nav(self, line: int) -> Statement:
+        """DIR "path" or DIR (show current) or CD "path" or CD .."""
+        self.advance()  # DIR or CD
+        # No args = show current directory
+        if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                 TokenType.COMMENT):
+            self.expect_newline()
+            return DirStmt(line=line, path=None)
+        # .. goes up
+        tok = self.peek()
+        if tok.type == TokenType.IDENTIFIER and tok.value == "..":
+            self.advance()
+            self.expect_newline()
+            return UpStmt(line=line)
+        path = self.parse_string_or_expr()
+        self.expect_newline()
+        return DirStmt(line=line, path=path)
 
     def parse_database_cmd(self, line: int) -> Statement:
         self.advance()  # DATABASE

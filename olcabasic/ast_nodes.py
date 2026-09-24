@@ -135,6 +135,7 @@ class FlowStmt(Statement):
     flow_type: str = "PRODUCT"
     folder: Expr = None
     direction: str = ""  # AIR, WATER, SOIL, NATURE (for elementary)
+    is_new: bool = False  # NEW marker: always create
 
 
 # ── Exchange (inside a process) ──────────────────────────
@@ -146,6 +147,7 @@ class ExchangeDef:
     flow_name: Expr = None
     amount: Expr = None        # number, variable, or expression
     unit: str = ""
+    is_new: bool = False       # NEW marker: create flow instead of finding
     is_product: bool = False   # PRODUCT marker (qref)
     is_waste: bool = False     # WASTE marker
     direction_compartment: str = ""  # TO AIR, TO WATER, etc.
@@ -428,6 +430,50 @@ class FindStmt(Statement):
 
 
 # ── REPL commands ────────────────────────────────────────
+
+@dataclass
+class SetFolderStmt(Statement):
+    """SET PROCESS FOLDER / SET FLOW FOLDER"""
+    folder: Expr = None
+    target: str = "PROCESS"  # PROCESS or FLOW
+
+
+@dataclass
+class CatStmt(Statement):
+    """CAT [path] — list category contents"""
+    path: Expr = None
+    entity_type: str = ""  # FLOWS, PROCESSES, SYSTEMS, or empty
+
+
+@dataclass
+class DirStmt(Statement):
+    """DIR "path" — navigate to folder"""
+    path: Expr = None
+
+
+@dataclass
+class CdStmt(Statement):
+    """CD [path] — alias for DIR (undocumented)"""
+    path: Expr = None
+
+
+@dataclass
+class UpStmt(Statement):
+    """UP — go up one level"""
+    pass
+
+
+@dataclass
+class BackStmt(Statement):
+    """BACK — toggle to previous directory"""
+    pass
+
+
+@dataclass
+class CdirStmt(Statement):
+    """CDIR "name" — create a category folder"""
+    name: Expr = None
+
 
 @dataclass
 class HelpStmt(Statement):

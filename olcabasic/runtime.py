@@ -49,6 +49,11 @@ class Runtime:
         self.global_scope = Scope()
         self.current_scope = self.global_scope
 
+        # Default folders for created entities
+        self.process_folder: str = ""
+        self.flow_folder: str = ""
+        self.previous_folder: str = ""  # for BACK command
+
         # DATA queue for DATA/READ statements
         self.data_queue: deque = deque()
 
@@ -131,6 +136,9 @@ class Runtime:
         """Clear all state (for NEW command)."""
         self.global_scope = Scope()
         self.current_scope = self.global_scope
+        self.process_folder = ""
+        self.flow_folder = ""
+        self.previous_folder = ""
         self.data_queue.clear()
         self.subs.clear()
         self.functions.clear()

@@ -79,6 +79,7 @@ KEYWORDS = {
     # File operations
     "RUN", "SAVE", "LOAD", "INCLUDE", "NEW",
     "HISTORY", "CLEAR", "EXIT", "QUIT", "HELP",
+    "CD", "DIR", "CAT", "UP", "BACK", "CDIR",
     # LCA entities
     "FLOW", "PROCESS", "BRIDGE", "SYSTEM",
     "CALCULATE", "SENSITIVITY", "SCENARIO", "SCENARIOS",
@@ -287,6 +288,12 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
             continue
 
         # Unknown character — skip it
+        # But handle .. and . for CD navigation
+        if ch == "." and pos + 1 < length and text[pos + 1] == ".":
+            tokens.append(Token(TokenType.IDENTIFIER, "..",
+                                line_number, pos))
+            pos += 2
+            continue
         pos += 1
 
     tokens.append(Token(TokenType.NEWLINE, "\\n", line_number, pos))
