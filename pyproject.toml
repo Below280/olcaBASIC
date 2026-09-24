@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "olcabasic"
+version = "0.1.0"
+description = "A BASIC-like language for controlling openLCA"
+readme = "README.md"
+license = {text = "MPL-2.0"}
+requires-python = ">=3.10"
+authors = [{name = "Below280", email = "info@below280.com"}]
+keywords = ["lca", "openlca", "basic", "dsl", "life-cycle-assessment"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "b280-olca-mcp>=1.11",
+]
+
+[project.scripts]
+olcabasic = "olcabasic.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Below280/olcaBASIC"
+Repository = "https://github.com/Below280/olcaBASIC"
+Issues = "https://github.com/Below280/olcaBASIC/issues"
