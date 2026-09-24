@@ -97,10 +97,9 @@ SAVE RESULTS "scenarios.csv"
 
 ## Why?
 
-Brightway is powerful but requires Python fluency. SimaPro is
-point-and-click but not scriptable. olcaBASIC sits in between:
-programmatic, reproducible LCA work that any environmental scientist
-can read and write on day one.
+This exists to make LCA easy to do programmatically. 
+
+There was no sensible reason why we made this. 
 
 ## Requirements
 
