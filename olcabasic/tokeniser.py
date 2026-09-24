@@ -71,7 +71,7 @@ class Token:
 # which must be checked before single-word ones during parsing.
 KEYWORDS = {
     # Core BASIC
-    "REM", "LET", "PRINT", "INPUT", "IF", "THEN", "ELSE",
+    "REM", "LET", "PRINT", "INPUT", "OUTPUT", "IF", "THEN", "ELSE",
     "END", "FOR", "TO", "STEP", "NEXT", "EACH", "IN",
     "WHILE", "WEND", "SUB", "FUNCTION", "AS", "RETURN",
     "AND", "OR", "NOT", "ON", "ERROR",

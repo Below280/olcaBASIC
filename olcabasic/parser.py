@@ -727,6 +727,9 @@ class Parser:
         formula = None
 
         # Parse trailing modifiers
+        # Allow optional comma before modifiers (e.g. "m3, PRODUCT")
+        if self.peek().type == TokenType.COMMA:
+            self.advance()
         while self.peek().type == TokenType.KEYWORD:
             kw = self.peek().upper()
             if kw == "PRODUCT":

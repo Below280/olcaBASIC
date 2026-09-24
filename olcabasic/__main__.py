@@ -23,7 +23,7 @@ BANNER = r"""
                          by Below280
 """
 
-VERSION = "0.1.0"
+from . import __version__ as VERSION
 
 
 def main():
