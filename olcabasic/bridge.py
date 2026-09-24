@@ -182,53 +182,53 @@ class LCABridge:
     def calculate(self, system_ref: str, method_ref: str,
                   allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.calculate_impacts(system_ref, method_ref, alloc)
+        if allocation:
+            return self.lca.calculate_impacts(system_ref, method_ref, allocation.lower())
+        return self.lca.calculate_impacts(system_ref, method_ref)
 
     def contribution(self, system_ref: str, method_ref: str,
                      top: int = 10,
                      categories: Optional[List[str]] = None,
                      allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.contribution_analysis(
-            system_ref, method_ref, categories=categories,
-            max_contributors=top, allocation=alloc)
+        kwargs = {"categories": categories, "max_contributors": top}
+        if allocation:
+            kwargs["allocation"] = allocation.lower()
+        return self.lca.contribution_analysis(system_ref, method_ref, **kwargs)
 
     def inventory(self, system_ref: str, method_ref: str,
                   max_flows: int = 50,
                   allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.inventory_flows(
-            system_ref, method_ref, max_flows=max_flows,
-            allocation=alloc)
+        kwargs = {"max_flows": max_flows}
+        if allocation:
+            kwargs["allocation"] = allocation.lower()
+        return self.lca.inventory_flows(system_ref, method_ref, **kwargs)
 
     def monte_carlo(self, system_ref: str, method_ref: str,
                     iterations: int = 1000,
                     allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.monte_carlo(
-            system_ref, method_ref, iterations, alloc)
+        if allocation:
+            return self.lca.monte_carlo(system_ref, method_ref, iterations, allocation.lower())
+        return self.lca.monte_carlo(system_ref, method_ref, iterations)
 
     def run_scenarios(self, system_ref: str, method_ref: str,
                       scenarios: Dict,
                       allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.run_scenarios(
-            system_ref, method_ref, scenarios, alloc)
+        if allocation:
+            return self.lca.run_scenarios(system_ref, method_ref, scenarios, allocation.lower())
+        return self.lca.run_scenarios(system_ref, method_ref, scenarios)
 
     def run_sensitivity(self, system_ref: str, method_ref: str,
                         parameters: List[str],
                         variation_pct: float = 20.0,
                         allocation: str = "") -> Dict:
         self._require_connection()
-        alloc = allocation.lower() if allocation else None
-        return self.lca.run_sensitivity(
-            system_ref, method_ref, parameters,
-            variation_pct, alloc)
+        if allocation:
+            return self.lca.run_sensitivity(system_ref, method_ref, parameters, variation_pct, allocation.lower())
+        return self.lca.run_sensitivity(system_ref, method_ref, parameters, variation_pct)
 
     # ── Audit ────────────────────────────────────────────
 

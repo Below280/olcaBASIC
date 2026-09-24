@@ -12,9 +12,9 @@ from .interpreter import Interpreter
 
 # Block-opening keywords that require an END to close
 BLOCK_OPENERS = {
-    "PROCESS", "BRIDGE", "SYSTEM", "SENSITIVITY",
+    "PROCESS", "SENSITIVITY",
     "SCENARIO", "IF", "FOR", "WHILE", "SUB", "FUNCTION",
-    "EDIT", "CONTRIBUTION",
+    "EDIT",
 }
 
 # Keywords that close a block
