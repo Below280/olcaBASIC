@@ -1,0 +1,81 @@
+REM ══════════════════════════════════════════
+REM  olcaBASIC v0.1.3 feature test
+REM ══════════════════════════════════════════
+
+PRINT "=== NAVIGATION ==="
+
+PWD
+SET PROCESS FOLDER "00: Test"
+SET FLOW FOLDER "00: Test/Flows"
+PWD
+
+DIR "31-33: Manufacturing"
+CAT
+DIR "31-33: Manufacturing/3273: Cement and Co"
+CAT
+UP
+PWD
+BACK
+PWD
+BACK
+PWD
+
+PRINT "=== WILDCARDS ==="
+
+CAT *concrete*
+CAT PROCESSES *cement*
+LS *gravel*
+
+PRINT "=== PARAMETERS ==="
+
+LET cement_mass = 300
+LET sand_mass = 800
+LET gravel_mass = 900
+LET water_mass = 135
+PRINT "Cement:", cement_mass
+PRINT "Total mass:", cement_mass + sand_mass + gravel_mass + water_mass
+
+PRINT "=== SEARCH ==="
+
+FIND PROCESS "Portland cement"
+FIND PROCESS "ready-mix"
+PRINT METHODS
+
+PRINT "=== BUILD ==="
+
+CDIR "Test Model"
+PWD
+
+PROCESS "Test concrete; at plant"
+  OUTPUT NEW "Test concrete block", 1, m3, PRODUCT
+  INPUT "Portland cement; at plant", cement_mass, kg
+  INPUT "Construction sand and gravel; at mine", sand_mass, kg
+END PROCESS
+
+PRINT "=== SYSTEM AND CALCULATE ==="
+
+SYSTEM "Test concrete; at plant"
+CALCULATE "Test concrete; at plant" USING "IPCC"
+PRINT RESULTS
+
+PRINT "=== SCENARIOS ==="
+
+SCENARIO "Baseline"
+END SCENARIO
+
+SCENARIO "Low cement"
+  LET cement_mass = 200
+END SCENARIO
+
+SCENARIO "High cement"
+  LET cement_mass = 400
+END SCENARIO
+
+RUN SCENARIOS ON "Test concrete; at plant" USING "IPCC"
+
+PRINT "=== CLEANUP ==="
+
+DELETE SYSTEM "Test concrete; at plant"
+DELETE PROCESS "Test concrete; at plant"
+
+PRINT "=== DONE ==="

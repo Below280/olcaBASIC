@@ -124,7 +124,7 @@ class Interpreter:
                     inc_file = parts[1]
                     inc_path = os.path.join(base_dir, inc_file)
                     try:
-                        with open(inc_path, "r") as f:
+                        with open(inc_path, "r", encoding="utf-8") as f:
                             inc_source = f.read()
                         # Recursive includes
                         inc_source = self._process_includes(
@@ -812,7 +812,7 @@ class Interpreter:
         proc_ref = self._eval_str(stmt.process_ref)
         folder = self._eval_str(stmt.folder) if stmt.folder else None
         linking = stmt.linking.lower()
-        target_amount = float(self._eval(stmt.target_amount)) if stmt.target_amount else None
+        target_amount = float(self._eval(stmt.target_amount)) if stmt.target_amount else 1.0
         target_unit = stmt.target_unit or None
         target_prop = self._eval_str(stmt.target_property) if stmt.target_property else None
 
@@ -999,7 +999,7 @@ class Interpreter:
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.ref)
         etype = stmt.entity_type.lower()
-        if etype == "SYSTEM":
+        if etype == "system":
             etype = "product_system"
 
         if not self.runtime.confirm_delete:
@@ -1008,12 +1008,18 @@ class Interpreter:
             if confirm.lower() not in ("yes", "y"):
                 print("  Cancelled.")
                 return
+        else:
+            print(f"  Deleting {stmt.entity_type} '{ref}'...")
 
         result = self.bridge.delete_entity(etype, ref)
         if "error" in result:
-            raise BasicError(result["error"], stmt.line)
-        print(f"  Deleted: {result.get('name', ref)}")
-        # Auto-refresh cache so the deleted entity disappears
+            err = result["error"]
+            if "not found" in err.lower() or "404" in err:
+                print(f"  Not found: {ref} (may already be deleted)")
+            else:
+                raise BasicError(err, stmt.line)
+        else:
+            print(f"  Deleted: {result.get('name', ref)}")
         self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
@@ -1100,7 +1106,7 @@ class Interpreter:
     def _exec_run_file(self, stmt: RunFileStmt):
         filename = self._eval_str(stmt.filename)
         try:
-            with open(filename, "r") as f:
+            with open(filename, "r", encoding="utf-8") as f:
                 source = f.read()
             self.run_program(source, filename)
         except FileNotFoundError:
@@ -1176,7 +1182,8 @@ class Interpreter:
         self.runtime.process_folder = path
 
     def _exec_dir_nav(self, stmt):
-        """DIR "path" or DIR (show current)."""
+        """DIR "path" — navigate. Absolute if path exists in database,
+        relative to current folder otherwise."""
         if stmt.path is None:
             pf = self.runtime.process_folder or "(root)"
             ff = self.runtime.flow_folder or "(root)"
@@ -1189,11 +1196,24 @@ class Interpreter:
         if path == "/" or path == "":
             self._navigate_to("")
         else:
-            current = self.runtime.process_folder
-            if current:
-                self._navigate_to(current.rstrip("/") + "/" + path)
-            else:
+            # Check if this is an absolute path (exists in database)
+            # by looking for entities or subfolders at this exact path
+            is_absolute = False
+            if self.bridge and self.bridge.connected:
+                probe = self.bridge.list_category_contents(path, "")
+                if (probe.get("subfolder_count", 0) > 0
+                        or probe.get("entity_count", 0) > 0):
+                    is_absolute = True
+
+            if is_absolute:
                 self._navigate_to(path)
+            else:
+                # Relative: append to current
+                current = self.runtime.process_folder
+                if current:
+                    self._navigate_to(current.rstrip("/") + "/" + path)
+                else:
+                    self._navigate_to(path)
 
         pf = self.runtime.process_folder or "(root)"
         print(f"  {pf}")

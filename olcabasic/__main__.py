@@ -9,6 +9,10 @@ Usage:
 
 import argparse
 import sys
+import logging
+
+# Suppress noisy 404 warnings from olca-ipc internals
+logging.basicConfig(level=logging.ERROR)
 
 BANNER = r"""
             ___  _     ____    _    ____    _    ____  _  ____
@@ -90,7 +94,7 @@ def main():
     if args.command == "run" and args.file:
         # Program mode: run a .baslca file
         try:
-            with open(args.file, "r") as f:
+            with open(args.file, "r", encoding="utf-8") as f:
                 source = f.read()
             interpreter.run_program(source, filename=args.file)
         except FileNotFoundError:
