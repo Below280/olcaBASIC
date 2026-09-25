@@ -19,25 +19,34 @@ from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
     format_process_details, format_database_info, format_params,
-    format_generic, results_to_csv,
+    format_generic, format_flows, results_to_csv,
 )
 
 
 # Category prefixes used to find elementary flows. Matched
 # case-insensitively as a prefix, so "Elementary flows/resource"
 # covers in ground, in water, in air, land and biotic.
+# Databases name compartments differently: ecoinvent-style trees
+# use "Emission to air", FLCAC/FEDEFL uses "emission/air" and calls
+# soil "ground". Each direction lists every known form.
 COMPARTMENT_CATEGORIES = {
-    "AIR": "Elementary flows/emission to air",
-    "WATER": "Elementary flows/emission to water",
-    "SOIL": "Elementary flows/emission to soil",
-    "NATURE": "Elementary flows/resource",
+    "AIR": ["Elementary flows/emission to air",
+            "Elementary flows/emission/air"],
+    "WATER": ["Elementary flows/emission to water",
+              "Elementary flows/emission/water"],
+    "SOIL": ["Elementary flows/emission to soil",
+             "Elementary flows/emission/soil",
+             "Elementary flows/emission/ground"],
+    "NATURE": ["Elementary flows/resource"],
 }
 
 
 def _fmt_num(v):
     """Print whole-number floats without a trailing .0"""
-    if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
-        return str(int(v))
+    if isinstance(v, float):
+        if v.is_integer() and abs(v) < 1e15:
+            return str(int(v))
+        return format(v, ".12g")   # 800.1, not 800.0999999999999
     return str(v)
 
 
@@ -636,7 +645,7 @@ class Interpreter:
             if stmt.direction == "NATURE":
                 folder = folder or "Elementary flows/resource/in ground"
             else:
-                folder = folder or search_cat
+                folder = folder or search_cat[0]
 
         if stmt.is_new:
             # NEW: always create
@@ -803,9 +812,15 @@ class Interpreter:
 
         # Warn when overwriting a global this session didn't create:
         # it may belong to another model in the same database
+        prev = result.get("previous") or {}
+        norm = lambda f: re.sub(r"\s+", "", f or "")
+        if desired[0] == "formula":
+            really_changed = norm(prev.get("formula")) != norm(desired[1])
+        else:
+            really_changed = (bool(prev.get("formula"))
+                              or prev.get("value") != desired[1])
         if (previous is None and result.get("already_existed")
-                and result.get("changed")):
-            prev = result.get("previous", {})
+                and really_changed):
             was = prev.get("formula") or prev.get("value")
             print(f"  NOTE: global parameter '{name}' already existed "
                   f"(was {was}) and has been updated. Other models in "
@@ -841,7 +856,8 @@ class Interpreter:
                 flow_type = "waste"
             elif ex.direction_compartment:
                 flow_type = "elementary"
-                category = COMPARTMENT_CATEGORIES[ex.direction_compartment]
+                search_cats = COMPARTMENT_CATEGORIES[ex.direction_compartment]
+                category = search_cats[0]   # where a NEW flow is created
             elif ex.direction == "OUTPUT":
                 flow_type = "product"
 
@@ -863,7 +879,7 @@ class Interpreter:
                 # Elementary flow (TO AIR, TO WATER, etc.)
                 # Never try process lookup; search flows by category
                 flow_match = self.bridge.find_flow(
-                    flow_name, unit, category, strict=True)
+                    flow_name, unit, search_cats, strict=True)
                 if flow_match:
                     flow_id = flow_match["flow_id"]
                     if flow_match.get("ambiguous"):
@@ -872,8 +888,10 @@ class Interpreter:
                               f"using {flow_match['category']}")
                 else:
                     raise BasicError(
-                        f"Elementary flow '{flow_name}' not found in "
-                        f"'{category}'. Check the name matches your "
+                        f"Elementary flow '{flow_name}' not found under "
+                        f"{' or '.join(repr(c) for c in search_cats)}. "
+                        f"FIND FLOW \"{flow_name}\" shows the names and "
+                        f"categories in your database. Check the name matches your "
                         f"database, or use NEW to create it (note: "
                         f"new elementary flows have no characterisation "
                         f"factors and will contribute zero to impacts).",
@@ -981,11 +999,15 @@ class Interpreter:
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
-        existed = result.get("already_existed", False)
-        status = "exists" if existed else "created"
+        if result.get("already_existed", False):
+            where = folder or "(root)"
+            print(f"  WARNING: process '{name}' already exists in {where}. "
+                  f"It was NOT changed, so the exchanges above were not "
+                  f"applied. DELETE PROCESS \"{name}\" first to rebuild it.")
+            return
         ex_count = result.get("exchange_count", 0)
         p_count = result.get("parameter_count", 0)
-        print(f"  Process {status}: {name} "
+        print(f"  Process created: {name} "
               f"({ex_count} exchanges, {p_count} parameters)")
 
     def _exec_system(self, stmt: SystemStmt):
@@ -1005,9 +1027,13 @@ class Interpreter:
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
-        existed = result.get("already_existed", False)
-        status = "exists" if existed else "created"
-        print(f"  System {status}: {result.get('system_name', proc_ref)}")
+        sys_name = result.get("system_name", proc_ref)
+        if result.get("already_existed", False):
+            print(f"  WARNING: product system '{sys_name}' already exists "
+                  f"and was reused as it is. If the process changed, "
+                  f"DELETE SYSTEM \"{sys_name}\" first to rebuild it.")
+        else:
+            print(f"  System created: {sys_name}")
         if result.get("warnings"):
             for w in result["warnings"]:
                 print(f"  WARNING: {w}")
@@ -1187,28 +1213,35 @@ class Interpreter:
     def _exec_delete(self, stmt: DeleteStmt):
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.ref)
+        if not stmt.entity_type:
+            raise BasicError("Say what to delete: DELETE PROCESS, "
+                             "DELETE FLOW or DELETE SYSTEM", stmt.line)
         etype = stmt.entity_type.lower()
         if etype == "system":
             etype = "product_system"
 
+        # The MCP deletes by UUID, so resolve the name first.
+        # (Passing the name always came back 'not found'.)
+        target = self.bridge.resolve_entity_strict(etype, ref)
+        if "error" in target:
+            raise BasicError(target["error"], stmt.line)
+        if target.get("not_found"):
+            print(f"  Not found: {ref} (nothing to delete)")
+            return
+
         if not self.runtime.confirm_delete:
             confirm = input(
-                f"  Delete {stmt.entity_type} '{ref}'? (yes/no) ")
+                f"  Delete {stmt.entity_type} '{target['name']}'? (yes/no) ")
             if confirm.lower() not in ("yes", "y"):
                 print("  Cancelled.")
                 return
         else:
-            print(f"  Deleting {stmt.entity_type} '{ref}'...")
+            print(f"  Deleting {stmt.entity_type} '{target['name']}'...")
 
-        result = self.bridge.delete_entity(etype, ref)
+        result = self.bridge.delete_entity(etype, target["id"])
         if "error" in result:
-            err = result["error"]
-            if "not found" in err.lower() or "404" in err:
-                print(f"  Not found: {ref} (may already be deleted)")
-            else:
-                raise BasicError(err, stmt.line)
-        else:
-            print(f"  Deleted: {result.get('name', ref)}")
+            raise BasicError(result["error"], stmt.line)
+        print(f"  Deleted: {result.get('name', ref)}")
         self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
@@ -1224,7 +1257,9 @@ class Interpreter:
         elif etype == "FLOW":
             cat = self._eval_str(stmt.category) if stmt.category else ""
             result = self.bridge.search_flows(term, cat)
-            print(format_generic(result))
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            print(format_flows(result))
         elif etype == "METHOD":
             result = self.bridge.list_methods(term)
             print(format_methods(result))
@@ -1389,24 +1424,20 @@ class Interpreter:
         if path == "/" or path == "":
             self._navigate_to("")
         else:
-            # Check if this is an absolute path (exists in database)
-            # by looking for entities or subfolders at this exact path
-            is_absolute = False
-            if self.bridge and self.bridge.connected:
-                probe = self.bridge.list_category_contents(path, "")
-                if (probe.get("subfolder_count", 0) > 0
-                        or probe.get("entity_count", 0) > 0):
-                    is_absolute = True
-
-            if is_absolute:
+            self._require_bridge(stmt.line)
+            current = self.runtime.process_folder
+            relative = (current.rstrip("/") + "/" + path) if current else path
+            # Relative first (DIR "subfolder"), then absolute
+            if current and self.bridge.folder_exists(relative):
+                self._navigate_to(relative)
+            elif self.bridge.folder_exists(path):
                 self._navigate_to(path)
             else:
-                # Relative: append to current
-                current = self.runtime.process_folder
-                if current:
-                    self._navigate_to(current.rstrip("/") + "/" + path)
-                else:
-                    self._navigate_to(path)
+                # Don't invent a folder: that silently sends later
+                # PROCESS and CDIR commands somewhere that isn't there
+                raise BasicError(
+                    f"Folder not found: '{path}'. Use CAT to list folders, "
+                    f"or CDIR to create a new one.", stmt.line)
 
         pf = self.runtime.process_folder or "(root)"
         print(f"  {pf}")

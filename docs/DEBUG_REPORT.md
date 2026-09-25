@@ -119,7 +119,44 @@ These need design decisions rather than patches.
 
 **SUBs can't change global variables.** A LET inside a SUB creates a local. That may be what you want, but it isn't documented.
 
-## Live smoke test
+## 0.2.1: live test and fixes
+
+The live smoke test ran on 25/09/2026 against openLCA 2.x with the FLCAC (USLCI) database, using the rewritten `test_features.baslca`. The first run showed that it had been reusing a model from an earlier run, which led to four more fixes. After those, every check passed exactly.
+
+### What the live test found
+
+**DELETE by name never worked.** The MCP deletes by UUID, but olcaBASIC passed the name, got 'not found' and printed 'may already be deleted'. So cleanup never removed anything, and later runs picked up the old model. olcaBASIC now resolves the name to an ID before asking for confirmation, and refuses if several entities share the name.
+
+**Existing processes and systems were reused without warning.** The MCP returns an existing process or system when the name and category match, and applies none of the new definition. That was reported as 'exists', so editing a PROCESS block and re-running changed nothing. It is now a WARNING saying the changes were not applied, with the DELETE command to rebuild.
+
+**DIR invented folders.** The old test file navigated to `3273: Cement and Co`, a name cut short by the 40-character FIND output. 0.1.5's prefix matching happened to accept it. 0.2.0 rejected it as an absolute path, then built a relative path that didn't exist, and CDIR created a model inside it. DIR now errors on a folder that doesn't exist. Tables mark cut-off cells with '...', and the process search shows up to 70 characters.
+
+**FLCAC names compartments differently.** It uses `Elementary flows/emission/air`, with `ground` for soil and no `unspecified` sub-compartment. The prefixes coded in 0.2.0 were ecoinvent-style (`emission to air`), so `TO AIR` would have failed on FLCAC. Each direction now accepts both forms. When a flow exists in several sub-compartments, the default is `unspecified`, then the compartment root, then the shortest path.
+
+**A false 'changed' note for formula parameters.** MCP 1.15.0 compares the value openLCA stores on a formula parameter with `None`, so an identical formula was reported as changed. olcaBASIC now makes that comparison itself. The MCP fix is in 1.15.1, which can be released separately.
+
+Smaller changes: `FIND FLOW` prints a table with type, unit and full category instead of 'flows: [20 items]'. Sensitivity percentages below 1% show two decimals, so small effects no longer appear as 0.0%. Floats print as `800.1` rather than `800.0999999999999`.
+
+### Test model and results
+
+The test builds a concrete process and a wall process. `cement_mass` (300) is used in both, `sand_mass` is defined as `cement_mass * aggregate_ratio`, and the concrete emits `cement_mass * 0.001` kg of CO2 to air. Because every input scales with `cement_mass`, a scenario that reaches all of them must scale the result by exactly the scenario ratio.
+
+| Check | Expected | Result (IPCC AR4-100, kg CO2 eq) |
+|---|---|---|
+| Baseline | | 99.896818 |
+| Low cement (200) | Baseline × 2/3 = 66.597879 | 66.597879 |
+| High cement (400) | Baseline × 4/3 = 133.195758 | 133.195758 |
+| CO2 to air characterised | +0.060000 on the run without it (99.836818) | +0.060000 in every category |
+| Sensitivity, `cement_mass` ±10% | ±10.0% | ±10.0% |
+| Sensitivity, `aggregate_ratio` ±10% | Small, non-zero | ±0.04% |
+
+The exact ratios confirm three things at once: a scenario changes a shared global parameter in every process, openLCA recalculates formula parameters from redefined inputs, and the elementary flow lands in the right compartment and is characterised. The clean start and cleanup deleted everything by name, and every entity was freshly created.
+
+### Still to test live
+
+`LOCATION` needs a database with duplicate process names, such as ecoinvent. `MONTECARLO`, `CONTRIBUTION`, `INVENTORY`, `BRIDGE` and `INCLUDE` weren't part of this run.
+
+## Original smoke test plan
 
 Worth running on ecoinvent and on USLCI before the article goes out:
 

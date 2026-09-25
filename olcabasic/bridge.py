@@ -174,18 +174,26 @@ class LCABridge:
         return r
 
     @classmethod
-    def _match_flow_name(cls, name: str, flows: list) -> Optional[Dict]:
+    def _match_flow_name(cls, name: str, flows: list,
+                         roots=()) -> Optional[Dict]:
         """Exact name match, else unique substring match, else None.
         Several exact matches: prefer an 'unspecified' sub-compartment
-        (the conventional default), else take the first and flag it."""
+        (ecoinvent-style default), then the compartment root itself
+        (FLCAC-style, e.g. 'emission/air'), then the shortest path."""
         exact = [f for f in flows if f.name == name]
         if len(exact) == 1:
             return cls._flow_result(exact[0])
         if len(exact) > 1:
-            unspec = [f for f in exact
-                      if (getattr(f, "category", "") or "")
-                      .lower().rstrip("/").endswith("unspecified")]
-            best = unspec[0] if unspec else exact[0]
+            cat = lambda f: (getattr(f, "category", "") or "").lower().rstrip("/")
+            root_set = {r.lower().rstrip("/") for r in roots}
+            unspec = [f for f in exact if cat(f).endswith("unspecified")]
+            at_root = [f for f in exact if cat(f) in root_set]
+            if unspec:
+                best = unspec[0]
+            elif at_root:
+                best = at_root[0]
+            else:
+                best = min(exact, key=lambda f: len(cat(f)))
             return cls._flow_result(best, ambiguous=len(exact))
         lower = name.lower()
         partial = [f for f in flows if lower in f.name.lower()]
@@ -194,7 +202,7 @@ class LCABridge:
         return None
 
     def find_flow(self, name: str, unit: str = "",
-                  category: str = "", strict: bool = False) -> Optional[Dict]:
+                  category="", strict: bool = False) -> Optional[Dict]:
         """Find an existing flow by name. Returns dict with flow_id or None.
 
         category is a case-insensitive prefix.
@@ -208,13 +216,18 @@ class LCABridge:
         flows = self.lca._get_descriptors(o.Flow)
 
         if category:
-            cat_lower = category.lower().rstrip("/")
-            in_cat = [f for f in flows
-                      if (getattr(f, "category", "") or "")
-                      .lower().startswith(cat_lower)]
+            prefixes = [category] if isinstance(category, str) else list(category)
+            prefixes = [p.lower().rstrip("/") for p in prefixes]
+
+            def under(f):
+                c = (getattr(f, "category", "") or "").lower()
+                return any(c == p or c.startswith(p + "/")
+                           for p in prefixes)
+
+            in_cat = [f for f in flows if under(f)]
             if strict:
-                return self._match_flow_name(name, in_cat)
-            hit = self._match_flow_name(name, in_cat)
+                return self._match_flow_name(name, in_cat, prefixes)
+            hit = self._match_flow_name(name, in_cat, prefixes)
             if hit:
                 return hit
 
@@ -407,6 +420,39 @@ class LCABridge:
     def extract_model(self, category: str) -> Dict:
         self._require_connection()
         return self.lca.extract_model(category)
+
+    def resolve_entity_strict(self, entity_type: str, ref: str) -> Dict:
+        """Resolve a process, flow or product_system name (or UUID)
+        to exactly one ID."""
+        self._require_connection()
+        import olca_schema as o
+        otype = {"process": o.Process, "flow": o.Flow,
+                 "product_system": o.ProductSystem}.get(entity_type)
+        if otype is None:
+            return {"error": f"Unknown entity type: {entity_type}"}
+        items = self.lca._get_descriptors(otype)
+        by_id = [d for d in items if d.id == ref]
+        if by_id:
+            return {"id": by_id[0].id, "name": by_id[0].name}
+        exact = [d for d in items if d.name == ref]
+        if len(exact) == 1:
+            return {"id": exact[0].id, "name": exact[0].name}
+        label = entity_type.replace("_", " ")
+        if len(exact) > 1:
+            cats = sorted({getattr(d, "category", "") or "(root)"
+                           for d in exact})
+            return {"error": (
+                f"{len(exact)} {label}s are called '{ref}' (in: "
+                f"{'; '.join(cats[:5])}). Nothing was deleted. "
+                f"Delete by UUID instead.")}
+        return {"not_found": True}
+
+    def folder_exists(self, path: str) -> bool:
+        """True if any process, flow or system sits in this folder
+        or below it (whole path segments)."""
+        info = self.list_category_contents(path, "")
+        return (info.get("subfolder_count", 0) > 0
+                or info.get("entity_count", 0) > 0)
 
     # ── Delete ───────────────────────────────────────────
 

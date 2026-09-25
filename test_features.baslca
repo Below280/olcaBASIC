@@ -1,65 +1,88 @@
 REM ══════════════════════════════════════════
-REM  olcaBASIC v0.1.3 feature test
+REM  olcaBASIC v0.2.1 feature test (FLCAC / USLCI)
 REM ══════════════════════════════════════════
 
+CONFIRM DELETE ON
+
+PRINT "=== CLEAN START ==="
+REM Remove anything left by a previous run, so everything below
+REM is built fresh. Systems first, then the processes they use.
+DELETE SYSTEM "Test wall; at site"
+DELETE SYSTEM "Test concrete; at plant"
+DELETE PROCESS "Test wall; at site"
+DELETE PROCESS "Test concrete; at plant"
+
 PRINT "=== NAVIGATION ==="
-
 PWD
-SET PROCESS FOLDER "00: Test"
-SET FLOW FOLDER "00: Test/Flows"
-PWD
-
 DIR "31-33: Manufacturing"
 CAT
-DIR "31-33: Manufacturing/3273: Cement and Co"
+DIR "3273: Cement and Concrete Product Manufacturing"
 CAT
 UP
 PWD
 BACK
 PWD
-BACK
-PWD
 
 PRINT "=== WILDCARDS ==="
-
 CAT *concrete*
 CAT PROCESSES *cement*
 LS *gravel*
 
-PRINT "=== PARAMETERS ==="
-
-LET cement_mass = 300
-LET sand_mass = 800
-LET gravel_mass = 900
-LET water_mass = 135
-PRINT "Cement:", cement_mass
-PRINT "Total mass:", cement_mass + sand_mass + gravel_mass + water_mass
-
 PRINT "=== SEARCH ==="
-
 FIND PROCESS "Portland cement"
 FIND PROCESS "ready-mix"
+FIND FLOW "Carbon dioxide"
 PRINT METHODS
 
-PRINT "=== BUILD ==="
+PRINT "=== CONTROL FLOW ==="
+FOR i = 1 TO 3
+  PRINT "loop", i
+NEXT i
+FOR EACH m IN 200, 300
+  IF m > 250 THEN PRINT m, "is high" ELSE PRINT m, "is low"
+NEXT m
 
-CDIR "Test Model"
+PRINT "=== PARAMETERS ==="
+LET cement_mass = 300
+LET aggregate_ratio = 2.667
+LET sand_mass = cement_mass * aggregate_ratio
+PRINT "Cement:", cement_mass
+PRINT "Sand (derived):", sand_mass
+
+PRINT "=== BUILD ==="
+REM Build in our own folder, not inside the database's categories
+SET PROCESS FOLDER "00: Test"
+SET FLOW FOLDER "00: Test/Flows"
 PWD
 
+REM cement_mass becomes a global parameter; sand_mass a global
+REM formula parameter (cement_mass * aggregate_ratio)
 PROCESS "Test concrete; at plant"
-  OUTPUT NEW "Test concrete block", 1, m3, PRODUCT
+  OUTPUT NEW "Test concrete", 1, m3, PRODUCT
   INPUT "Portland cement; at plant", cement_mass, kg
   INPUT "Construction sand and gravel; at mine", sand_mass, kg
+  REM Elementary flow: checks the compartment lookup and that it's
+  REM characterised (adds 0.3 kg CO2 per m3, i.e. +0.06 in the wall)
+  OUTPUT "Carbon dioxide", cement_mass * 0.001, kg TO AIR
+END PROCESS
+
+REM A second process that also uses cement_mass, so a scenario
+REM has to change it in both places
+PROCESS "Test wall; at site"
+  OUTPUT NEW "Test wall", 1, m2, PRODUCT
+  INPUT "Test concrete; at plant", 0.2, m3
+  INPUT "Portland cement; at plant", cement_mass * 0.05, kg
 END PROCESS
 
 PRINT "=== SYSTEM AND CALCULATE ==="
-
-SYSTEM "Test concrete; at plant"
-CALCULATE "Test concrete; at plant" USING "IPCC"
-PRINT RESULTS
+SYSTEM "Test wall; at site"
+CALCULATE "Test wall; at site" USING "IPCC"
+SAVE RESULTS "test_baseline.csv"
 
 PRINT "=== SCENARIOS ==="
-
+REM Everything in the wall scales with cement_mass (cement, derived
+REM sand, render, CO2), so Low must be exactly 2/3 of Baseline and
+REM High exactly 4/3. Any other ratio means something didn't follow.
 SCENARIO "Baseline"
 END SCENARIO
 
@@ -71,11 +94,17 @@ SCENARIO "High cement"
   LET cement_mass = 400
 END SCENARIO
 
-RUN SCENARIOS ON "Test concrete; at plant" USING "IPCC"
+RUN SCENARIOS ON "Test wall; at site" USING "IPCC"
+SAVE RESULTS "test_scenarios.csv"
+
+PRINT "=== SENSITIVITY ==="
+SENSITIVITY ON "Test wall; at site" USING "IPCC" BY 10%
+  VARY cement_mass, aggregate_ratio
+END SENSITIVITY
 
 PRINT "=== CLEANUP ==="
-
-DELETE SYSTEM "Test concrete; at plant"
+DELETE SYSTEM "Test wall; at site"
+DELETE PROCESS "Test wall; at site"
 DELETE PROCESS "Test concrete; at plant"
 
 PRINT "=== DONE ==="

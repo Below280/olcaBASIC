@@ -36,8 +36,14 @@ def format_table(headers: List[str], rows: List[List[str]],
     lines.append("  " + fmt.format(*headers))
     lines.append("  " + "  ".join("-" * w for w in widths))
     for row in rows:
-        cells = [str(c)[:widths[i]] if i < len(widths) else str(c)
-                 for i, c in enumerate(row[:col_count])]
+        # Mark cut-off cells with '...' so a truncated name is never
+        # mistaken for the real one (and copied into a DIR path)
+        cells = []
+        for i, c in enumerate(row[:col_count]):
+            c = str(c)
+            if i < len(widths) and len(c) > widths[i]:
+                c = c[:max(widths[i] - 3, 0)] + "..."
+            cells.append(c)
         # Pad if row is shorter than headers
         while len(cells) < col_count:
             cells.append("")
@@ -143,8 +149,8 @@ def format_sensitivity(results: Dict) -> str:
             if abs(base_amt) > 1e-30:
                 minus_pct = ((minus_val - base_amt) / base_amt) * 100
                 plus_pct = ((plus_val - base_amt) / base_amt) * 100
-                row.append(f"{minus_val:.4e} ({minus_pct:+.1f}%)")
-                row.append(f"{plus_val:.4e} ({plus_pct:+.1f}%)")
+                row.append(f"{minus_val:.4e} ({_pct(minus_pct)})")
+                row.append(f"{plus_val:.4e} ({_pct(plus_pct)})")
             else:
                 row.append(f"{minus_val:.4e}")
                 row.append(f"{plus_val:.4e}")
@@ -166,6 +172,37 @@ def format_sensitivity(results: Dict) -> str:
     return "\n".join(lines)
 
 
+def _pct(p: float) -> str:
+    """Percent change with enough decimals that small effects don't
+    show as a misleading 0.0%."""
+    if p == 0:
+        return "0%"
+    if abs(p) >= 1:
+        return f"{p:+.1f}%"
+    if abs(p) >= 0.01:
+        return f"{p:+.2f}%"
+    return f"{p:+.1e}%"
+
+
+def format_flows(results: Dict) -> str:
+    """Format flow search results, with category so elementary flow
+    compartments are visible."""
+    flows = results.get("flows", [])
+    rows = []
+    for f in flows:
+        ftype = str(f.get("flow_type", "")).replace("FlowType.", "")
+        ftype = ftype.replace("_FLOW", "").lower()
+        rows.append([f.get("name", "?"), ftype, f.get("ref_unit", "") or "",
+                     f.get("category", "")])
+    lines = [f"  {len(flows)} results"
+             + (" (limit reached, narrow the search)" if len(flows) >= 20
+                else "")]
+    if rows:
+        lines.append(format_table(["Name", "Type", "Unit", "Category"],
+                                  rows, max_widths=[50, 11, 8, 70]))
+    return "\n".join(lines)
+
+
 def format_processes(results: Dict) -> str:
     """Format process search results."""
     procs = results.get("processes", [])
@@ -176,7 +213,7 @@ def format_processes(results: Dict) -> str:
     total = results.get("total_matches", count)
     lines = [f"  {count} results (of {total} total)"]
     if rows:
-        lines.append(format_table(headers, rows, max_widths=[60, 40]))
+        lines.append(format_table(headers, rows, max_widths=[70, 70]))
     return "\n".join(lines)
 
 
