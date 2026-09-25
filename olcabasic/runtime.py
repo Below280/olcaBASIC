@@ -65,6 +65,15 @@ class Runtime:
         self.last_results: Optional[Dict] = None
         self.last_results_type: str = ""  # calculate, scenarios, etc.
 
+        # Expressions for variables defined from other variables
+        # (LET water_mass = cement_mass * ratio). These become
+        # formula parameters in openLCA so they follow scenarios.
+        self.var_exprs: Dict[str, Any] = {}
+
+        # Global parameters already written to openLCA this session:
+        # name -> ("value", v) or ("formula", f)
+        self.synced_globals: Dict[str, tuple] = {}
+
         # Scenario accumulator
         self.scenarios: Dict[str, Dict[str, float]] = {}
 
@@ -145,4 +154,6 @@ class Runtime:
         self.last_results = None
         self.last_results_type = ""
         self.scenarios.clear()
+        self.var_exprs.clear()
+        self.synced_globals.clear()
         self.confirm_delete = False

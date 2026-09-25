@@ -27,6 +27,13 @@ class LCABridge:
 
             client = Client(self.port)
             self.lca = LCAFunctions(client)
+            # Creating the client doesn't open a connection, so make
+            # one real request before reporting success.
+            info = self.lca.get_database_info()
+            if info.get("status") == "error":
+                logger.error(f"Connection failed: {info.get('error')}")
+                self.lca = None
+                return False
             self._connected = True
             return True
         except ImportError:
@@ -130,6 +137,16 @@ class LCABridge:
         self._require_connection()
         return self.lca.create_flow(name, unit, category, flow_type)
 
+    # ── Global parameters ────────────────────────────────
+
+    def create_global_parameter(self, name: str,
+                                value: Optional[float] = None,
+                                formula: Optional[str] = None,
+                                description: str = "") -> Dict:
+        self._require_connection()
+        return self.lca.create_global_parameter(
+            name, value, formula, description)
+
     # ── Bridge creation ──────────────────────────────────
 
     def create_bridge(self, name: str, unit: str,
@@ -147,43 +164,150 @@ class LCABridge:
         proc = self.lca._resolve_process(name_or_id)
         return proc.id if proc else None
 
+    @staticmethod
+    def _flow_result(f, ambiguous: int = 0) -> Dict:
+        r = {"flow_id": f.id, "flow_name": f.name,
+             "category": getattr(f, "category", "") or "",
+             "already_existed": True}
+        if ambiguous:
+            r["ambiguous"] = ambiguous
+        return r
+
+    @classmethod
+    def _match_flow_name(cls, name: str, flows: list) -> Optional[Dict]:
+        """Exact name match, else unique substring match, else None.
+        Several exact matches: prefer an 'unspecified' sub-compartment
+        (the conventional default), else take the first and flag it."""
+        exact = [f for f in flows if f.name == name]
+        if len(exact) == 1:
+            return cls._flow_result(exact[0])
+        if len(exact) > 1:
+            unspec = [f for f in exact
+                      if (getattr(f, "category", "") or "")
+                      .lower().rstrip("/").endswith("unspecified")]
+            best = unspec[0] if unspec else exact[0]
+            return cls._flow_result(best, ambiguous=len(exact))
+        lower = name.lower()
+        partial = [f for f in flows if lower in f.name.lower()]
+        if len(partial) == 1:
+            return cls._flow_result(partial[0])
+        return None
+
     def find_flow(self, name: str, unit: str = "",
-                  category: str = "") -> Optional[Dict]:
-        """Find an existing flow by name. Returns dict with flow_id or None."""
+                  category: str = "", strict: bool = False) -> Optional[Dict]:
+        """Find an existing flow by name. Returns dict with flow_id or None.
+
+        category is a case-insensitive prefix.
+        strict=True (elementary flows): only flows under that prefix
+        are considered; there is no fallback to the whole database.
+        strict=False (product flows): flows under the prefix are
+        preferred, then the whole database is searched.
+        """
         self._require_connection()
         import olca_schema as o
         flows = self.lca._get_descriptors(o.Flow)
-        for f in flows:
-            if f.name == name:
-                return {"flow_id": f.id, "flow_name": f.name,
-                        "already_existed": True}
-        # Substring match fallback
-        for f in flows:
-            if name.lower() in f.name.lower():
-                return {"flow_id": f.id, "flow_name": f.name,
-                        "already_existed": True}
-        return None
 
-    def find_process_qref_flow(self, process_name: str) -> Optional[Dict]:
-        """Find a process by name and return its quantitative reference
-        flow ID and the process ID (for use as default provider)."""
+        if category:
+            cat_lower = category.lower().rstrip("/")
+            in_cat = [f for f in flows
+                      if (getattr(f, "category", "") or "")
+                      .lower().startswith(cat_lower)]
+            if strict:
+                return self._match_flow_name(name, in_cat)
+            hit = self._match_flow_name(name, in_cat)
+            if hit:
+                return hit
+
+        return self._match_flow_name(name, flows)
+
+    def resolve_process_strict(self, ref: str) -> Dict:
+        """Resolve a PROVIDER reference to exactly one process.
+        Accepts a UUID or a name that matches one process only."""
         self._require_connection()
         import olca_schema as o
-        proc_desc = self.lca._resolve_process(process_name)
-        if not proc_desc:
-            return None
+        procs = self.lca._get_descriptors(o.Process)
+        by_id = [p for p in procs if p.id == ref]
+        if by_id:
+            return {"process_id": by_id[0].id}
+        exact = [p for p in procs if p.name == ref]
+        if len(exact) == 1:
+            return {"process_id": exact[0].id}
+        if len(exact) > 1:
+            locs = sorted({getattr(p, "location", "") or "?" for p in exact})
+            return {"error": (
+                f"PROVIDER '{ref}' matches {len(exact)} processes "
+                f"(locations: {', '.join(locs)}). Use LOCATION \"code\" "
+                f"on the INPUT line, or give the provider's UUID.")}
+        partial = [p for p in procs if ref.lower() in p.name.lower()]
+        if len(partial) == 1:
+            return {"process_id": partial[0].id}
+        if partial:
+            return {"error": f"PROVIDER '{ref}' matches {len(partial)} "
+                             f"processes by partial name; be more specific"}
+        return {"error": f"PROVIDER process not found: '{ref}'"}
+
+    def find_process_qref_flow(self, process_name: str,
+                                location: str = "") -> Optional[Dict]:
+        """Find a process by name and return its quantitative reference
+        flow ID and the process ID (for use as default provider).
+
+        Returns None if no process matches, a dict with "error" if
+        LOCATION rules something out, otherwise the match (with
+        "ambiguous" set if several processes were equally good).
+        """
+        self._require_connection()
+        import olca_schema as o
+
+        processes = self.lca._get_descriptors(o.Process)
+        exact = [p for p in processes if p.name == process_name]
+
+        if not exact:
+            # Partial match (only returns if unique)
+            proc_desc = self.lca._resolve_process(process_name)
+            if not proc_desc:
+                return None
+            exact = [proc_desc]
+
+        if location:
+            loc_lower = location.strip().lower()
+            available = sorted({getattr(p, "location", "") or ""
+                                for p in exact})
+            filtered = [p for p in exact
+                        if (getattr(p, "location", "") or "").lower()
+                        == loc_lower]
+            if not filtered:
+                shown = ", ".join(a or "(none)" for a in available)
+                if not any(available):
+                    return {"error": (
+                        f"LOCATION \"{location}\" given for "
+                        f"'{process_name}', but no location codes came "
+                        f"back from openLCA for these processes, so it "
+                        f"can't be used to choose. Use PROVIDER with a "
+                        f"UUID instead.")}
+                return {"error": (
+                    f"No '{process_name}' with LOCATION \"{location}\". "
+                    f"Available: {shown}")}
+            exact = filtered
+
+        proc_desc = exact[0]
+        ambiguous = len(exact) if len(exact) > 1 else 0
+
         proc = self.lca.client.get(o.Process, proc_desc.id)
         if not proc or not proc.exchanges:
             return None
         for ex in proc.exchanges:
             if getattr(ex, "is_quantitative_reference", False) and ex.flow:
-                return {
+                result = {
                     "flow_id": ex.flow.id,
                     "flow_name": ex.flow.name,
                     "process_id": proc_desc.id,
                     "process_name": proc_desc.name,
+                    "location": getattr(proc_desc, "location", "") or "",
                     "unit": ex.unit.name if ex.unit else "",
                 }
+                if ambiguous:
+                    result["ambiguous"] = ambiguous
+                return result
         return None
 
     # ── Process creation ─────────────────────────────────
@@ -341,9 +465,12 @@ class LCABridge:
                 cat_lower = cat.lower()
 
                 if path_lower:
-                    if not cat_lower.startswith(path_lower):
+                    # Whole segments only: "31" must not match
+                    # "31-33: Manufacturing", "Test" not "Test Model"
+                    if not (cat_lower == path_lower or
+                            cat_lower.startswith(path_lower + "/")):
                         continue
-                    remainder = cat[len(path):].strip("/")
+                    remainder = cat[len(path_lower):].strip("/")
                 else:
                     remainder = cat
 

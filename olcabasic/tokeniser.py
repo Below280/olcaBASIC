@@ -11,6 +11,13 @@ from enum import Enum, auto
 from typing import List, Optional
 
 
+class TokeniseError(Exception):
+    """Raised for characters or literals the tokeniser cannot accept."""
+    def __init__(self, message: str, line: int = 0):
+        self.line = line
+        super().__init__(f"Line {line}: {message}" if line else message)
+
+
 class TokenType(Enum):
     # Literals
     STRING = auto()       # "hello"
@@ -30,6 +37,7 @@ class TokenType(Enum):
     LPAREN = auto()       # (
     RPAREN = auto()       # )
     PERCENT = auto()      # %
+    CARET = auto()        # ^ (power)
     LESS = auto()         # <
     GREATER = auto()      # >
     LESS_EQ = auto()      # <=
@@ -123,7 +131,7 @@ KEYWORDS = {
 # Regex patterns
 _STRING_PAT = re.compile(r'"([^"]*)"')
 _NUMBER_PAT = re.compile(
-    r'(?<![A-Za-z_])(\d+\.?\d*(?:[eE][+-]?\d+)?)'
+    r'(?<![A-Za-z_])((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)'
 )
 _IDENT_PAT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\$?')
 _WHITESPACE_PAT = re.compile(r'[ \t]+')
@@ -168,11 +176,9 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
                 pos = m.end()
                 continue
             else:
-                # Unterminated string — take rest of line
-                tokens.append(Token(TokenType.STRING,
-                                    text[pos + 1:],
-                                    line_number, pos))
-                break
+                raise TokeniseError(
+                    "Unterminated string (missing closing quote)",
+                    line_number)
 
         # Two-character operators
         if pos + 1 < length:
@@ -248,6 +254,10 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
             tokens.append(Token(TokenType.RPAREN, ch, line_number, pos))
             pos += 1
             continue
+        elif ch == "^":
+            tokens.append(Token(TokenType.CARET, ch, line_number, pos))
+            pos += 1
+            continue
         elif ch == "%":
             tokens.append(Token(TokenType.PERCENT, ch, line_number, pos))
             pos += 1
@@ -287,14 +297,24 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
             pos = m.end()
             continue
 
-        # Unknown character — skip it
-        # But handle .. and . for CD navigation
+        # .. for CD navigation
         if ch == "." and pos + 1 < length and text[pos + 1] == ".":
             tokens.append(Token(TokenType.IDENTIFIER, "..",
                                 line_number, pos))
             pos += 2
             continue
-        pos += 1
+
+        # Anything else is an error. Silently skipping characters
+        # changes meaning (e.g. 2 & 3, a : b), so refuse instead.
+        hints = {
+            "&": "use + to join strings",
+            ":": "put each statement on its own line",
+            ";": "use , to separate PRINT items",
+        }
+        hint = hints.get(ch)
+        raise TokeniseError(
+            f"Unexpected character '{ch}'" + (f" ({hint})" if hint else ""),
+            line_number)
 
     tokens.append(Token(TokenType.NEWLINE, "\\n", line_number, pos))
     return tokens, continuation
@@ -317,9 +337,8 @@ def tokenise(source: str) -> List[Token]:
         tokens, continuation = tokenise_line(accumulated, start_line)
 
         if continuation:
-            # Remove the NEWLINE token and continue accumulating
-            tokens = [t for t in tokens if t.type != TokenType.NEWLINE]
-            # Keep going
+            # Drop the trailing underscore and keep accumulating
+            accumulated = accumulated.rstrip()[:-1].rstrip()
         else:
             all_tokens.extend(tokens)
             accumulated = ""

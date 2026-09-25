@@ -67,7 +67,7 @@ class REPL:
                     self._block_depth = 0
                     self.history.append(full_text)
 
-                    if not self.interpreter.run_line(full_text):
+                    if not self._run(full_text):
                         print("  Goodbye.")
                         break
                 continue
@@ -82,7 +82,7 @@ class REPL:
                     if after_then and "END" not in after_then:
                         # Single-line IF: execute directly
                         self.history.append(line)
-                        if not self.interpreter.run_line(line):
+                        if not self._run(line):
                             print("  Goodbye.")
                             break
                         continue
@@ -95,9 +95,17 @@ class REPL:
 
             # Single-line command
             self.history.append(line)
-            if not self.interpreter.run_line(line):
+            if not self._run(line):
                 print("  Goodbye.")
                 break
+
+    def _run(self, text: str) -> bool:
+        """Run text, treating Ctrl+C as 'stop this command', not 'quit'."""
+        try:
+            return self.interpreter.run_line(text)
+        except KeyboardInterrupt:
+            print("\n  Interrupted.")
+            return True
 
     def get_history(self) -> list:
         return list(self.history)

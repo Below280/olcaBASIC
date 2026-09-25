@@ -7,7 +7,8 @@ by recursive descent.
 """
 
 from typing import List, Optional, Tuple
-from .tokeniser import Token, TokenType, tokenise, tokenise_line
+from .tokeniser import (Token, TokenType, TokeniseError,
+                        tokenise, tokenise_line)
 from .ast_nodes import *
 
 
@@ -55,6 +56,46 @@ class Parser:
         return (tok.type == TokenType.KEYWORD
                 and tok.upper() in keywords)
 
+    def at_word(self, *words: str) -> bool:
+        """Like at_keyword, but also accepts a plain identifier.
+        Used for sub-keywords (OFF, METHOD, AT, PARAM...) so they
+        don't become reserved words everywhere."""
+        tok = self.peek()
+        return (tok.type in (TokenType.KEYWORD, TokenType.IDENTIFIER)
+                and tok.upper() in words)
+
+    def match_word(self, *words: str) -> Optional[Token]:
+        if self.at_word(*words):
+            return self.advance()
+        return None
+
+    def parse_int(self, what: str) -> int:
+        tok = self.peek()
+        if tok.type != TokenType.NUMBER:
+            raise ParseError(f"Expected a number after {what}, "
+                             f"got '{tok.value}'", tok.line)
+        self.advance()
+        return int(float(tok.value))
+
+    def parse_number(self, what: str) -> float:
+        tok = self.peek()
+        if tok.type != TokenType.NUMBER:
+            raise ParseError(f"Expected a number after {what}, "
+                             f"got '{tok.value}'", tok.line)
+        self.advance()
+        return float(tok.value)
+
+    def peek_at(self, offset: int) -> Token:
+        i = self.pos + offset
+        if i < len(self.tokens):
+            return self.tokens[i]
+        return Token(TokenType.EOF, "")
+
+    def at_end_of(self, block: str) -> bool:
+        """True if the next tokens are END <block>."""
+        return (self.at_keyword("END")
+                and self.peek_at(1).upper() == block)
+
     def skip_newlines(self):
         while self.peek().type in (TokenType.NEWLINE, TokenType.COMMENT):
             self.advance()
@@ -67,7 +108,11 @@ class Parser:
                 self.advance()
             if self.peek().type == TokenType.NEWLINE:
                 self.advance()
-        # Be lenient — don't error on missing newlines
+            return
+        # Anything left on the line was not understood. Refuse it
+        # rather than silently dropping part of the statement.
+        raise ParseError(
+            f"Unexpected '{tok.value}' at end of statement", tok.line)
 
     def current_line(self) -> int:
         return self.peek().line
@@ -143,13 +188,21 @@ class Parser:
         tok = self.peek()
         if tok.type == TokenType.MINUS:
             self.advance()
-            operand = self.parse_primary()
+            operand = self.parse_power()
             return UnaryOp("-", operand)
         if tok.type == TokenType.KEYWORD and tok.upper() == "NOT":
             self.advance()
-            operand = self.parse_primary()
+            operand = self.parse_comparison()
             return UnaryOp("NOT", operand)
-        return self.parse_primary()
+        return self.parse_power()
+
+    def parse_power(self) -> Expr:
+        base = self.parse_primary()
+        if self.peek().type == TokenType.CARET:
+            self.advance()
+            exponent = self.parse_unary()   # right-associative
+            return BinOp(base, "^", exponent)
+        return base
 
     def parse_primary(self) -> Expr:
         tok = self.peek()
@@ -165,8 +218,9 @@ class Parser:
         if tok.type == TokenType.LPAREN:
             self.advance()
             expr = self.parse_expr()
-            if self.peek().type == TokenType.RPAREN:
-                self.advance()
+            if self.peek().type != TokenType.RPAREN:
+                raise ParseError("Missing closing ')'", tok.line)
+            self.advance()
             return expr
 
         if tok.type == TokenType.IDENTIFIER:
@@ -251,13 +305,18 @@ class Parser:
             self.advance()
             return None
 
+        if tok.type == TokenType.NUMBER:
+            raise ParseError(
+                "Line numbers are not supported (and neither is GOTO); "
+                "remove the number at the start of the line", line)
+
         if tok.type != TokenType.KEYWORD and tok.type != TokenType.IDENTIFIER:
-            # Could be a SUB call (identifier as statement)
-            if tok.type == TokenType.IDENTIFIER:
-                return self.parse_sub_call(line)
-            self.advance()
-            self.expect_newline()
-            return None
+            raise ParseError(f"Unexpected '{tok.value}'", line)
+
+        # Implicit LET: name = expr
+        if (tok.type == TokenType.IDENTIFIER
+                and self.peek_at(1).type == TokenType.EQUALS):
+            return self.parse_let(line, implicit=True)
 
         kw = tok.upper() if tok.type == TokenType.KEYWORD else ""
 
@@ -434,10 +493,12 @@ class Parser:
         if tok.type == TokenType.IDENTIFIER:
             return self.parse_sub_call(line)
 
-        # Unknown — skip
-        self.advance()
-        self.expect_newline()
-        return None
+        # Known BASIC keywords we don't implement: say so plainly
+        if kw in ("GOTO", "GOSUB", "RETURN", "ON", "LOAD",
+                  "HISTORY", "INSPECT", "LIST", "NEW"):
+            raise ParseError(f"{kw} is not supported in olcaBASIC", line)
+
+        raise ParseError(f"'{tok.value}' cannot start a statement", line)
 
     # ── Flags ────────────────────────────────────────────
 
@@ -445,9 +506,14 @@ class Parser:
 
     # ── Individual statement parsers ─────────────────────
 
-    def parse_let(self, line: int) -> LetStmt:
-        self.advance()  # consume LET
+    def parse_let(self, line: int, implicit: bool = False) -> LetStmt:
+        if not implicit:
+            self.advance()  # consume LET (or PARAM / SET)
         tok = self.peek()
+        if tok.type == TokenType.KEYWORD:
+            raise ParseError(
+                f"'{tok.value}' is a reserved word and can't be used "
+                f"as a variable name (try {tok.value.lower()}_value)", line)
         if tok.type != TokenType.IDENTIFIER:
             raise ParseError(f"Expected variable name after LET", line)
         name = self.advance().value
@@ -622,7 +688,8 @@ class Parser:
             self.expect_newline()
             # Check for block continuation
             self.skip_newlines()
-            if self.at_keyword("FOLDER", "PROVIDER", "END"):
+            if (self.at_keyword("FOLDER", "PROVIDER")
+                    or self.at_end_of("BRIDGE")):
                 # Block form
                 while not self.at_keyword("END"):
                     if self.peek().type == TokenType.EOF:
@@ -637,7 +704,10 @@ class Parser:
                     elif self.match_keyword("WASTE"):
                         is_waste = True
                     else:
-                        self.advance()
+                        raise ParseError(
+                            f"'{self.peek().value}' is not allowed inside "
+                            f"BRIDGE (expected FOLDER, PROVIDER, WASTE or "
+                            f"END BRIDGE)", self.current_line())
                     self.expect_newline()
                     self.skip_newlines()
 
@@ -697,13 +767,13 @@ class Parser:
                 description = self.parse_string_or_expr()
                 self.expect_newline()
 
-            elif kw == "FLOW" and self.tokens[self.pos + 1].upper() == "SCHEMA":
+            elif kw == "FLOW" and self.peek_at(1).upper() == "SCHEMA":
                 self.advance()  # FLOW
                 self.advance()  # SCHEMA
                 flow_schema = self.parse_string_or_expr()
                 self.expect_newline()
 
-            elif kw == "PROCESS" and self.tokens[self.pos + 1].upper() == "SCHEMA":
+            elif kw == "PROCESS" and self.peek_at(1).upper() == "SCHEMA":
                 self.advance()  # PROCESS
                 self.advance()  # SCHEMA
                 process_schema = self.parse_string_or_expr()
@@ -713,7 +783,7 @@ class Parser:
                 ex = self.parse_exchange()
                 exchanges.append(ex)
 
-            elif kw == "LET" or kw == "PARAM":
+            elif kw == "LET" or self.at_word("PARAM"):
                 stmt = self.parse_let(tok.line)
                 local_params.append(stmt)
 
@@ -729,8 +799,11 @@ class Parser:
                 self.advance()
 
             else:
-                self.advance()
-                self.expect_newline()
+                self._inside_process = False
+                raise ParseError(
+                    f"'{tok.value}' is not allowed inside PROCESS "
+                    f"(expected INPUT, OUTPUT, LET, FOLDER, LOCATION, "
+                    f"DESCRIPTION or END PROCESS)", tok.line)
 
             self.skip_newlines()
 
@@ -773,6 +846,7 @@ class Parser:
         compartment = ""
         provider = None
         formula = None
+        location = None
 
         # Parse trailing modifiers
         # Allow optional comma before modifiers (e.g. "m3, PRODUCT")
@@ -808,6 +882,9 @@ class Parser:
             elif kw == "FORMULA":
                 self.advance()
                 formula = self.parse_string_or_expr()
+            elif kw == "LOCATION":
+                self.advance()
+                location = self.parse_string_or_expr()
             else:
                 break
             if self.peek().type == TokenType.COMMA:
@@ -820,7 +897,7 @@ class Parser:
             unit=unit, is_new=is_new, is_product=is_product,
             is_waste=is_waste,
             direction_compartment=compartment, provider=provider,
-            formula=formula)
+            formula=formula, location=location)
 
     def parse_system(self, line: int) -> SystemStmt:
         self.advance()  # consume SYSTEM
@@ -835,14 +912,19 @@ class Parser:
         self.expect_newline()
         self.skip_newlines()
 
-        # Check for block form
-        if self.at_keyword("LINKING", "TARGET", "FOLDER", "END"):
+        # Block form only if the next line is a SYSTEM sub-command
+        # or END SYSTEM. A bare END belongs to an enclosing block.
+        if (self.at_keyword("LINKING", "TARGET", "FOLDER")
+                or self.at_end_of("SYSTEM")):
             while not self.at_keyword("END"):
                 if self.peek().type == TokenType.EOF:
                     break
                 if self.match_keyword("LINKING"):
-                    if self.at_keyword("PREFER_DEFAULTS", "ONLY_DEFAULTS"):
-                        linking = self.advance().upper()
+                    if not self.at_keyword("PREFER_DEFAULTS", "ONLY_DEFAULTS"):
+                        raise ParseError(
+                            "LINKING must be PREFER_DEFAULTS or "
+                            "ONLY_DEFAULTS", self.current_line())
+                    linking = self.advance().upper()
                 elif self.match_keyword("TARGET"):
                     target_amount = self.parse_expr()
                     if self.peek().type == TokenType.COMMA:
@@ -853,7 +935,10 @@ class Parser:
                 elif self.match_keyword("FOLDER"):
                     folder = self.parse_string_or_expr()
                 else:
-                    self.advance()
+                    raise ParseError(
+                        f"'{self.peek().value}' is not allowed inside "
+                        f"SYSTEM (expected LINKING, TARGET, FOLDER or "
+                        f"END SYSTEM)", self.current_line())
                 self.expect_newline()
                 self.skip_newlines()
 
@@ -889,7 +974,7 @@ class Parser:
         categories = []
 
         if self.match_keyword("TOP"):
-            top = int(self.advance().value)
+            top = self.parse_int("TOP")
         if self.match_keyword("ALLOCATE"):
             if self.peek().type == TokenType.KEYWORD:
                 allocation = self.advance().upper()
@@ -901,7 +986,8 @@ class Parser:
         if self.at_keyword("CATEGORIES"):
             self.advance()
             while self.peek().type not in (TokenType.NEWLINE,
-                                            TokenType.EOF):
+                                            TokenType.EOF,
+                                            TokenType.COMMENT):
                 categories.append(self.parse_string_or_expr())
                 if self.peek().type == TokenType.COMMA:
                     self.advance()
@@ -923,7 +1009,7 @@ class Parser:
         max_flows = 50
         allocation = ""
         if self.match_keyword("MAX"):
-            max_flows = int(self.advance().value)
+            max_flows = self.parse_int("MAX")
         if self.match_keyword("ALLOCATE"):
             if self.peek().type == TokenType.KEYWORD:
                 allocation = self.advance().upper()
@@ -939,7 +1025,7 @@ class Parser:
         runs = 1000
         allocation = ""
         if self.match_keyword("RUNS"):
-            runs = int(self.advance().value)
+            runs = self.parse_int("RUNS")
         if self.match_keyword("ALLOCATE"):
             if self.peek().type == TokenType.KEYWORD:
                 allocation = self.advance().upper()
@@ -966,12 +1052,10 @@ class Parser:
                 overrides.append(stmt)
             elif tok.type in (TokenType.COMMENT, TokenType.NEWLINE):
                 self.advance()
-            elif kw == "REM":
-                self.advance()
-                self.expect_newline()
             else:
-                self.advance()
-                self.expect_newline()
+                raise ParseError(
+                    f"'{tok.value}' is not allowed inside SCENARIO "
+                    f"(expected LET or END SCENARIO)", tok.line)
             self.skip_newlines()
 
         self.expect_keyword("END")
@@ -990,7 +1074,7 @@ class Parser:
         variation = 20.0
         allocation = ""
         if self.match_keyword("BY"):
-            variation = float(self.advance().value)
+            variation = self.parse_number("BY")
             self.match_keyword("PERCENT")  # optional
             if self.peek().type == TokenType.PERCENT:
                 self.advance()
@@ -1014,10 +1098,19 @@ class Parser:
 
             if kw == "VARY":
                 self.advance()
-                if self.peek().type == TokenType.IDENTIFIER:
-                    parameters.append(self.advance().value)
-                elif self.peek().type == TokenType.STRING:
-                    parameters.append(self.advance().value)
+                while True:
+                    if self.peek().type in (TokenType.IDENTIFIER,
+                                            TokenType.STRING):
+                        parameters.append(self.advance().value)
+                    else:
+                        raise ParseError(
+                            f"Expected a parameter name after VARY, "
+                            f"got '{self.peek().value}'",
+                            self.current_line())
+                    if self.peek().type == TokenType.COMMA:
+                        self.advance()
+                        continue
+                    break
             elif kw == "FROM":
                 self.advance()
                 from_csv = self.parse_string_or_expr()
@@ -1026,8 +1119,12 @@ class Parser:
                 save_to = self.parse_string_or_expr()
             elif self.peek().type in (TokenType.COMMENT, TokenType.NEWLINE):
                 self.advance()
+                continue
             else:
-                self.advance()
+                raise ParseError(
+                    f"'{self.peek().value}' is not allowed inside "
+                    f"SENSITIVITY (expected VARY, FROM, SAVE or "
+                    f"END SENSITIVITY)", self.current_line())
             self.expect_newline()
             self.skip_newlines()
 
@@ -1061,8 +1158,13 @@ class Parser:
             self.expect_newline()
             self.skip_newlines()
 
-            # Check for block with FROM/SAVE
-            if self.at_keyword("FROM", "SAVE", "END"):
+            # Block form only for FROM / SAVE "file" / END RUN.
+            # SAVE RESULTS on the next line is a separate statement,
+            # and a bare END belongs to an enclosing block.
+            if (self.at_keyword("FROM")
+                    or (self.at_keyword("SAVE")
+                        and self.peek_at(1).type == TokenType.STRING)
+                    or self.at_end_of("RUN")):
                 while not self.at_keyword("END"):
                     if self.peek().type == TokenType.EOF:
                         break
@@ -1072,13 +1174,16 @@ class Parser:
                     elif self.match_keyword("SAVE"):
                         save_to = self.parse_string_or_expr()
                     else:
-                        self.advance()
+                        raise ParseError(
+                            f"'{self.peek().value}' is not allowed inside "
+                            f"RUN SCENARIOS (expected FROM, SAVE or "
+                            f"END RUN)", self.current_line())
                     self.expect_newline()
                     self.skip_newlines()
 
-                if self.match_keyword("END"):
-                    self.match_keyword("RUN")
-                    self.expect_newline()
+                self.expect_keyword("END")
+                self.expect_keyword("RUN")
+                self.expect_newline()
 
             return RunScenariosStmt(
                 line=line, system=system, method=method,
@@ -1095,7 +1200,8 @@ class Parser:
         system = self.parse_string_or_expr()
         with_calc = False
         if self.match_keyword("WITH"):
-            self.match_keyword("CALCULATION")
+            if not self.match_word("CALCULATION", "CALCULATE"):
+                raise ParseError("Expected CALCULATION after WITH", line)
             with_calc = True
         self.expect_newline()
         return ValidateStmt(line=line, system=system, with_calc=with_calc)
@@ -1106,7 +1212,7 @@ class Parser:
         tier = 1
         against = None
         if self.match_keyword("TIER"):
-            tier = int(self.advance().value)
+            tier = self.parse_int("TIER")
         if self.match_keyword("AGAINST"):
             against = self.parse_string_or_expr()
         self.expect_newline()
@@ -1162,8 +1268,7 @@ class Parser:
         if self.at_keyword("ON"):
             self.advance()
             enabled = True
-        elif self.at_keyword("OFF"):
-            self.advance()
+        elif self.match_word("OFF"):
             enabled = False
         self.expect_newline()
         return ConfirmDeleteStmt(line=line, enabled=enabled)
@@ -1177,13 +1282,17 @@ class Parser:
     def parse_find(self, line: int) -> FindStmt:
         self.advance()  # FIND
         entity_type = ""
-        if self.at_keyword("PROCESS", "FLOW", "METHOD", "CHEMICAL",
-                            "UNIT", "SYSTEM"):
+        if self.at_word("PROCESS", "FLOW", "METHOD", "CHEMICAL",
+                         "UNIT"):
             entity_type = self.advance().upper()
+        else:
+            raise ParseError(
+                "FIND needs a type: PROCESS, FLOW, METHOD, CHEMICAL "
+                "or UNIT", line)
         search_term = self.parse_string_or_expr()
         location = None
         category = None
-        if self.match_keyword("AT"):
+        if self.match_word("AT"):
             location = self.parse_string_or_expr()
         if self.match_keyword("IN"):
             category = self.parse_string_or_expr()
@@ -1225,8 +1334,9 @@ class Parser:
             expr = self.parse_expr()
             self.expect_newline()
             return LetStmt(line=line, name=name, expr=expr)
-        self.expect_newline()
-        return None
+        raise ParseError(
+            "Expected SET PROCESS FOLDER, SET FLOW FOLDER, SET FOLDER "
+            "or SET name = value", line)
 
     def parse_cat(self, line: int) -> CatStmt:
         """CAT/LS [FLOWS|PROCESSES|SYSTEMS] ["path"] [*pattern*]"""
@@ -1301,6 +1411,12 @@ class Parser:
         self.advance()  # IF
         condition = self.parse_expr()
         self.expect_keyword("THEN")
+
+        # Single-line form: IF cond THEN stmt [ELSE stmt]
+        if self.peek().type not in (TokenType.NEWLINE, TokenType.EOF,
+                                    TokenType.COMMENT):
+            return self._parse_single_line_if(line, condition)
+
         self.expect_newline()
         self.skip_newlines()
 
@@ -1333,6 +1449,38 @@ class Parser:
         return IfStmt(line=line, condition=condition,
                        then_body=then_body, else_body=else_body)
 
+    def _parse_single_line_if(self, line: int, condition: Expr) -> IfStmt:
+        """IF cond THEN stmt [ELSE stmt] on one line. Parses the
+        branch statements from sub-lists of the remaining tokens."""
+        # Collect the rest of the line
+        rest = []
+        while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF,
+                                       TokenType.COMMENT):
+            rest.append(self.advance())
+        self.expect_newline()
+        # Split on a top-level ELSE
+        split = None
+        for i, t in enumerate(rest):
+            if t.type == TokenType.KEYWORD and t.upper() == "ELSE":
+                split = i
+                break
+        then_toks = rest if split is None else rest[:split]
+        else_toks = [] if split is None else rest[split + 1:]
+
+        def one(toks):
+            if not toks:
+                return []
+            sub = Parser(toks + [Token(TokenType.NEWLINE, "\\n", line),
+                                 Token(TokenType.EOF, "", line)])
+            stmt = sub.parse_statement()
+            if sub.peek().type != TokenType.EOF:
+                raise ParseError("Only one statement is allowed in each "
+                                 "branch of a single-line IF", line)
+            return [stmt] if stmt else []
+
+        return IfStmt(line=line, condition=condition,
+                      then_body=one(then_toks), else_body=one(else_toks))
+
     def parse_for(self, line: int) -> Statement:
         self.advance()  # FOR
 
@@ -1343,7 +1491,8 @@ class Parser:
             self.expect_keyword("IN")
             values = []
             while self.peek().type not in (TokenType.NEWLINE,
-                                            TokenType.EOF):
+                                            TokenType.EOF,
+                                            TokenType.COMMENT):
                 values.append(self.parse_expr())
                 if self.peek().type == TokenType.COMMA:
                     self.advance()
@@ -1360,18 +1509,22 @@ class Parser:
                 self.skip_newlines()
 
             self.expect_keyword("NEXT")
-            self.match_keyword(variable)  # optional variable after NEXT
+            if (self.peek().type == TokenType.IDENTIFIER
+                    and self.peek().value == variable):
+                self.advance()  # optional variable after NEXT
             self.expect_newline()
 
             return ForEachStmt(line=line, variable=variable,
                                 values=values, body=body)
 
         # FOR var = start TO end [STEP n]
-        variable = self.advance().value
-        self.expect_keyword("EQUALS")  # this won't work — need = token
-        # Actually = is TokenType.EQUALS
-        if self.peek().type == TokenType.EQUALS:
-            self.advance()
+        var_tok = self.advance()
+        if var_tok.type != TokenType.IDENTIFIER:
+            raise ParseError("Expected a variable name after FOR", line)
+        variable = var_tok.value
+        if self.peek().type != TokenType.EQUALS:
+            raise ParseError(f"Expected '=' after FOR {variable}", line)
+        self.advance()
         start = self.parse_expr()
         self.expect_keyword("TO")
         end = self.parse_expr()
@@ -1391,7 +1544,8 @@ class Parser:
             self.skip_newlines()
 
         self.expect_keyword("NEXT")
-        if self.peek().type == TokenType.IDENTIFIER:
+        if (self.peek().type == TokenType.IDENTIFIER
+                and self.peek().value == variable):
             self.advance()  # optional variable name
         self.expect_newline()
 
@@ -1515,15 +1669,18 @@ class Parser:
                 if self.at_keyword("INPUT", "OUTPUT"):
                     ex = self.parse_exchange()
                     stmt.add_exchanges.append(ex)
-                elif self.at_keyword("PARAM"):
+                elif self.at_word("PARAM"):
                     let_stmt = self.parse_let(self.peek().line)
                     stmt.add_params.append(let_stmt)
+                else:
+                    raise ParseError("Expected INPUT, OUTPUT or PARAM "
+                                     "after ADD", self.current_line())
             elif kw == "UPDATE":
                 self.advance()
-                if self.match_keyword("EXCHANGE"):
+                if self.match_word("EXCHANGE"):
                     flow_ref = self.parse_string_or_expr()
                     upd = {"flow_ref": flow_ref}
-                    if self.match_keyword("AMOUNT"):
+                    if self.match_word("AMOUNT"):
                         upd["amount"] = self.parse_expr()
                     if self.match_keyword("FORMULA"):
                         upd["formula"] = self.parse_string_or_expr()
@@ -1531,24 +1688,29 @@ class Parser:
                         upd["provider"] = self.parse_string_or_expr()
                     stmt.update_exchanges.append(upd)
                     self.expect_newline()
-                elif self.match_keyword("PARAM"):
+                elif self.match_word("PARAM"):
                     name = self.advance().value
-                    self.advance()  # =
+                    if self.peek().type != TokenType.EQUALS:
+                        raise ParseError(f"Expected '=' after {name}",
+                                         self.current_line())
+                    self.advance()
                     val = self.parse_expr()
                     stmt.update_params[name] = val
                     self.expect_newline()
             elif kw == "REMOVE":
                 self.advance()
-                self.match_keyword("EXCHANGE")
+                self.match_word("EXCHANGE")
                 ref = self.parse_string_or_expr()
-                if isinstance(ref, StringLiteral):
-                    stmt.remove_exchanges.append(ref.value)
+                if not isinstance(ref, StringLiteral):
+                    raise ParseError("REMOVE EXCHANGE needs a quoted "
+                                     "flow name", self.current_line())
+                stmt.remove_exchanges.append(ref.value)
                 self.expect_newline()
             elif kw == "SET":
                 self.advance()
                 if self.match_keyword("DESCRIPTION"):
                     stmt.set_description = self.parse_string_or_expr()
-                elif self.match_keyword("CATEGORY"):
+                elif self.match_word("CATEGORY"):
                     stmt.set_category = self.parse_string_or_expr()
                 elif self.match_keyword("LOCATION"):
                     stmt.set_location = self.parse_string_or_expr()
@@ -1556,8 +1718,10 @@ class Parser:
             elif self.peek().type in (TokenType.COMMENT, TokenType.NEWLINE):
                 self.advance()
             else:
-                self.advance()
-                self.expect_newline()
+                raise ParseError(
+                    f"'{self.peek().value}' is not allowed inside EDIT "
+                    f"(expected ADD, UPDATE, REMOVE, SET or END EDIT)",
+                    self.current_line())
             self.skip_newlines()
 
         self.expect_keyword("END")
@@ -1569,7 +1733,10 @@ class Parser:
 
 def parse(source: str) -> List[Statement]:
     """Parse a complete olcaBASIC program and return a list of AST nodes."""
-    tokens = tokenise(source)
+    try:
+        tokens = tokenise(source)
+    except TokeniseError as e:
+        raise ParseError(str(e).split(": ", 1)[-1], e.line)
     parser = Parser(tokens)
     return parser.parse_program()
 

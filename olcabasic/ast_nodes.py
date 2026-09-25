@@ -153,6 +153,7 @@ class ExchangeDef:
     direction_compartment: str = ""  # TO AIR, TO WATER, etc.
     provider: Expr = None      # PROVIDER "name-or-uuid"
     formula: Expr = None       # explicit FORMULA "expr"
+    location: Expr = None      # LOCATION "code" for disambiguation
 
 
 # ── Bridge ───────────────────────────────────────────────

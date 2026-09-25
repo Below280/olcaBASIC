@@ -7,6 +7,7 @@ control flow, output).
 """
 
 import os
+import re
 import math
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +21,24 @@ from .formatting import (
     format_process_details, format_database_info, format_params,
     format_generic, results_to_csv,
 )
+
+
+# Category prefixes used to find elementary flows. Matched
+# case-insensitively as a prefix, so "Elementary flows/resource"
+# covers in ground, in water, in air, land and biotic.
+COMPARTMENT_CATEGORIES = {
+    "AIR": "Elementary flows/emission to air",
+    "WATER": "Elementary flows/emission to water",
+    "SOIL": "Elementary flows/emission to soil",
+    "NATURE": "Elementary flows/resource",
+}
+
+
+def _fmt_num(v):
+    """Print whole-number floats without a trailing .0"""
+    if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+        return str(int(v))
+    return str(v)
 
 
 class BasicError(Exception):
@@ -41,7 +60,7 @@ class Interpreter:
         # Register built-in math functions
         self._builtins = {
             "ABS": abs,
-            "INT": int,
+            "INT": lambda x: int(math.floor(x)),
             "SQR": math.sqrt,
             "LOG": math.log,
             "EXP": math.exp,
@@ -109,8 +128,12 @@ class Interpreter:
 
     # ── Include processing ───────────────────────────────
 
-    def _process_includes(self, source: str, base_path: str) -> str:
+    def _process_includes(self, source: str, base_path: str,
+                          _seen=None) -> str:
         """Process INCLUDE directives (textual inclusion)."""
+        seen = set(_seen or ())
+        if base_path:
+            seen.add(os.path.abspath(base_path))
         lines = source.split("\n")
         result = []
         base_dir = os.path.dirname(os.path.abspath(base_path)) if base_path else "."
@@ -123,18 +146,20 @@ class Interpreter:
                 if len(parts) >= 2:
                     inc_file = parts[1]
                     inc_path = os.path.join(base_dir, inc_file)
+                    if os.path.abspath(inc_path) in seen:
+                        raise BasicError(
+                            f"INCLUDE loop: {inc_file} includes itself")
                     try:
                         with open(inc_path, "r", encoding="utf-8") as f:
                             inc_source = f.read()
-                        # Recursive includes
-                        inc_source = self._process_includes(
-                            inc_source, inc_path)
-                        result.append(inc_source)
-                        continue
                     except FileNotFoundError:
-                        result.append(
-                            f'REM ERROR: Include file not found: {inc_file}')
-                        continue
+                        raise BasicError(
+                            f"Include file not found: {inc_path}")
+                    # Recursive includes
+                    inc_source = self._process_includes(
+                        inc_source, inc_path, seen)
+                    result.append(inc_source)
+                    continue
             result.append(line)
 
         return "\n".join(result)
@@ -168,7 +193,7 @@ class Interpreter:
 
         elif isinstance(stmt, PrintExprStmt):
             val = self._eval(stmt.expr)
-            print(f"  {val}")
+            print(f"  {_fmt_num(val)}")
 
         elif isinstance(stmt, DataStmt):
             self._exec_data(stmt)
@@ -324,11 +349,13 @@ class Interpreter:
 
         if isinstance(expr, Identifier):
             name = expr.name
-            # Check runtime variables
             if self.runtime.has_var(name):
                 return self.runtime.get_var(name)
-            # Return the name as a string (for flow names, unit names, etc.)
-            return name
+            # An undefined name used to evaluate to its own text,
+            # which turned typos into strings. Refuse it instead.
+            raise BasicError(
+                f"'{name}' is not a defined variable. If you meant "
+                f"a name, put it in quotes: \"{name}\"")
 
         if isinstance(expr, BinOp):
             left = self._eval(expr.left)
@@ -343,6 +370,8 @@ class Interpreter:
                 if right == 0:
                     raise BasicError("Division by zero", 0)
                 return left / right
+            elif expr.op == "^":
+                return left ** right
 
         if isinstance(expr, UnaryOp):
             val = self._eval(expr.operand)
@@ -451,6 +480,13 @@ class Interpreter:
     def _exec_let(self, stmt: LetStmt):
         value = self._eval(stmt.expr)
         self.runtime.set_var(stmt.name, value)
+        # Top-level variables defined from other variables keep their
+        # expression, so they become formula parameters in openLCA
+        if self.runtime.current_scope is self.runtime.global_scope:
+            if self._expr_is_variable(stmt.expr):
+                self.runtime.var_exprs[stmt.name] = stmt.expr
+            else:
+                self.runtime.var_exprs.pop(stmt.name, None)
 
     def _exec_data(self, stmt: DataStmt):
         for val_expr in stmt.values:
@@ -563,7 +599,7 @@ class Interpreter:
         elif sub == "EXPR":
             # Multiple comma-separated expressions
             vals = [self._eval(a) for a in stmt.args]
-            print("  " + "  ".join(str(v) for v in vals))
+            print("  " + "  ".join(_fmt_num(v) for v in vals))
 
         else:
             print(f"  Unknown PRINT sub-command: {sub}")
@@ -594,14 +630,13 @@ class Interpreter:
             ft = "elementary"
 
         # Map direction to category path
-        if stmt.direction == "AIR":
-            folder = folder or "Elementary flows/emission to air"
-        elif stmt.direction == "WATER":
-            folder = folder or "Elementary flows/emission to water"
-        elif stmt.direction == "SOIL":
-            folder = folder or "Elementary flows/emission to soil"
-        elif stmt.direction == "NATURE":
-            folder = folder or "Elementary flows/resource/in ground"
+        search_cat = ""
+        if stmt.direction:
+            search_cat = COMPARTMENT_CATEGORIES[stmt.direction]
+            if stmt.direction == "NATURE":
+                folder = folder or "Elementary flows/resource/in ground"
+            else:
+                folder = folder or search_cat
 
         if stmt.is_new:
             # NEW: always create
@@ -613,7 +648,8 @@ class Interpreter:
             print(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
         else:
             # Default: find existing
-            found = self.bridge.find_flow(name, stmt.unit)
+            found = self.bridge.find_flow(
+                name, stmt.unit, search_cat, strict=bool(search_cat))
             if found:
                 print(f"  Flow found: {found['flow_name']}")
             else:
@@ -662,7 +698,9 @@ class Interpreter:
         flow_schema = self._eval_str(stmt.flow_schema) if stmt.flow_schema else None
         process_schema = self._eval_str(stmt.process_schema) if stmt.process_schema else None
 
-        # Handle READ INPUTS FROM DATA
+        # Handle READ INPUTS FROM DATA. Work on a copy so running the
+        # same PROCESS twice (e.g. in a loop) doesn't pile up exchanges.
+        ex_list = list(stmt.exchanges)
         if stmt.read_data:
             while self.runtime.has_data():
                 flow_name = self.runtime.read_data()
@@ -674,31 +712,136 @@ class Interpreter:
                     amount=NumberLiteral(float(amount)),
                     unit=str(unit),
                 )
-                stmt.exchanges.append(ex)
+                ex_list.append(ex)
 
-        # Build exchange dicts
+        # Local LETs inside the PROCESS block must be visible to the
+        # exchange amounts, so evaluate them into a temporary scope.
+        self.runtime.push_scope()
+        try:
+            for let_stmt in stmt.local_params:
+                self.runtime.set_var(let_stmt.name,
+                                     self._eval(let_stmt.expr))
+            exchanges = self._build_exchanges(stmt, folder, ex_list)
+            local_values = {n: self.runtime.get_var(n) for n in
+                            (l.name for l in stmt.local_params)}
+        finally:
+            self.runtime.pop_scope()
+
+        # Build parameter dicts from local LET statements
+        parameters = []
+        param_names = set()
+        for let_stmt in stmt.local_params:
+            val = local_values[let_stmt.name]
+            if not isinstance(val, (int, float)):
+                raise BasicError(
+                    f"Parameter '{let_stmt.name}' must be a number",
+                    stmt.line)
+            parameters.append({"name": let_stmt.name, "value": float(val)})
+            param_names.add(let_stmt.name)
+
+        # Top-level variables used in exchange formulas become openLCA
+        # GLOBAL parameters (not per-process copies), so a variable
+        # shared by several processes is one parameter, and scenarios
+        # and sensitivity change it everywhere. Local LETs above stay
+        # process-scope and take precedence inside this process.
+        for ex_dict in exchanges:
+            formula = ex_dict.get("formula", "")
+            if formula:
+                for var_name in self._referenced_globals(formula):
+                    if var_name not in param_names:
+                        self._sync_global(var_name, stmt.line)
+
+        return self._create_process(stmt, name, folder, exchanges,
+                                    parameters, description, location,
+                                    flow_schema, process_schema)
+
+    def _referenced_globals(self, formula: str) -> list:
+        """Top-level variables named in a formula (whole words only,
+        so 'mass' doesn't match 'cement_mass')."""
+        names = set(self.runtime.get_numeric_globals()) | set(
+            self.runtime.var_exprs)
+        return [n for n in sorted(names)
+                if re.search(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])",
+                             formula)]
+
+    def _sync_global(self, name: str, line: int, _chain=()):
+        """Create or update the openLCA global parameter for a
+        top-level variable. Derived variables become formula
+        parameters, with their inputs synced first."""
+        if name in _chain:
+            raise BasicError(
+                f"Circular definition: {' -> '.join(_chain + (name,))}", line)
+
+        expr = self.runtime.var_exprs.get(name)
+        if expr is not None:
+            formula = self._expr_to_formula(expr)
+            for dep in self._referenced_globals(formula):
+                if dep != name:
+                    self._sync_global(dep, line, _chain + (name,))
+            desired = ("formula", formula)
+        else:
+            val = self.runtime.get_var(name)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                raise BasicError(
+                    f"'{name}' is used in an exchange but isn't a number",
+                    line)
+            desired = ("value", float(val))
+
+        previous = self.runtime.synced_globals.get(name)
+        if previous == desired:
+            return
+
+        if desired[0] == "formula":
+            result = self.bridge.create_global_parameter(
+                name, formula=desired[1])
+        else:
+            result = self.bridge.create_global_parameter(
+                name, value=desired[1])
+        if "error" in result:
+            raise BasicError(f"Global parameter '{name}': "
+                             f"{result['error']}", line)
+
+        # Warn when overwriting a global this session didn't create:
+        # it may belong to another model in the same database
+        if (previous is None and result.get("already_existed")
+                and result.get("changed")):
+            prev = result.get("previous", {})
+            was = prev.get("formula") or prev.get("value")
+            print(f"  NOTE: global parameter '{name}' already existed "
+                  f"(was {was}) and has been updated. Other models in "
+                  f"this database that use it will change too.")
+        self.runtime.synced_globals[name] = desired
+
+    def _check_overridable(self, names, what: str, line: int):
+        """Derived variables are calculated by openLCA; point users at
+        the inputs instead of silently ignoring the override."""
+        for n in names:
+            expr = self.runtime.var_exprs.get(n)
+            if expr is not None:
+                deps = self._referenced_globals(self._expr_to_formula(expr))
+                raise BasicError(
+                    f"'{n}' is calculated from {' and '.join(deps)}, so it "
+                    f"can't be set in a {what}. Change "
+                    f"{' or '.join(deps)} instead.", line)
+
+    def _build_exchanges(self, stmt: ProcessStmt, folder: str,
+                         ex_list: list) -> list:
         exchanges = []
-        for ex in stmt.exchanges:
+        for ex in ex_list:
             flow_name = self._eval_str(ex.flow_name)
             unit = ex.unit
 
-            # Determine flow type
+            # Determine flow type. New foreground flows go in the
+            # SET FLOW FOLDER if one is set, else the process folder.
             flow_type = "product"
-            category = folder
+            category = self.runtime.flow_folder or folder
             if ex.is_product:
                 flow_type = "product"
             elif ex.is_waste:
                 flow_type = "waste"
             elif ex.direction_compartment:
                 flow_type = "elementary"
-                if ex.direction_compartment == "AIR":
-                    category = "Elementary flows/emission to air"
-                elif ex.direction_compartment == "WATER":
-                    category = "Elementary flows/emission to water"
-                elif ex.direction_compartment == "SOIL":
-                    category = "Elementary flows/emission to soil"
-                elif ex.direction_compartment == "NATURE":
-                    category = "Elementary flows/resource/in ground"
+                category = COMPARTMENT_CATEGORIES[ex.direction_compartment]
             elif ex.direction == "OUTPUT":
                 flow_type = "product"
 
@@ -715,28 +858,83 @@ class Interpreter:
                         f"Flow '{flow_name}': {flow_result['error']}",
                         stmt.line)
                 flow_id = flow_result["flow_id"]
+
+            elif ex.direction_compartment:
+                # Elementary flow (TO AIR, TO WATER, etc.)
+                # Never try process lookup; search flows by category
+                flow_match = self.bridge.find_flow(
+                    flow_name, unit, category, strict=True)
+                if flow_match:
+                    flow_id = flow_match["flow_id"]
+                    if flow_match.get("ambiguous"):
+                        print(f"  NOTE: '{flow_name}' exists in "
+                              f"{flow_match['ambiguous']} sub-compartments; "
+                              f"using {flow_match['category']}")
+                else:
+                    raise BasicError(
+                        f"Elementary flow '{flow_name}' not found in "
+                        f"'{category}'. Check the name matches your "
+                        f"database, or use NEW to create it (note: "
+                        f"new elementary flows have no characterisation "
+                        f"factors and will contribute zero to impacts).",
+                        stmt.line)
+
             else:
-                # Default: find the existing flow in the database
-                # First, try to match a process name and get its qref flow
-                # (this also gives us the provider for linking)
-                proc_match = self.bridge.find_process_qref_flow(flow_name)
+                # Product/waste flow: find existing process or flow
+                location_filter = (self._eval_str(ex.location)
+                                   if ex.location else "")
+                proc_match = self.bridge.find_process_qref_flow(
+                    flow_name, location_filter)
+                if proc_match and "error" in proc_match:
+                    raise BasicError(proc_match["error"], stmt.line)
                 if proc_match:
                     flow_id = proc_match["flow_id"]
                     provider_id = proc_match["process_id"]
+                    if proc_match.get("ambiguous"):
+                        loc = proc_match.get("location", "")
+                        print(f"  WARNING: '{flow_name}' matched "
+                              f"{proc_match['ambiguous']} processes, "
+                              f"using '{proc_match['process_name']}'"
+                              f"{' | ' + loc if loc else ''}. "
+                              f"Add LOCATION \"code\" to pick a "
+                              f"specific one.")
                 else:
                     # Try to find a flow by name directly
-                    flow_match = self.bridge.find_flow(flow_name, unit)
+                    flow_match = self.bridge.find_flow(
+                        flow_name, unit, category)
+                    if flow_match and location_filter:
+                        raise BasicError(
+                            f"LOCATION was given, but '{flow_name}' "
+                            f"matched a flow rather than a process, so "
+                            f"there is no provider to choose between",
+                            stmt.line)
                     if flow_match:
                         flow_id = flow_match["flow_id"]
+                        if flow_match.get("ambiguous"):
+                            print(f"  WARNING: '{flow_name}' matched "
+                                  f"{flow_match['ambiguous']} flows, "
+                                  f"using first match.")
                     else:
-                        # Nothing found: create it (foreground flow)
-                        flow_result = self.bridge.create_flow(
-                            flow_name, unit, category, flow_type)
-                        if "error" in flow_result:
+                        # Nothing found
+                        if ex.direction == "INPUT":
                             raise BasicError(
-                                f"Flow '{flow_name}': {flow_result['error']}",
+                                f"No process or flow found matching "
+                                f"'{flow_name}'. Check the spelling, "
+                                f"or use INPUT NEW to create a new "
+                                f"flow.",
                                 stmt.line)
-                        flow_id = flow_result["flow_id"]
+                        else:
+                            print(f"  NOTE: Creating new flow "
+                                  f"'{flow_name}' (use OUTPUT NEW to "
+                                  f"suppress this message)")
+                            flow_result = self.bridge.create_flow(
+                                flow_name, unit, category, flow_type)
+                            if "error" in flow_result:
+                                raise BasicError(
+                                    f"Flow '{flow_name}': "
+                                    f"{flow_result['error']}",
+                                    stmt.line)
+                            flow_id = flow_result["flow_id"]
 
             # Build exchange dict
             ex_dict = {
@@ -748,7 +946,7 @@ class Interpreter:
             }
 
             # Set provider if we found a matching process
-            if provider_id and not ex.provider:
+            if provider_id:
                 ex_dict["provider_id"] = provider_id
 
             # Handle amount: explicit formula, variable reference, or bare number
@@ -761,38 +959,21 @@ class Interpreter:
                 # Bare number: auto-parametrised by LCAFunctions
                 ex_dict["amount"] = float(self._eval(ex.amount))
 
-            # Explicit provider overrides auto-detected one
+            # Explicit provider overrides auto-detected one. It must
+            # identify exactly one process (UUID or unique name).
             if ex.provider:
                 prov_str = self._eval_str(ex.provider)
-                prov_id = self.bridge.resolve_process(prov_str)
-                if prov_id:
-                    ex_dict["provider_id"] = prov_id
+                prov = self.bridge.resolve_process_strict(prov_str)
+                if "error" in prov:
+                    raise BasicError(prov["error"], stmt.line)
+                ex_dict["provider_id"] = prov["process_id"]
 
             exchanges.append(ex_dict)
+        return exchanges
 
-        # Build parameter dicts from local LET statements
-        parameters = []
-        param_names = set()
-        for let_stmt in stmt.local_params:
-            val = self._eval(let_stmt.expr)
-            parameters.append({
-                "name": let_stmt.name,
-                "value": float(val) if isinstance(val, (int, float)) else 0,
-            })
-            param_names.add(let_stmt.name)
-
-        # Auto-add parameters referenced in exchange formulas
-        for ex_dict in exchanges:
-            formula = ex_dict.get("formula", "")
-            if formula:
-                for var_name, var_val in self.runtime.get_numeric_globals().items():
-                    if var_name in formula and var_name not in param_names:
-                        parameters.append({
-                            "name": var_name,
-                            "value": float(var_val),
-                        })
-                        param_names.add(var_name)
-
+    def _create_process(self, stmt, name, folder, exchanges, parameters,
+                        description, location, flow_schema,
+                        process_schema):
         result = self.bridge.create_process(
             name, folder, exchanges, parameters or None,
             description, location, flow_schema, process_schema)
@@ -881,6 +1062,8 @@ class Interpreter:
 
     def _exec_scenario(self, stmt: ScenarioStmt):
         """Accumulate a scenario definition."""
+        self._check_overridable([l.name for l in stmt.overrides],
+                                "SCENARIO", stmt.line)
         overrides = {}
         for let_stmt in stmt.overrides:
             val = self._eval(let_stmt.expr)
@@ -933,6 +1116,7 @@ class Interpreter:
                 save_to, stmt.allocation or None)
         else:
             params = stmt.parameters
+            self._check_overridable(params, "SENSITIVITY", stmt.line)
             print(f"  Sensitivity +/-{stmt.variation_pct}% on "
                   f"{len(params)} parameters...")
             result = self.bridge.run_sensitivity(
@@ -991,7 +1175,12 @@ class Interpreter:
         csv_str = results_to_csv(
             self.runtime.last_results,
             self.runtime.last_results_type)
-        with open(filename, "w") as f:
+        if not csv_str.strip():
+            raise BasicError(
+                f"SAVE RESULTS doesn't support "
+                f"{self.runtime.last_results_type} results yet", stmt.line)
+        # newline="" stops Windows writing blank rows between lines
+        with open(filename, "w", newline="", encoding="utf-8") as f:
             f.write(csv_str)
         print(f"  Results saved to {filename}")
 
@@ -1066,13 +1255,17 @@ class Interpreter:
         end = float(self._eval(stmt.end))
         step = float(self._eval(stmt.step)) if stmt.step else 1.0
 
-        i = start
-        while (step > 0 and i <= end) or (step < 0 and i >= end):
-            self.runtime.set_var(stmt.variable, i)
+        if step == 0:
+            raise BasicError("FOR loop STEP cannot be 0", stmt.line)
+        # Count iterations up front so float steps (0.1) don't drift
+        n = int(math.floor((end - start) / step + 1e-9)) + 1
+        whole = all(float(v).is_integer() for v in (start, step))
+        for k in range(max(n, 0)):
+            i = start + k * step
+            self.runtime.set_var(stmt.variable, int(i) if whole else i)
             self._execute_block(stmt.body)
             if self._stop_requested:
                 break
-            i += step
 
     def _exec_for_each(self, stmt: ForEachStmt):
         values = [self._eval(v) for v in stmt.values]
@@ -1118,10 +1311,10 @@ class Interpreter:
         proc_id = self.bridge.resolve_process(target)
         if not proc_id:
             raise BasicError(f"Process not found: {target}", stmt.line)
-        # Build kwargs for edit_process — simplified for now
-        print(f"  Editing process: {target}")
         # TODO: full edit implementation
-        print("  EDIT PROCESS: not yet fully implemented in v0.1")
+        raise BasicError(
+            "EDIT PROCESS is not implemented yet. Nothing was changed.",
+            stmt.line)
 
     def _exec_cat(self, stmt):
         """CAT/LS — list category contents, with optional wildcard filter."""
@@ -1259,14 +1452,25 @@ class Interpreter:
     FOLDER "path"
     OUTPUT NEW "flow", amount, unit, PRODUCT
     INPUT "existing process", amount, unit
+    INPUT "process name", amount, unit LOCATION "GB"
     INPUT NEW "new flow", amount, unit
+    OUTPUT "CO2", 5, kg TO AIR
     LET param = value
   END PROCESS
 
   INPUT without NEW finds the existing process/flow and
-  wires it up as a provider automatically.
+  wires it up as a provider automatically. If multiple
+  processes share the same name, add LOCATION "code"
+  to pick the right one.
+
   INPUT NEW creates a fresh flow (no provider link).
-  OUTPUT NEW creates your foreground product.""",
+  OUTPUT NEW creates your foreground product.
+
+  Elementary flows (TO AIR, TO WATER, TO SOIL, FROM NATURE)
+  search the database by name and compartment. They never
+  try to match a process. If not found, an error is raised
+  because new elementary flows have no characterisation
+  factors.""",
                 "FOLDER": """
   SET PROCESS FOLDER "path"   Default folder for processes
   SET FLOW FOLDER "path"      Default folder for new flows
