@@ -30,6 +30,22 @@ class REPL:
         self._accumulating = False
         self._accumulated_lines: list = []
         self._block_depth = 0
+        self._setup_completer()
+
+    def _setup_completer(self):
+        """Set up tab completion if readline is available."""
+        try:
+            from .completer import Completer, HAS_READLINE
+            if HAS_READLINE:
+                self.completer = Completer(
+                    bridge=self.interpreter.bridge,
+                    runtime=self.interpreter.runtime,
+                )
+                self.completer.setup()
+            else:
+                self.completer = None
+        except Exception:
+            self.completer = None
 
     def run(self):
         """Main REPL loop."""
@@ -48,7 +64,11 @@ class REPL:
 
             # Track block depth for multi-line input
             upper = line.strip().upper()
-            first_word = upper.split()[0] if upper.split() else ""
+            words = upper.split()
+            first_word = words[0] if words else ""
+            # MAKE opens a block only for MAKE PROCESS; MAKE FLOW is one line
+            if first_word == "MAKE" and len(words) > 1 and words[1] == "PROCESS":
+                first_word = "PROCESS"
 
             if self._accumulating:
                 self._accumulated_lines.append(line)

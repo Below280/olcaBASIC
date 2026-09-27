@@ -33,7 +33,7 @@ python -m olcabasic
 ```
 
 ```
-olcaBASIC v0.2.1
+olcaBASIC v0.3.0
 Connected to openLCA on port 8080
 Database: 2586 processes, 8 methods
 Family:   flcac (auto-detected)
@@ -41,13 +41,14 @@ Ready.
 
 > FIND PROCESS "Portland cement"
   1 results (of 1 total)
-  Name                       Category
-  -------------------------  --------------------------------------------------------------------
-  Portland cement; at plant  31-33: Manufacturing/3273: Cement and Concrete Product Manufacturing
+  Name                       Category                                                              UUID
+  -------------------------  --------------------------------------------------------------------  ------------------------------------
+  Portland cement; at plant  31-33: Manufacturing/3273: Cement and Concrete Product Manufacturing  62993671-574c-3fc5-b66a-6be3bb21ad3d
 ```
 
 If openLCA isn't running, olcaBASIC starts in offline mode and tells
-you how to start the IPC server.
+you how to start the IPC server. Press Tab to complete commands and
+names (on Windows, install `pip install olcabasic[completion]` first).
 
 ## Write programs
 
@@ -63,10 +64,10 @@ LET sand_mass = cement_mass * aggregate_ratio
 SET PROCESS FOLDER "00: My Project"
 SET FLOW FOLDER "00: My Project/Flows"
 
-PROCESS "Concrete block; at plant"
-  OUTPUT NEW "Concrete block", 1, m3, PRODUCT
-  INPUT "Portland cement; at plant", cement_mass, kg
-  INPUT "Construction sand and gravel; at mine", sand_mass, kg
+MAKE PROCESS "Concrete block; at plant"
+  OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT
+  INPUT USE PROCESS "Portland cement; at plant", cement_mass, kg
+  INPUT USE PROCESS "Construction sand and gravel; at mine", sand_mass, kg
 END PROCESS
 
 SYSTEM "Concrete block; at plant"
@@ -86,24 +87,31 @@ RUN SCENARIOS ON "Concrete block; at plant" USING "IPCC"
 In the 'Low cement' scenario the sand follows the cement, because
 `sand_mass` is defined from `cement_mass`. See [Parameters](#parameters).
 
-## How INPUT and OUTPUT work
+## Building processes
 
-By default, `INPUT` finds existing flows and processes in the database
-and wires them up as providers automatically. This is what connects your
-foreground model to the background supply chain.
-
-`OUTPUT NEW` creates a new foreground product flow. `INPUT NEW` creates
-a fresh flow without linking to a provider.
+Every exchange line says what it works with:
 
 ```basic
-OUTPUT NEW "My product", 1, kg, PRODUCT    ' creates your product
-INPUT "Portland cement; at plant", 300, kg  ' finds and links to database
-INPUT NEW "Custom blend", 50, kg            ' creates a new flow
+MAKE PROCESS "My product; at plant"
+  OUTPUT MAKE FLOW "My product", 1, kg, PRODUCT        ' creates your product
+  INPUT USE PROCESS "Portland cement; at plant", 300, kg  ' links a provider
+  INPUT USE FLOW "Water, deionised", 50, kg             ' links a flow only
+  INPUT MAKE FLOW "Custom blend", 5, kg                 ' creates a new flow
+END PROCESS
 ```
 
+`USE PROCESS` must match a process, because that's how the supply chain
+gets linked. `USE FLOW` links a flow and leaves the provider to
+openLCA's linking when the system is built. `MAKE FLOW` creates a flow,
+or reuses one with the same name in the same folder, so running a
+program twice doesn't create duplicates. A plain `INPUT "name"` still
+works as shorthand, trying a process first and then a flow.
+
 A name that matches nothing stops the program with an error, so a typo
-can't quietly drop an input from your model. Use `INPUT NEW` when you
-really do want a new flow.
+can't quietly drop an input from your model.
+
+`INPUT NEW` and `OUTPUT NEW` from earlier versions still work but are
+deprecated, and will be removed in a future version.
 
 ### Choosing between processes with the same name
 
@@ -112,11 +120,12 @@ location. olcaBASIC warns when a name matches more than one, and
 `LOCATION` picks the one you want:
 
 ```basic
-INPUT "market for cement, Portland", 300, kg LOCATION "RoW"
+INPUT USE PROCESS "market for cement, Portland", 300, kg LOCATION "RoW"
 ```
 
 If the code doesn't match, the error lists the locations that exist.
-`PROVIDER` takes a process UUID when you need to name one exactly.
+`PROVIDER` takes a process UUID for when a name isn't enough;
+`FIND PROCESS` shows the UUIDs.
 
 ### Elementary flows
 
@@ -137,6 +146,84 @@ sub-compartments it uses 'unspecified', or the compartment itself where
 there's no 'unspecified', and tells you which. `FIND FLOW "Carbon dioxide"`
 shows the names and categories in your database.
 
+### Pedigree scores and comments
+
+Any exchange line can carry pedigree scores and a comment. Both are
+optional:
+
+```basic
+MAKE PROCESS "Concrete block; at plant"
+  FLOW SCHEMA "US EPA - Flow Pedigree Matrix"
+  OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT
+  INPUT USE PROCESS "Portland cement; at plant", 300, kg _
+    PEDIGREE (1,2,4,1,3) COMMENT "Supplier EPD, 2025"
+END PROCESS
+```
+
+The scores are written as openLCA's own data quality entries, so they
+also appear in the openLCA app. A process with scored lines needs a
+`FLOW SCHEMA`, and each line needs one score from 1 to 5 per indicator,
+in the order `PRINT DQ SYSTEMS` lists them:
+
+```
+  US EPA - Flow Pedigree Matrix
+    1. Flow Reliability
+    2. Temporal Correlation
+    3. Geographical Correlation
+    4. Technological Correlation
+    5. Data Collection Methods
+```
+
+## Changing a model
+
+`EDIT PROCESS` changes a process in place:
+
+```basic
+EDIT PROCESS "Concrete block; at plant"
+  ADD INPUT USE PROCESS "Construction sand and gravel; at mine", 10, kg
+  REMOVE INPUT "Water, deionised"
+  UPDATE INPUT "Portland cement; at plant", cement_mass * 0.06, kg
+  UPDATE INPUT "Portland cement; at plant" PEDIGREE (2,2,2,2,2)
+  ADD PARAM curing_days = 28
+  SET DESCRIPTION "Updated mix"
+END EDIT
+```
+
+`ADD` takes the same lines as a process. `REMOVE` and `UPDATE` name an
+exchange by its flow or by the process supplying it. `UPDATE ...
+LOCATION "US"` relinks to the same product from another location. The
+reference product can't be removed.
+
+`LINK` adds a supplier to an existing process, and `MOVE` puts a
+process in another folder:
+
+```basic
+LINK PROCESS "Construction sand and gravel; at mine" TO PROCESS "Concrete block; at plant" WITH 25, kg
+MOVE PROCESS "Concrete block; at plant" TO "00: My Project/Archive"
+```
+
+Product systems keep the links they were built with, so after adding,
+removing or relinking inputs, delete the system and build it again.
+
+### Flow properties
+
+`EDIT FLOW` adds or updates a flow's properties and changes its
+reference property:
+
+```basic
+EDIT FLOW "Concrete block"
+  ADD PROPERTY "Mass" AS 2400 kg PER m3
+  SET REFERENCE "Mass"
+END EDIT
+```
+
+A property is written as a relation between units, so there's no
+conversion factor to get the wrong way round: `AS 2400 kg PER m3` and
+`AS 1 m3 PER 2400 kg` mean the same. Changing the reference rescales
+every factor, so exchanges keep their meaning and results don't change.
+`SHOW FLOW "Concrete block" UNITS` lists the properties. Properties
+can't be removed from olcaBASIC; see [Deleting](#deleting).
+
 ## Navigation
 
 olcaBASIC includes folder navigation inspired by the Acorn Electron:
@@ -147,11 +234,17 @@ CAT *concrete*              Filter by wildcard
 DIR "31-33: Manufacturing"  Navigate to folder
 UP                          Go up one level
 BACK                        Toggle to previous folder
-CDIR "My Model"             Create and enter a folder
-PWD                         Show current folders
+NAVIGATE FLOWS              Browse flows (or PROCESSES, SYSTEMS, METHODS)
+CDIR "My Model"             Create a folder, enter it, and build there
+PWD                         Show where you are browsing and building
 ```
 
-`LS` works as an alias for `CAT`. `CD` works as an alias for `DIR`.
+`LS` works as an alias for `CAT`, and `CD` for `DIR`.
+
+Browsing never changes where things are built. New processes and flows
+go where `SET PROCESS FOLDER`, `SET FLOW FOLDER` or `CDIR` put them, so
+you can look round the database without your model ending up in its
+folders.
 
 ## Parameters
 
@@ -172,6 +265,10 @@ LET sand_mass = cement_mass * aggregate_ratio   ' follows cement_mass
 
 A `LET` inside a `PROCESS` block is local to that process, and takes
 priority over a global of the same name.
+
+`UPDATE PARAMETER cement_mass = 280` writes the new value to the
+database straight away. `SHOW PARAMETER "sand_mass"` shows a parameter,
+and for a formula parameter shows the formula and its current value.
 
 Global parameters belong to the whole database. If another model already
 has a global with the same name, olcaBASIC updates it and prints a note
@@ -210,7 +307,54 @@ END SENSITIVITY
 
 `MONTECARLO "My System" USING "IPCC" RUNS 1000` runs an uncertainty
 analysis, and `CONTRIBUTION` and `INVENTORY` break results down by
-process and by flow.
+process and by flow. `ALLOCATE PHYSICAL`, `ECONOMIC`, `CAUSAL`, `NONE`
+or `AS_DEFINED` sets the allocation method.
+
+## Contribution trees and data quality
+
+`TREE` follows the supply chain down from your product for one impact
+category, and shows the pedigree scores on every branch, background
+data included:
+
+```basic
+TREE "Concrete block; at plant" USING "IPCC" CATEGORY "AR6-100" LEVELS 3 TOP 5
+```
+
+```
+  AR6-100: 13.2698 kg CO2 eq  (Test pedigree check, IPCC)
+
+  Test pedigree check                                            100.0%
+  `-- Portland cement; at plant [US]                             100.0%  (1;2;4;1;3)  ! geographical correlation 4
+      +-- Bituminous coal; combusted in industrial boiler [US]    23.6%  n.a.  ! no pedigree
+      +-- Electricity; at user; consumption mix - US - US [US]     5.1%  n.a.  ! no pedigree
+      +-- Natural gas; combusted in industrial boiler [US]         1.0%  n.a.  ! no pedigree
+      `-- Other (6)                                                0.3%
+
+  Weak data (score 4 or 5) on the path to the result, in the branches shown:
+    Flow Reliability             0.0%
+    Temporal Correlation         0.0%
+    Geographical Correlation   100.0%
+    Technological Correlation    0.0%
+    Data Collection Methods      0.0%
+  No pedigree scores:   29.7%
+```
+
+Scores of 4 or 5 are flagged by indicator, and so are links with no
+scores. The summary gives the share of the result that passes through at
+least one weak link, counting each branch once. That's how a large
+contribution from weak background data shows up. `NOQUALITY` hides the
+scores, and where a background dataset is aggregated, its branch ends
+there.
+
+## Inspecting
+
+```basic
+SHOW PROCESS "Concrete block; at plant"          ' exchanges and parameters
+SHOW PROCESS "Concrete block; at plant" INPUTS
+SHOW FLOW "Concrete block" UNITS
+SHOW PARAMETER "cement_mass"
+PRINT DQ SYSTEMS
+```
 
 ## Programming
 
@@ -230,7 +374,7 @@ NEXT mass
 there too. `GOTO` and line numbers aren't; olcaBASIC says so if you
 try them.
 
-## Rebuilding a model
+## Deleting
 
 Re-running a program leaves existing processes and systems as they are,
 with a warning. To rebuild, delete them first, systems before the
@@ -245,6 +389,12 @@ DELETE PROCESS "Concrete block; at plant"
 `CONFIRM DELETE ON` skips the yes/no prompt, which is handy at the top
 of a program.
 
+olcaBASIC doesn't delete flows or flow properties. openLCA's IPC
+interface can't tell it whether a flow is used elsewhere in a model, and
+deleting one that is leaves those processes broken. Delete flows in
+openLCA, which checks first. We've asked GreenDelta to add a usage query
+to IPC ([olca-modules issue #76](https://github.com/GreenDelta/olca-modules/issues/76)).
+
 ## Full command reference
 
 Type `HELP` in the REPL for the command list, or `HELP PROCESS`,
@@ -253,14 +403,14 @@ detailed guidance on each topic.
 
 ## Help us improve it
 
-This is version 0.2. The known rough edges:
+This is version 0.3. The known rough edges:
 
-- `DIR`, `UP` and `BACK` move the folder new processes are built in, so
-  browsing the database and then writing a `PROCESS` builds it where you
-  browsed to. `SET PROCESS FOLDER` before building puts it back.
-- `EDIT PROCESS` isn't implemented yet. Delete and rebuild instead.
-- `DELETE` removes processes, flows and systems, but global parameters
-  stay in the database.
+- `DELETE PROCESS` and `DELETE SYSTEM` don't check whether other
+  processes or systems refer to what you're deleting, because IPC can't
+  tell olcaBASIC that either. Use them on your own models.
+- `MOVE` handles processes only.
+- `EDIT PROCESS` can't remove one exchange of a flow that appears more
+  than once in the same process.
 - Functions in exchange amounts (`SQR`, `MIN` and so on) are passed to
   openLCA as written, and openLCA's formula functions have their own
   names.
@@ -286,7 +436,8 @@ There was probably no good reason for this, but we wanted to make it.
 
 - openLCA 2.x with IPC server running (port 8080)
 - Python 3.10+
-- `b280-olca-mcp` 1.15.0 or later (installed automatically)
+- `b280-olca-mcp` 1.16.0 or later (installed automatically)
+- For tab completion on Windows: `pip install olcabasic[completion]`
 
 ## Licence
 

@@ -206,14 +206,17 @@ def format_flows(results: Dict) -> str:
 def format_processes(results: Dict) -> str:
     """Format process search results."""
     procs = results.get("processes", [])
-    headers = ["Name", "Category"]
-    rows = [[p.get("name", "?"), p.get("category", "")] for p in procs]
+    # UUID column: it's what PROVIDER, LINK and MOVE take when
+    # several processes share a name
+    headers = ["Name", "Category", "UUID"]
+    rows = [[p.get("name", "?"), p.get("category", ""), p.get("id", "")]
+            for p in procs]
 
     count = results.get("count", len(procs))
     total = results.get("total_matches", count)
     lines = [f"  {count} results (of {total} total)"]
     if rows:
-        lines.append(format_table(headers, rows, max_widths=[70, 70]))
+        lines.append(format_table(headers, rows, max_widths=[70, 70, 36]))
     return "\n".join(lines)
 
 
@@ -239,6 +242,70 @@ def format_systems(results: Dict) -> str:
     return "\n".join(lines)
 
 
+def exchange_amount(ex: Dict, param_values: Dict) -> str:
+    """The amount to show for an exchange. The MCP stores plain-number
+    amounts as process parameters (p01_...), so show the value rather
+    than the parameter's name; real formulas are shown as written."""
+    formula = ex.get("formula")
+    if formula:
+        name = formula.strip()
+        if name in param_values and param_values[name] is not None:
+            v = param_values[name]
+            return f"{v:.6g}" if isinstance(v, float) else str(v)
+        return formula
+    amt = ex.get("amount", 0)
+    return f"{amt:.4e}" if abs(amt) > 1e4 else f"{amt:.6g}"
+
+
+def param_values_of(results: Dict) -> Dict:
+    return {p.get("name"): p.get("value")
+            for p in results.get("parameters", []) or []
+            if not p.get("formula")}
+
+
+def format_dq_systems(results: Dict) -> str:
+    """Data quality systems with their indicators numbered in position
+    order, which is the order of the scores in PEDIGREE (...)."""
+    systems = results.get("dq_systems", [])
+    if not systems:
+        return "  " + results.get("note", "No data quality systems in this database.")
+    lines = [f"  {len(systems)} data quality systems"]
+    for dq in systems:
+        lines.append("")
+        lines.append(f"  {dq.get('name', '?')}")
+        for k, ind in enumerate(dq.get("indicators", []), 1):
+            pos = ind.get("position") or k
+            lines.append(f"    {pos}. {ind.get('name', '?')}")
+    lines.append("")
+    lines.append("  PEDIGREE (...) takes one score per indicator, in this order.")
+    return "\n".join(lines)
+
+
+def format_flow_details(flow: Dict, units_only: bool = False) -> str:
+    """A flow's properties, with factors relative to the reference."""
+    props = flow.get("properties", [])
+    lines = []
+    if not units_only:
+        lines += [f"  Name:      {flow.get('name', '?')}",
+                  f"  Type:      {flow.get('type', '')}",
+                  f"  Category:  {flow.get('category', '')}", ""]
+    ref = next((p for p in props if p.get("reference")), None)
+    lines.append(f"  {flow.get('name', '?')}: {len(props)} flow "
+                 f"propert{'y' if len(props) == 1 else 'ies'}")
+    rows = []
+    for p in props:
+        f = p.get("factor")
+        rows.append([p.get("name", "?"), f"{f:.6g}" if f is not None else "?",
+                     p.get("unit", ""), "reference" if p.get("reference") else ""])
+    lines.append(format_table(["Property", "Factor", "Unit", ""], rows))
+    if ref:
+        for p in props:
+            if p is not ref and p.get("factor"):
+                lines.append(f"  1 {ref.get('unit', '')} = {p['factor']:.6g} "
+                             f"{p.get('unit', '')}")
+    return "\n".join(lines)
+
+
 def format_process_details(results: Dict) -> str:
     """Format detailed process info."""
     if "error" in results:
@@ -257,13 +324,11 @@ def format_process_details(results: Dict) -> str:
         lines.append(f"\n  Exchanges ({len(exchanges)}):")
         headers = ["Direction", "Flow", "Amount", "Unit", "QRef", "Provider"]
         rows = []
+        values = param_values_of(results)
         for ex in exchanges:
             direction = "INPUT" if ex.get("is_input") else "OUTPUT"
             qref = "*" if ex.get("is_qref") else ""
-            amt = ex.get("amount", 0)
-            formula = ex.get("formula")
-            amt_str = formula if formula else (
-                f"{amt:.4e}" if abs(amt) > 1e4 else f"{amt:.6g}")
+            amt_str = exchange_amount(ex, values)
             rows.append([
                 direction,
                 ex.get("flow", "?"),
@@ -272,7 +337,7 @@ def format_process_details(results: Dict) -> str:
                 qref,
                 ex.get("provider", "") or "",
             ])
-        lines.append(format_table(headers, rows, max_widths=[8, 45, 15, 8, 4, 30]))
+        lines.append(format_table(headers, rows, max_widths=[9, 45, 30, 8, 4, 30]))
 
     params = results.get("parameters", [])
     if params:
@@ -393,3 +458,131 @@ def results_to_csv(results: Dict, results_type: str) -> str:
             writer.writerow(row)
 
     return output.getvalue()
+
+
+def _scores(entry):
+    """'(1;2;4;1;3)' -> [1, 2, 4, 1, 3]; None for missing or 'n.a.'."""
+    if not entry:
+        return None
+    out = []
+    for part in str(entry).strip().strip("()").split(";"):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(None)
+    return out
+
+
+def format_tree(result: Dict, with_quality: bool = True) -> str:
+    """Render an upstream tree with pedigree flags and a summary of how
+    much of the result passes through weak (4 or 5) or unscored links."""
+    total = result.get("total", 0.0) or 0.0
+    unit = result.get("unit", "")
+    root = result.get("root", {})
+
+    rows = []   # (prefix+name, share, entry, flags)
+
+    def has_scores(n, is_root=True):
+        if not is_root and _scores(n.get("dq_entry")) is not None:
+            return True
+        return any(has_scores(k, False) for k in n.get("children", []))
+
+    # With no scores anywhere, flagging every line says nothing useful
+    per_line = with_quality and has_scores(root)
+
+    def label(n):
+        loc = n.get("location")
+        return n.get("name", "?") + (f" [{loc}]" if loc else "")
+
+    def flags_of(n, is_root):
+        if not per_line or is_root:
+            return ""
+        sc = _scores(n.get("dq_entry"))
+        if sc is None:
+            return "! no pedigree"
+        names = n.get("dq_indicators") or []
+        weak = [f"{(names[i] if i < len(names) else f'indicator {i + 1}').lower()} {v}"
+                for i, v in enumerate(sc) if v is not None and v >= 4]
+        return ("! " + ", ".join(weak)) if weak else ""
+
+    def walk(n, prefix, child_prefix, is_root):
+        rows.append((prefix + label(n), n.get("share", 0.0),
+                     (n.get("dq_entry") or ("" if is_root else "n.a."))
+                     if per_line else "",
+                     flags_of(n, is_root)))
+        kids = list(n.get("children", []))
+        other = n.get("other")
+        items = kids + ([("other", other)] if other else [])
+        for k, item in enumerate(items):
+            last = k == len(items) - 1
+            branch = child_prefix + ("`-- " if last else "+-- ")
+            cont = child_prefix + ("    " if last else "|   ")
+            if isinstance(item, tuple):
+                o = item[1]
+                rows.append((branch + f"Other ({o['count']})", o.get("share", 0.0), "", ""))
+            else:
+                walk(item, branch, cont, False)
+
+    walk(root, "", "", True)
+
+    width = min(max(len(r[0]) for r in rows), 70)
+    lines = [f"  {result.get('category', '?')}: {total:.6g} {unit}  "
+             f"({result.get('system', '?')}, {result.get('method', '?')})", ""]
+    for name, share, entry, flags in rows:
+        name = name if len(name) <= width else name[:width - 3] + "..."
+        line = f"  {name:<{width}}  {share:6.1f}%"
+        if with_quality and entry:
+            line += f"  {entry}"
+        if flags:
+            line += f"  {flags}"
+        lines.append(line.rstrip())
+
+    if not with_quality:
+        return "\n".join(lines)
+
+    # Summary: share of the result passing through at least one weak link
+    # per indicator, counting each branch once (a weak parent covers its
+    # children), and the same for links with no scores.
+    weak_share: Dict[str, float] = {}
+    order: List[str] = []
+    unscored = 0.0
+    any_scores = False
+
+    def summarise(n, weak_above: set, unscored_above: bool, is_root: bool):
+        nonlocal unscored, any_scores
+        weak_here = set(weak_above)
+        unscored_here = unscored_above
+        if not is_root:
+            sc = _scores(n.get("dq_entry"))
+            if sc is None:
+                if not unscored_above:
+                    unscored += n.get("share", 0.0)
+                unscored_here = True
+            else:
+                any_scores = True
+                names = n.get("dq_indicators") or []
+                for i, v in enumerate(sc):
+                    name = names[i] if i < len(names) else f"Indicator {i + 1}"
+                    if name not in order:
+                        order.append(name)
+                    if v is not None and v >= 4 and name not in weak_above:
+                        weak_share[name] = weak_share.get(name, 0.0) + n.get("share", 0.0)
+                        weak_here.add(name)
+        for k in n.get("children", []):
+            summarise(k, weak_here, unscored_here, False)
+
+    summarise(root, set(), False, True)
+    lines.append("")
+    if not any_scores:
+        lines.append("  No pedigree scores on any branch shown, so data "
+                     "quality can't be assessed from this tree.")
+        return "\n".join(lines)
+    else:
+        lines.append("  Weak data (score 4 or 5) on the path to the result, "
+                     "in the branches shown:")
+        w = max(len(n) for n in order)
+        for name in order:
+            lines.append(f"    {name:<{w}}  {weak_share.get(name, 0.0):5.1f}%")
+    if unscored:
+        lines.append(f"  No pedigree scores:  {unscored:5.1f}%")
+    return "\n".join(lines)

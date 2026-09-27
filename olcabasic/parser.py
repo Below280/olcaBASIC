@@ -363,8 +363,22 @@ class Parser:
         if kw == "PROCESS":
             return self.parse_process(line)
 
+        if kw == "MAKE":
+            return self.parse_make(line)
+
+        if kw == "SHOW":
+            return self.parse_show(line)
+
+        if kw == "LINK":
+            return self.parse_link(line)
+
         if kw == "EDIT":
+            if self.peek_at(1).upper() == "FLOW":
+                return self.parse_edit_flow(line)
             return self.parse_edit(line)
+
+        if kw == "UPDATE":
+            return self.parse_update_param(line)
 
         if kw == "SYSTEM":
             return self.parse_system(line)
@@ -410,6 +424,16 @@ class Parser:
 
         if kw == "EXPORT":
             return self.parse_export(line)
+
+        # ── Navigation and tree ──────────────────────
+        if kw == "TREE":
+            return self.parse_tree(line)
+
+        if kw == "NAVIGATE":
+            return self.parse_navigate(line)
+
+        if kw == "MOVE":
+            return self.parse_move(line)
 
         # ── Delete ───────────────────────────────────
         if kw == "DELETE":
@@ -513,7 +537,7 @@ class Parser:
         if tok.type == TokenType.KEYWORD:
             raise ParseError(
                 f"'{tok.value}' is a reserved word and can't be used "
-                f"as a variable name (try {tok.value.lower()}_value)", line)
+                f"as a variable name (try my_{tok.value.lower()})", line)
         if tok.type != TokenType.IDENTIFIER:
             raise ParseError(f"Expected variable name after LET", line)
         name = self.advance().value
@@ -820,14 +844,61 @@ class Parser:
             process_schema=process_schema, exchanges=exchanges,
             local_params=local_params, read_data=read_data)
 
+    def parse_pedigree(self):
+        """PEDIGREE (1,2,1,1,3) or PEDIGREE "(1;2;1;1;3)" """
+        if self.peek().type == TokenType.STRING:
+            return self.advance().value
+        if self.peek().type != TokenType.LPAREN:
+            raise ParseError("PEDIGREE needs scores in brackets, e.g. "
+                             "PEDIGREE (1,2,1,1,3)", self.current_line())
+        self.advance()
+        scores = []
+        while True:
+            tok = self.peek()
+            if tok.type != TokenType.NUMBER:
+                raise ParseError(f"Expected a pedigree score, got "
+                                 f"'{tok.value}'", self.current_line())
+            self.advance()
+            scores.append(int(float(tok.value)))
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+                continue
+            break
+        if self.peek().type != TokenType.RPAREN:
+            raise ParseError("Missing ')' after pedigree scores",
+                             self.current_line())
+        self.advance()
+        for n in scores:
+            if not 1 <= n <= 5:
+                raise ParseError(f"Pedigree scores run from 1 to 5, got {n}",
+                                 self.current_line())
+        return scores
+
     def parse_exchange(self) -> ExchangeDef:
-        """Parse an INPUT or OUTPUT line inside a PROCESS block."""
+        """Parse an INPUT or OUTPUT line inside a PROCESS block.
+        Supports: INPUT USE PROCESS "name", INPUT USE FLOW "name",
+        INPUT MAKE FLOW "name", and legacy INPUT NEW "name",
+        INPUT "name" (defaults to USE PROCESS)."""
         direction = self.advance().upper()  # INPUT or OUTPUT
 
-        # Check for NEW keyword
+        # Check for MAKE/USE/NEW keywords
         is_new = False
-        if self.match_keyword("NEW"):
+        legacy_new = False
+        use_type = ""  # PROCESS or FLOW
+
+        if self.match_keyword("MAKE"):
             is_new = True
+            self.match_keyword("FLOW")  # optional but expected
+        elif self.match_keyword("USE"):
+            if self.at_keyword("PROCESS"):
+                use_type = self.advance().upper()
+            elif self.at_keyword("FLOW"):
+                use_type = self.advance().upper()
+            else:
+                use_type = "PROCESS"  # USE alone defaults to USE PROCESS
+        elif self.match_keyword("NEW"):
+            is_new = True  # deprecated alias for MAKE FLOW
+            legacy_new = True
 
         flow_name = self.parse_string_or_expr()
         if self.peek().type == TokenType.COMMA:
@@ -847,6 +918,8 @@ class Parser:
         provider = None
         formula = None
         location = None
+        pedigree = None
+        comment = None
 
         # Parse trailing modifiers
         # Allow optional comma before modifiers (e.g. "m3, PRODUCT")
@@ -862,20 +935,18 @@ class Parser:
                 self.advance()
             elif kw == "TO":
                 self.advance()
-                if self.at_keyword("AIR"):
-                    compartment = "AIR"
-                    self.advance()
-                elif self.at_keyword("WATER"):
-                    compartment = "WATER"
-                    self.advance()
-                elif self.at_keyword("SOIL"):
-                    compartment = "SOIL"
-                    self.advance()
+                if not self.at_keyword("AIR", "WATER", "SOIL"):
+                    raise ParseError(
+                        f"Expected AIR, WATER or SOIL after TO, got "
+                        f"'{self.peek().value}'", self.current_line())
+                compartment = self.advance().upper()
             elif kw == "FROM":
                 self.advance()
-                if self.at_keyword("NATURE"):
-                    compartment = "NATURE"
-                    self.advance()
+                if not self.at_keyword("NATURE"):
+                    raise ParseError(
+                        f"Expected NATURE after FROM, got "
+                        f"'{self.peek().value}'", self.current_line())
+                compartment = self.advance().upper()
             elif kw == "PROVIDER":
                 self.advance()
                 provider = self.parse_string_or_expr()
@@ -885,6 +956,12 @@ class Parser:
             elif kw == "LOCATION":
                 self.advance()
                 location = self.parse_string_or_expr()
+            elif kw == "PEDIGREE":
+                self.advance()
+                pedigree = self.parse_pedigree()
+            elif kw == "COMMENT":
+                self.advance()
+                comment = self.parse_string_or_expr()
             else:
                 break
             if self.peek().type == TokenType.COMMA:
@@ -895,7 +972,8 @@ class Parser:
         return ExchangeDef(
             direction=direction, flow_name=flow_name, amount=amount,
             unit=unit, is_new=is_new, is_product=is_product,
-            is_waste=is_waste,
+            is_waste=is_waste, use_type=use_type, legacy_new=legacy_new,
+            pedigree=pedigree, comment=comment,
             direction_compartment=compartment, provider=provider,
             formula=formula, location=location)
 
@@ -1255,8 +1333,23 @@ class Parser:
     def parse_delete(self, line: int) -> DeleteStmt:
         self.advance()  # consume DELETE
         entity_type = ""
-        if self.at_keyword("PROCESS", "FLOW", "SYSTEM"):
+        if self.at_keyword("FLOW"):
+            # openLCA's IPC server can't say whether a flow is in use, and
+            # deleting one that is leaves processes broken
+            raise ParseError(
+                "DELETE FLOW is currently not available in olcaBASIC. "
+                "openLCA's IPC interface can't establish whether a flow is "
+                "used elsewhere in a model, and deleting one that is leaves "
+                "those processes broken. We have raised a request with "
+                "GreenDelta to add this: "
+                "https://github.com/GreenDelta/olca-modules/issues/76 "
+                "Until then, delete flows in openLCA, which checks first.",
+                line)
+        if self.at_keyword("PROCESS", "SYSTEM"):
             entity_type = self.advance().upper()
+        else:
+            raise ParseError("Say what to delete: DELETE PROCESS or "
+                             "DELETE SYSTEM", line)
         ref = self.parse_string_or_expr()
         self.expect_newline()
         return DeleteStmt(line=line, entity_type=entity_type, ref=ref)
@@ -1393,6 +1486,163 @@ class Parser:
         path = self.parse_string_or_expr()
         self.expect_newline()
         return DirStmt(line=line, path=path)
+
+    def parse_make(self, line: int) -> Statement:
+        """MAKE PROCESS/FLOW/BRIDGE — dispatches to existing parsers
+        with is_new flag set."""
+        self.advance()  # MAKE
+        if self.at_keyword("PROCESS"):
+            return self.parse_process(line)
+        elif self.at_keyword("FLOW"):
+            stmt = self.parse_flow(line)
+            stmt.is_new = True
+            return stmt
+        elif self.at_keyword("BRIDGE"):
+            return self.parse_bridge(line)
+        elif self.at_keyword("SYSTEM"):
+            return self.parse_system(line)
+        else:
+            raise ParseError(
+                "Expected PROCESS, FLOW, BRIDGE, or SYSTEM after MAKE",
+                line)
+
+    def parse_show(self, line: int) -> ShowStmt:
+        """SHOW PROCESS/FLOW/PARAMETER "name" [sub-command]"""
+        self.advance()  # SHOW
+        entity_type = ""
+        if self.at_keyword("PROCESS"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("FLOW"):
+            entity_type = self.advance().upper()
+        elif self.at_word("PARAMETER", "PARAMS", "GLOBAL"):
+            entity_type = "PARAMETER"
+            self.advance()
+        else:
+            raise ParseError(
+                "Expected PROCESS, FLOW, or PARAMETER after SHOW", line)
+
+        ref = self.parse_string_or_expr()
+        sub_command = ""
+        if self.at_word("INPUTS", "OUTPUTS", "LOCATION", "DESCRIPTION",
+                        "UNITS", "VALUE", "PARAMS"):
+            sub_command = self.advance().upper()
+
+        self.expect_newline()
+        return ShowStmt(line=line, entity_type=entity_type,
+                         ref=ref, sub_command=sub_command)
+
+    def parse_link(self, line: int) -> LinkStmt:
+        """LINK PROCESS "source" TO PROCESS "target" WITH amount, unit"""
+        self.advance()  # LINK
+        source_type = ""
+        if self.at_keyword("PROCESS"):
+            source_type = self.advance().upper()
+        elif self.at_keyword("FLOW"):
+            source_type = self.advance().upper()
+        source = self.parse_string_or_expr()
+
+        self.expect_keyword("TO")
+        target_type = ""
+        if self.at_keyword("PROCESS"):
+            target_type = self.advance().upper()
+        elif self.at_keyword("FLOW"):
+            target_type = self.advance().upper()
+        target = self.parse_string_or_expr()
+
+        amount = None
+        unit = ""
+        if self.match_keyword("WITH"):
+            amount = self.parse_expr()
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+            unit = self.parse_unit()
+
+        self.expect_newline()
+        return LinkStmt(line=line, source_type=source_type,
+                         source=source, target_type=target_type,
+                         target=target, amount=amount, unit=unit)
+
+    def parse_navigate(self, line: int) -> NavigateStmt:
+        """NAVIGATE [PROCESSES|FLOWS|METHODS|SYSTEMS]"""
+        self.advance()  # NAVIGATE
+        target = ""
+        if self.at_keyword("PROCESSES"):
+            target = self.advance().upper()
+        elif self.at_keyword("FLOWS"):
+            target = self.advance().upper()
+        elif self.at_keyword("METHODS"):
+            target = self.advance().upper()
+        elif self.at_keyword("SYSTEMS"):
+            target = self.advance().upper()
+        elif self.at_keyword("PROCESS"):
+            self.advance()
+            target = "PROCESSES"
+        elif self.at_keyword("FLOW"):
+            self.advance()
+            target = "FLOWS"
+        self.expect_newline()
+        return NavigateStmt(line=line, target=target)
+
+    def parse_tree(self, line: int) -> TreeStmt:
+        """TREE "system" USING "method" [CATEGORY "cat"] [LEVELS n] [TOP n]"""
+        self.advance()  # TREE
+        system = self.parse_string_or_expr()
+        self.expect_keyword("USING")
+        method = self.parse_string_or_expr()
+
+        category = None
+        levels = 3
+        top = 5
+        allocation = ""
+        with_quality = True
+
+        while self.at_word("CATEGORY", "LEVELS", "TOP", "ALLOCATE",
+                           "NOQUALITY"):
+            kw = self.advance().upper()
+            if kw == "CATEGORY":
+                category = self.parse_string_or_expr()
+            elif kw == "LEVELS":
+                levels = self.parse_int("LEVELS")
+            elif kw == "TOP":
+                top = self.parse_int("TOP")
+            elif kw == "ALLOCATE":
+                if self.peek().type not in (TokenType.KEYWORD,
+                                            TokenType.IDENTIFIER):
+                    raise ParseError("Expected an allocation method after "
+                                     "ALLOCATE", line)
+                allocation = self.advance().upper()
+            else:
+                with_quality = False
+
+        self.expect_newline()
+        return TreeStmt(line=line, system=system, method=method,
+                         category=category, levels=levels, top=top,
+                         allocation=allocation, with_quality=with_quality)
+
+    def parse_move(self, line: int) -> MoveStmt:
+        """MOVE PROCESS/FLOW/SYSTEM "ref" TO "folder" """
+        self.advance()  # MOVE
+        entity_type = ""
+        if self.at_keyword("PROCESS"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("FLOW"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("SYSTEM"):
+            entity_type = self.advance().upper()
+
+        ref = self.parse_string_or_expr()
+        self.expect_keyword("TO")
+
+        destination = None
+        if self.match_keyword("FOLDER"):
+            # MOVE ... TO FOLDER (use current SET folder)
+            destination = None
+        else:
+            destination = self.parse_string_or_expr()
+
+        self.expect_newline()
+        return MoveStmt(line=line, entity_type=entity_type,
+                         ref=ref, destination=destination)
 
     def parse_database_cmd(self, line: int) -> Statement:
         self.advance()  # DATABASE
@@ -1650,7 +1900,111 @@ class Parser:
         self.expect_newline()
         return SubCall(line=line, name=name, args=args)
 
+    def parse_update_param(self, line: int) -> UpdateParamStmt:
+        """UPDATE PARAMETER name = expr"""
+        self.advance()  # UPDATE
+        if not self.match_word("PARAMETER"):
+            raise ParseError("Expected UPDATE PARAMETER name = value "
+                             "(exchanges are updated inside EDIT PROCESS)",
+                             line)
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER:
+            raise ParseError("Expected a parameter name after UPDATE "
+                             "PARAMETER", line)
+        name = self.advance().value
+        if self.peek().type != TokenType.EQUALS:
+            raise ParseError(f"Expected '=' after {name}", line)
+        self.advance()
+        expr = self.parse_expr()
+        self.expect_newline()
+        return UpdateParamStmt(line=line, name=name, expr=expr)
+
+    def parse_edit_flow(self, line: int) -> EditFlowStmt:
+        """EDIT FLOW "name" ... END EDIT
+
+        ADD PROPERTY "Mass" AS 2400 kg PER m3
+        UPDATE PROPERTY "Mass" AS 2350 kg PER m3
+        SET REFERENCE "Mass"
+        """
+        self.advance()  # EDIT
+        self.expect_keyword("FLOW")
+        target = self.parse_string_or_expr()
+        self.expect_newline()
+        self.skip_newlines()
+        stmt = EditFlowStmt(line=line, target=target)
+
+        def relation(ln):
+            if not self.match_keyword("AS"):
+                raise ParseError("Expected AS, e.g. ADD PROPERTY \"Mass\" "
+                                 "AS 2400 kg PER m3", ln)
+            amount = self.parse_expr()
+            unit = self.parse_unit()
+            if not self.match_word("PER"):
+                raise ParseError("Expected PER, e.g. AS 2400 kg PER m3", ln)
+            # Optional amount after PER: AS 1 m3 PER 2400 kg
+            if self.peek().type == TokenType.NUMBER:
+                per_amount = NumberLiteral(float(self.advance().value))
+                if per_amount.value <= 0:
+                    raise ParseError("The amount after PER must be positive", ln)
+                amount = BinOp(amount, "/", per_amount)
+            per_unit = self.parse_unit()
+            return amount, unit, per_unit
+
+        while not self.at_keyword("END"):
+            tok = self.peek()
+            if tok.type == TokenType.EOF:
+                raise ParseError("EDIT FLOW block missing END EDIT", line)
+            if tok.type in (TokenType.COMMENT, TokenType.NEWLINE):
+                self.advance()
+                self.skip_newlines()
+                continue
+            ln = tok.line
+            if self.at_keyword("ADD", "UPDATE"):
+                op = self.advance().upper().lower()
+                if not self.match_keyword("PROPERTY"):
+                    raise ParseError(f"Expected PROPERTY after "
+                                     f"{op.upper()}", ln)
+                prop = self.parse_string_or_expr()
+                amount, unit, per_unit = relation(ln)
+                stmt.operations.append({"op": op, "property": prop,
+                                        "amount": amount, "unit": unit,
+                                        "per_unit": per_unit, "line": ln})
+            elif self.at_keyword("REMOVE"):
+                raise ParseError(
+                    "Removing a flow property isn't available in olcaBASIC: "
+                    "exchanges that use it would break, and openLCA's IPC "
+                    "interface can't tell where a flow is used. Remove it "
+                    "in openLCA's flow editor, which checks first.", ln)
+            elif self.at_keyword("SET"):
+                self.advance()
+                if not self.match_word("REFERENCE"):
+                    raise ParseError("Expected SET REFERENCE \"property\"", ln)
+                prop = self.parse_string_or_expr()
+                stmt.operations.append({"op": "reference", "property": prop,
+                                        "line": ln})
+            else:
+                raise ParseError(
+                    f"'{tok.value}' is not allowed inside EDIT FLOW "
+                    f"(expected ADD PROPERTY, UPDATE PROPERTY, SET REFERENCE "
+                    f"or END EDIT)", ln)
+            self.expect_newline()
+            self.skip_newlines()
+
+        self.expect_keyword("END")
+        self.match_keyword("EDIT")
+        self.expect_newline()
+        return stmt
+
     def parse_edit(self, line: int) -> EditProcessStmt:
+        """EDIT PROCESS "name" ... END EDIT
+
+        ADD INPUT|OUTPUT <exchange>        same syntax as in PROCESS
+        ADD PARAM name = value
+        REMOVE INPUT|OUTPUT "name"         flow or provider name
+        UPDATE INPUT|OUTPUT "name", amount [, unit] [LOCATION|PROVIDER x]
+        UPDATE PARAM name = value
+        SET DESCRIPTION|FOLDER|LOCATION "value"
+        """
         self.advance()  # EDIT
         self.expect_keyword("PROCESS")
         target = self.parse_string_or_expr()
@@ -1659,75 +2013,107 @@ class Parser:
 
         stmt = EditProcessStmt(line=line, target=target)
 
+        def direction():
+            if self.at_keyword("INPUT", "OUTPUT"):
+                return self.advance().upper()
+            if self.match_word("EXCHANGE"):
+                return ""          # legacy: either direction
+            raise ParseError("Expected INPUT or OUTPUT",
+                             self.current_line())
+
         while not self.at_keyword("END"):
-            if self.peek().type == TokenType.EOF:
+            tok = self.peek()
+            if tok.type == TokenType.EOF:
                 raise ParseError("EDIT block missing END EDIT", line)
-            kw = self.peek().upper() if self.peek().type == TokenType.KEYWORD else ""
+            if tok.type in (TokenType.COMMENT, TokenType.NEWLINE):
+                self.advance()
+                self.skip_newlines()
+                continue
+            kw = tok.upper() if tok.type == TokenType.KEYWORD else ""
+            ln = tok.line
 
             if kw == "ADD":
                 self.advance()
                 if self.at_keyword("INPUT", "OUTPUT"):
-                    ex = self.parse_exchange()
-                    stmt.add_exchanges.append(ex)
+                    stmt.add_exchanges.append(self.parse_exchange())
                 elif self.at_word("PARAM"):
-                    let_stmt = self.parse_let(self.peek().line)
-                    stmt.add_params.append(let_stmt)
+                    stmt.add_params.append(self.parse_let(ln))
                 else:
                     raise ParseError("Expected INPUT, OUTPUT or PARAM "
-                                     "after ADD", self.current_line())
-            elif kw == "UPDATE":
-                self.advance()
-                if self.match_word("EXCHANGE"):
-                    flow_ref = self.parse_string_or_expr()
-                    upd = {"flow_ref": flow_ref}
-                    if self.match_word("AMOUNT"):
-                        upd["amount"] = self.parse_expr()
-                    if self.match_keyword("FORMULA"):
-                        upd["formula"] = self.parse_string_or_expr()
-                    if self.match_keyword("PROVIDER"):
-                        upd["provider"] = self.parse_string_or_expr()
-                    stmt.update_exchanges.append(upd)
-                    self.expect_newline()
-                elif self.match_word("PARAM"):
-                    name = self.advance().value
-                    if self.peek().type != TokenType.EQUALS:
-                        raise ParseError(f"Expected '=' after {name}",
-                                         self.current_line())
-                    self.advance()
-                    val = self.parse_expr()
-                    stmt.update_params[name] = val
-                    self.expect_newline()
+                                     "after ADD", ln)
+
             elif kw == "REMOVE":
                 self.advance()
-                self.match_word("EXCHANGE")
+                d = direction()
                 ref = self.parse_string_or_expr()
-                if not isinstance(ref, StringLiteral):
-                    raise ParseError("REMOVE EXCHANGE needs a quoted "
-                                     "flow name", self.current_line())
-                stmt.remove_exchanges.append(ref.value)
+                stmt.remove_exchanges.append(
+                    {"direction": d, "name": ref, "line": ln})
                 self.expect_newline()
+
+            elif kw == "UPDATE":
+                self.advance()
+                if self.match_word("PARAM"):
+                    name = self.advance().value
+                    if self.peek().type != TokenType.EQUALS:
+                        raise ParseError(f"Expected '=' after {name}", ln)
+                    self.advance()
+                    stmt.update_params[name] = self.parse_expr()
+                    self.expect_newline()
+                else:
+                    d = direction()
+                    upd = {"direction": d, "name": self.parse_string_or_expr(),
+                           "line": ln}
+                    if self.peek().type == TokenType.COMMA:
+                        self.advance()
+                        upd["amount"] = self.parse_expr()
+                        if self.peek().type == TokenType.COMMA:
+                            self.advance()
+                        if self.peek().type == TokenType.IDENTIFIER:
+                            upd["unit"] = self.parse_unit()
+                    while True:
+                        if self.match_word("AMOUNT"):       # legacy form
+                            upd["amount"] = self.parse_expr()
+                        elif self.match_keyword("FORMULA"):
+                            upd["formula"] = self.parse_string_or_expr()
+                        elif self.match_keyword("PROVIDER"):
+                            upd["provider"] = self.parse_string_or_expr()
+                        elif self.match_keyword("LOCATION"):
+                            upd["location"] = self.parse_string_or_expr()
+                        elif self.match_keyword("PEDIGREE"):
+                            upd["pedigree"] = self.parse_pedigree()
+                        elif self.match_keyword("COMMENT"):
+                            upd["comment"] = self.parse_string_or_expr()
+                        else:
+                            break
+                    if len(upd) == 3:
+                        raise ParseError(
+                            "UPDATE needs an amount, PROVIDER, LOCATION, "
+                            "PEDIGREE or COMMENT", ln)
+                    stmt.update_exchanges.append(upd)
+                    self.expect_newline()
+
             elif kw == "SET":
                 self.advance()
                 if self.match_keyword("DESCRIPTION"):
                     stmt.set_description = self.parse_string_or_expr()
-                elif self.match_word("CATEGORY"):
+                elif self.match_word("CATEGORY", "FOLDER"):
                     stmt.set_category = self.parse_string_or_expr()
                 elif self.match_keyword("LOCATION"):
                     stmt.set_location = self.parse_string_or_expr()
+                else:
+                    raise ParseError("Expected DESCRIPTION, FOLDER or "
+                                     "LOCATION after SET", ln)
                 self.expect_newline()
-            elif self.peek().type in (TokenType.COMMENT, TokenType.NEWLINE):
-                self.advance()
+
             else:
                 raise ParseError(
-                    f"'{self.peek().value}' is not allowed inside EDIT "
-                    f"(expected ADD, UPDATE, REMOVE, SET or END EDIT)",
-                    self.current_line())
+                    f"'{tok.value}' is not allowed inside EDIT "
+                    f"(expected ADD, REMOVE, UPDATE, SET or END EDIT)", ln)
             self.skip_newlines()
 
         self.expect_keyword("END")
         self.match_keyword("EDIT")
         self.expect_newline()
-
         return stmt
 
 

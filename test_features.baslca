@@ -1,5 +1,5 @@
 REM ══════════════════════════════════════════
-REM  olcaBASIC v0.2.1 feature test (FLCAC / USLCI)
+REM  olcaBASIC v0.3.0 feature test (FLCAC / USLCI)
 REM ══════════════════════════════════════════
 
 CONFIRM DELETE ON
@@ -11,6 +11,11 @@ DELETE SYSTEM "Test wall; at site"
 DELETE SYSTEM "Test concrete; at plant"
 DELETE PROCESS "Test wall; at site"
 DELETE PROCESS "Test concrete; at plant"
+DELETE SYSTEM "Test pedigree check"
+DELETE PROCESS "Test pedigree check"
+DELETE PROCESS "Test orphan check"
+REM Flows are left in place (olcaBASIC doesn't delete flows); MAKE FLOW
+REM reuses a flow with the same name, so repeat runs don't duplicate them
 
 PRINT "=== NAVIGATION ==="
 PWD
@@ -23,6 +28,14 @@ PWD
 BACK
 PWD
 
+PRINT "=== NAVIGATE (separate trees) ==="
+NAVIGATE FLOWS
+CAT
+DIR "Elementary flows"
+CAT
+NAVIGATE PROCESSES
+PWD
+
 PRINT "=== WILDCARDS ==="
 CAT *concrete*
 CAT PROCESSES *cement*
@@ -33,6 +46,7 @@ FIND PROCESS "Portland cement"
 FIND PROCESS "ready-mix"
 FIND FLOW "Carbon dioxide"
 PRINT METHODS
+PRINT DQ SYSTEMS
 
 PRINT "=== CONTROL FLOW ==="
 FOR i = 1 TO 3
@@ -57,10 +71,10 @@ PWD
 
 REM cement_mass becomes a global parameter; sand_mass a global
 REM formula parameter (cement_mass * aggregate_ratio)
-PROCESS "Test concrete; at plant"
-  OUTPUT NEW "Test concrete", 1, m3, PRODUCT
-  INPUT "Portland cement; at plant", cement_mass, kg
-  INPUT "Construction sand and gravel; at mine", sand_mass, kg
+MAKE PROCESS "Test concrete; at plant"
+  OUTPUT MAKE FLOW "Test concrete", 1, m3, PRODUCT
+  INPUT USE PROCESS "Portland cement; at plant", cement_mass, kg
+  INPUT USE PROCESS "Construction sand and gravel; at mine", sand_mass, kg
   REM Elementary flow: checks the compartment lookup and that it's
   REM characterised (adds 0.3 kg CO2 per m3, i.e. +0.06 in the wall)
   OUTPUT "Carbon dioxide", cement_mass * 0.001, kg TO AIR
@@ -68,21 +82,47 @@ END PROCESS
 
 REM A second process that also uses cement_mass, so a scenario
 REM has to change it in both places
-PROCESS "Test wall; at site"
-  OUTPUT NEW "Test wall", 1, m2, PRODUCT
-  INPUT "Test concrete; at plant", 0.2, m3
-  INPUT "Portland cement; at plant", cement_mass * 0.05, kg
+MAKE PROCESS "Test wall; at site"
+  OUTPUT MAKE FLOW "Test wall", 1, m2, PRODUCT
+  INPUT USE PROCESS "Test concrete; at plant", 0.2, m3
+  INPUT USE PROCESS "Portland cement; at plant", cement_mass * 0.05, kg
 END PROCESS
+
+REM LINK adds sand bedding to the wall after it's built. The amount
+REM uses cement_mass, so it must follow the scenarios too.
+LINK PROCESS "Construction sand and gravel; at mine" TO PROCESS "Test wall; at site" WITH cement_mass * 0.1, kg
+
+PRINT "=== EDIT ==="
+REM Render goes from 0.05 to 0.06 x cement_mass: still proportional,
+REM so the scenario ratios must stay exact
+EDIT PROCESS "Test wall; at site"
+  UPDATE INPUT "Portland cement; at plant", cement_mass * 0.06, kg
+  ADD OUTPUT "Carbon dioxide", 0.5, kg TO AIR
+  SET DESCRIPTION "Test wall, edited by olcaBASIC"
+END EDIT
+REM ...and take the extra CO2 out again, so the ratio check holds
+EDIT PROCESS "Test wall; at site"
+  REMOVE OUTPUT "Carbon dioxide"
+END EDIT
+
+PRINT "=== SHOW ==="
+SHOW PROCESS "Test concrete; at plant" INPUTS
+SHOW PROCESS "Test wall; at site"
+SHOW PARAMETER "sand_mass"
 
 PRINT "=== SYSTEM AND CALCULATE ==="
 SYSTEM "Test wall; at site"
 CALCULATE "Test wall; at site" USING "IPCC"
 SAVE RESULTS "test_baseline.csv"
 
+PRINT "=== TREE ==="
+REM Three levels deep, with the background's own pedigree scores
+TREE "Test wall; at site" USING "IPCC" CATEGORY "AR6-100" LEVELS 3 TOP 3
+
 PRINT "=== SCENARIOS ==="
 REM Everything in the wall scales with cement_mass (cement, derived
-REM sand, render, CO2), so Low must be exactly 2/3 of Baseline and
-REM High exactly 4/3. Any other ratio means something didn't follow.
+REM sand, render, CO2 and the LINKed sand), so Low must be exactly
+REM 2/3 of Baseline and High exactly 4/3.
 SCENARIO "Baseline"
 END SCENARIO
 
@@ -102,9 +142,50 @@ SENSITIVITY ON "Test wall; at site" USING "IPCC" BY 10%
   VARY cement_mass, aggregate_ratio
 END SENSITIVITY
 
+PRINT "=== EDIT FLOW ==="
+REM Give the concrete a density and make mass its reference. Every
+REM exchange keeps its meaning, so the result must not change:
+REM AR4-100 should still be 103.947332
+SHOW FLOW "Test concrete" UNITS
+EDIT FLOW "Test concrete"
+  ADD PROPERTY "Mass" AS 2400 kg PER m3
+  SET REFERENCE "Mass"
+END EDIT
+SHOW FLOW "Test concrete" UNITS
+CALCULATE "Test wall; at site" USING "IPCC"
+
+PRINT "=== UPDATE PARAMETER ==="
+REM Writing cement_mass = 200 straight to the database must give
+REM exactly the Low cement scenario result (AR4-100 69.298222)
+UPDATE PARAMETER cement_mass = 200
+CALCULATE "Test wall; at site" USING "IPCC"
+UPDATE PARAMETER cement_mass = 300
+
+PRINT "=== MOVE ==="
+MOVE PROCESS "Test wall; at site" TO "00: Test/Moved"
+REM Browse to the moved process (browsing doesn't change the build folder)
+DIR "00: Test/Moved"
+CAT
+
 PRINT "=== CLEANUP ==="
 DELETE SYSTEM "Test wall; at site"
 DELETE PROCESS "Test wall; at site"
 DELETE PROCESS "Test concrete; at plant"
+
+PRINT "=== PEDIGREE ON OUR OWN LINES ==="
+REM Uses the first data quality system whose name contains "Flow
+REM Pedigree" (PRINT DQ SYSTEMS above lists yours). If yours is named
+REM differently, change the FLOW SCHEMA line.
+SET PROCESS FOLDER "00: Test"
+MAKE PROCESS "Test pedigree check"
+  FLOW SCHEMA "Flow Pedigree"
+  OUTPUT MAKE FLOW "Test pedigree product", 1, kg, PRODUCT
+  INPUT USE PROCESS "Portland cement; at plant", 10, kg PEDIGREE (1,2,4,1,3) COMMENT "olcaBASIC test comment"
+END PROCESS
+SHOW PROCESS "Test pedigree check" INPUTS
+SYSTEM "Test pedigree check"
+TREE "Test pedigree check" USING "IPCC" CATEGORY "AR6-100" LEVELS 2 TOP 3
+DELETE SYSTEM "Test pedigree check"
+DELETE PROCESS "Test pedigree check"
 
 PRINT "=== DONE ==="

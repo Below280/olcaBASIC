@@ -248,16 +248,17 @@ class LCABridge:
         if len(exact) > 1:
             locs = sorted({getattr(p, "location", "") or "?" for p in exact})
             return {"error": (
-                f"PROVIDER '{ref}' matches {len(exact)} processes "
-                f"(locations: {', '.join(locs)}). Use LOCATION \"code\" "
-                f"on the INPUT line, or give the provider's UUID.")}
+                f"'{ref}' matches {len(exact)} processes "
+                f"(locations: {', '.join(locs)}). Give the UUID of the "
+                f"one you mean (FIND PROCESS shows them)."),
+                "ambiguous": len(exact)}
         partial = [p for p in procs if ref.lower() in p.name.lower()]
         if len(partial) == 1:
             return {"process_id": partial[0].id}
         if partial:
-            return {"error": f"PROVIDER '{ref}' matches {len(partial)} "
+            return {"error": f"'{ref}' matches {len(partial)} "
                              f"processes by partial name; be more specific"}
-        return {"error": f"PROVIDER process not found: '{ref}'"}
+        return {"error": f"Process not found: '{ref}'"}
 
     def find_process_qref_flow(self, process_name: str,
                                 location: str = "") -> Optional[Dict]:
@@ -336,6 +337,59 @@ class LCABridge:
         return self.lca.create_process(
             name, category, exchanges, parameters,
             description, location, flow_schema, process_schema)
+
+    def upstream_tree(self, system_ref: str, method_ref: str,
+                      category: str, levels: int = 3, top: int = 5,
+                      allocation: str = "", with_quality: bool = True) -> Dict:
+        self._require_connection()
+        return self.lca.upstream_tree(
+            system_ref, method_ref, category, levels, top,
+            allocation=allocation or None, with_quality=with_quality)
+
+    def find_flow_usage(self, flow_id: str, max_hits: int = 10,
+                        progress=None, prefer_categories=None) -> Dict:
+        self._require_connection()
+        return self.lca.find_flow_usage(
+            flow_id, max_hits, progress=progress,
+            prefer_categories=prefer_categories)
+
+    def edit_flow(self, flow_id: str, operations: list) -> Dict:
+        self._require_connection()
+        return self.lca.edit_flow(flow_id, operations)
+
+    def get_flow_details(self, flow_id: str) -> Dict:
+        """A flow with its properties, factors and reference units."""
+        self._require_connection()
+        import olca_schema as o
+        flow = self.lca.client.get(o.Flow, flow_id)
+        if flow is None:
+            return {"error": f"Flow not found: {flow_id}"}
+        props = []
+        for f in flow.flow_properties or []:
+            unit = ""
+            if f.flow_property:
+                fp = self.lca.client.get(o.FlowProperty, f.flow_property.id)
+                if fp and fp.unit_group:
+                    ug = self.lca.client.get(o.UnitGroup, fp.unit_group.id)
+                    for u in (ug.units if ug else []) or []:
+                        if u.is_ref_unit or (u.conversion_factor == 1.0 and not unit):
+                            unit = u.name
+            props.append({"name": f.flow_property.name if f.flow_property else "?",
+                          "factor": f.conversion_factor,
+                          "reference": bool(f.is_ref_flow_property),
+                          "unit": unit})
+        ftype = str(getattr(flow, "flow_type", "") or "")
+        return {"name": flow.name, "category": getattr(flow, "category", "") or "",
+                "type": ftype.split(".")[-1].replace("_FLOW", "").lower(),
+                "description": getattr(flow, "description", "") or "",
+                "properties": props}
+
+    def get_process_object(self, process_id: str):
+        """The full openLCA process (exchanges with flow and provider
+        references), for EDIT to match exchanges by name."""
+        self._require_connection()
+        import olca_schema as o
+        return self.lca.client.get(o.Process, process_id)
 
     def edit_process(self, process_id: str, **kwargs) -> Dict:
         self._require_connection()
@@ -447,18 +501,19 @@ class LCABridge:
                 f"Delete by UUID instead.")}
         return {"not_found": True}
 
-    def folder_exists(self, path: str) -> bool:
-        """True if any process, flow or system sits in this folder
-        or below it (whole path segments)."""
-        info = self.list_category_contents(path, "")
+    def folder_exists(self, path: str, entity_type: str = "") -> bool:
+        """True if any entity of this type (any type if empty) sits in
+        this folder or below it (whole path segments)."""
+        info = self.list_category_contents(path, entity_type)
         return (info.get("subfolder_count", 0) > 0
                 or info.get("entity_count", 0) > 0)
 
     # ── Delete ───────────────────────────────────────────
 
-    def delete_entity(self, entity_type: str,
-                       entity_id: str) -> Dict:
+    def delete_entity(self, entity_type: str, entity_id: str) -> Dict:
         self._require_connection()
+        if entity_type == "flow":
+            raise RuntimeError("olcaBASIC doesn't delete flows")
         return self.lca.delete_entity(entity_type, entity_id)
 
     # ── Resolve helpers ──────────────────────────────────

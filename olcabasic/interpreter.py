@@ -19,7 +19,8 @@ from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
     format_process_details, format_database_info, format_params,
-    format_generic, format_flows, results_to_csv,
+    format_generic, format_flows, format_table, format_tree, results_to_csv,
+    format_dq_systems, exchange_amount, param_values_of, format_flow_details,
 )
 
 
@@ -295,6 +296,27 @@ class Interpreter:
         elif isinstance(stmt, EditProcessStmt):
             self._exec_edit_process(stmt)
 
+        elif isinstance(stmt, EditFlowStmt):
+            self._exec_edit_flow(stmt)
+
+        elif isinstance(stmt, UpdateParamStmt):
+            self._exec_update_param(stmt)
+
+        elif isinstance(stmt, ShowStmt):
+            self._exec_show(stmt)
+
+        elif isinstance(stmt, LinkStmt):
+            self._exec_link(stmt)
+
+        elif isinstance(stmt, NavigateStmt):
+            self._exec_navigate(stmt)
+
+        elif isinstance(stmt, TreeStmt):
+            self._exec_tree(stmt)
+
+        elif isinstance(stmt, MoveStmt):
+            self._exec_move(stmt)
+
         elif isinstance(stmt, ConfirmDeleteStmt):
             self.runtime.confirm_delete = stmt.enabled
 
@@ -321,10 +343,13 @@ class Interpreter:
             self._exec_dir_nav(stmt)  # undocumented alias
 
         elif isinstance(stmt, PwdStmt):
+            mode = self.runtime.navigation_mode
+            here = self.runtime.nav_folders.get(mode, "") or "(root)"
             pf = self.runtime.process_folder or "(root)"
             ff = self.runtime.flow_folder or "(root)"
-            print(f"  Process folder: {pf}")
-            print(f"  Flow folder:    {ff}")
+            print(f"  Browsing:         [{mode.title()}] {here}")
+            print(f"  Build processes:  {pf}")
+            print(f"  Build flows:      {ff}")
 
         elif isinstance(stmt, UpStmt):
             self._exec_up()
@@ -568,7 +593,10 @@ class Interpreter:
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             ref = args[0] if args else ""
-            result = self.bridge.get_process_details(ref)
+            proc = self.bridge.resolve_process_strict(ref)
+            if "error" in proc:
+                raise BasicError(proc["error"], stmt.line)
+            result = self.bridge.get_process_details(proc["process_id"])
             print(format_process_details(result))
 
         elif sub == "QUALITY":
@@ -596,7 +624,9 @@ class Interpreter:
         elif sub == "DQ_SYSTEMS":
             self._require_bridge(stmt.line)
             result = self.bridge.list_dq_systems()
-            print(format_generic(result))
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            print(format_dq_systems(result))
 
         elif sub == "FAMILY":
             self._require_bridge(stmt.line)
@@ -676,12 +706,10 @@ class Interpreter:
 
         if stmt.provider:
             prov_str = self._eval_str(stmt.provider)
-            # Try to resolve as process name
-            provider_id = self.bridge.resolve_process(prov_str)
-            if not provider_id:
-                raise BasicError(
-                    f"Provider process not found: {prov_str}",
-                    stmt.line)
+            prov = self.bridge.resolve_process_strict(prov_str)
+            if "error" in prov:
+                raise BasicError(prov["error"], stmt.line)
+            provider_id = prov["process_id"]
 
         provider_flow_id = None
         if stmt.provider_flow:
@@ -773,7 +801,7 @@ class Interpreter:
                 if re.search(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])",
                              formula)]
 
-    def _sync_global(self, name: str, line: int, _chain=()):
+    def _sync_global(self, name: str, line: int, _chain=(), force=False):
         """Create or update the openLCA global parameter for a
         top-level variable. Derived variables become formula
         parameters, with their inputs synced first."""
@@ -797,7 +825,7 @@ class Interpreter:
             desired = ("value", float(val))
 
         previous = self.runtime.synced_globals.get(name)
-        if previous == desired:
+        if previous == desired and not force:
             return
 
         if desired[0] == "formula":
@@ -843,6 +871,11 @@ class Interpreter:
                          ex_list: list) -> list:
         exchanges = []
         for ex in ex_list:
+            if ex.legacy_new and "NEW" not in self.runtime.deprecation_shown:
+                self.runtime.deprecation_shown.add("NEW")
+                print("  NOTE: INPUT NEW and OUTPUT NEW are deprecated. Use "
+                      "INPUT MAKE FLOW and OUTPUT MAKE FLOW instead; the old "
+                      "form will be removed in a future version.")
             flow_name = self._eval_str(ex.flow_name)
             unit = ex.unit
 
@@ -898,13 +931,28 @@ class Interpreter:
                         stmt.line)
 
             else:
-                # Product/waste flow: find existing process or flow
+                # Product/waste flow: find existing process or flow.
+                # USE FLOW skips the process lookup; USE PROCESS
+                # insists on one (it's how you get a provider).
                 location_filter = (self._eval_str(ex.location)
                                    if ex.location else "")
-                proc_match = self.bridge.find_process_qref_flow(
-                    flow_name, location_filter)
+                if ex.use_type == "FLOW":
+                    if location_filter:
+                        raise BasicError(
+                            "LOCATION picks between processes, so it "
+                            "can't be used with USE FLOW", stmt.line)
+                    proc_match = None
+                else:
+                    proc_match = self.bridge.find_process_qref_flow(
+                        flow_name, location_filter)
                 if proc_match and "error" in proc_match:
                     raise BasicError(proc_match["error"], stmt.line)
+                if not proc_match and ex.use_type == "PROCESS":
+                    raise BasicError(
+                        f"No process found matching '{flow_name}'. "
+                        f"FIND PROCESS shows the names in your database, "
+                        f"or use USE FLOW to link a flow without a "
+                        f"provider.", stmt.line)
                 if proc_match:
                     flow_id = proc_match["flow_id"]
                     provider_id = proc_match["process_id"]
@@ -938,8 +986,8 @@ class Interpreter:
                             raise BasicError(
                                 f"No process or flow found matching "
                                 f"'{flow_name}'. Check the spelling, "
-                                f"or use INPUT NEW to create a new "
-                                f"flow.",
+                                f"or use INPUT MAKE FLOW to create a "
+                                f"new flow.",
                                 stmt.line)
                         else:
                             print(f"  NOTE: Creating new flow "
@@ -967,6 +1015,14 @@ class Interpreter:
             if provider_id:
                 ex_dict["provider_id"] = provider_id
 
+            # Pedigree scores (checked against the FLOW SCHEMA by the
+            # MCP) and a per-line comment, both optional
+            if ex.pedigree is not None:
+                ex_dict["dq_entry"] = (ex.pedigree if isinstance(ex.pedigree, str)
+                                       else "(" + ";".join(str(n) for n in ex.pedigree) + ")")
+            if ex.comment is not None:
+                ex_dict["comment"] = self._eval_str(ex.comment)
+
             # Handle amount: explicit formula, variable reference, or bare number
             if ex.formula:
                 ex_dict["formula"] = self._eval_str(ex.formula)
@@ -983,7 +1039,10 @@ class Interpreter:
                 prov_str = self._eval_str(ex.provider)
                 prov = self.bridge.resolve_process_strict(prov_str)
                 if "error" in prov:
-                    raise BasicError(prov["error"], stmt.line)
+                    hint = (" Or use LOCATION \"code\" on this line instead "
+                            "of PROVIDER." if prov.get("ambiguous") else "")
+                    raise BasicError(f"PROVIDER: {prov['error']}{hint}",
+                                     stmt.line)
                 ex_dict["provider_id"] = prov["process_id"]
 
             exchanges.append(ex_dict)
@@ -997,7 +1056,12 @@ class Interpreter:
             description, location, flow_schema, process_schema)
 
         if "error" in result:
-            raise BasicError(result["error"], stmt.line)
+            # Put MCP wording into olcaBASIC terms
+            msg = result["error"].replace(
+                "Set flow_schema.",
+                'Add a FLOW SCHEMA "name" line to the PROCESS block '
+                '(PRINT DQ SYSTEMS lists the names).')
+            raise BasicError(msg, stmt.line)
 
         if result.get("already_existed", False):
             where = folder or "(root)"
@@ -1214,8 +1278,8 @@ class Interpreter:
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.ref)
         if not stmt.entity_type:
-            raise BasicError("Say what to delete: DELETE PROCESS, "
-                             "DELETE FLOW or DELETE SYSTEM", stmt.line)
+            raise BasicError("Say what to delete: DELETE PROCESS or "
+                             "DELETE SYSTEM", stmt.line)
         etype = stmt.entity_type.lower()
         if etype == "system":
             etype = "product_system"
@@ -1340,36 +1404,454 @@ class Interpreter:
         except FileNotFoundError:
             raise BasicError(f"File not found: {filename}", stmt.line)
 
-    def _exec_edit_process(self, stmt: EditProcessStmt):
+    def _exec_update_param(self, stmt: UpdateParamStmt):
+        """UPDATE PARAMETER: set the variable, and write the openLCA
+        global parameter straight away (LET only writes it when a
+        PROCESS, LINK or EDIT uses it)."""
+        self._require_bridge(stmt.line)
+        if self.runtime.current_scope is not self.runtime.global_scope:
+            raise BasicError("UPDATE PARAMETER only works at the top level "
+                             "of a program, not inside a SUB or FUNCTION",
+                             stmt.line)
+        before = (self.runtime.get_var(stmt.name)
+                  if self.runtime.has_var(stmt.name) else None)
+        self._exec_let(LetStmt(line=stmt.line, name=stmt.name, expr=stmt.expr))
+        self._sync_global(stmt.name, stmt.line, force=True)
+        expr = self.runtime.var_exprs.get(stmt.name)
+        now = self.runtime.get_var(stmt.name)
+        shown = (f"{self._expr_to_formula(expr)} (currently {_fmt_num(now)})"
+                 if expr is not None else _fmt_num(now))
+        was = f" (was {_fmt_num(before)})" if before is not None else ""
+        print(f"  Global parameter {stmt.name} = {shown}{was}")
+
+    def _exec_edit_flow(self, stmt: EditFlowStmt):
+        """EDIT FLOW: add or update flow properties, set the reference."""
         self._require_bridge(stmt.line)
         target = self._eval_str(stmt.target)
-        proc_id = self.bridge.resolve_process(target)
-        if not proc_id:
-            raise BasicError(f"Process not found: {target}", stmt.line)
-        # TODO: full edit implementation
-        raise BasicError(
-            "EDIT PROCESS is not implemented yet. Nothing was changed.",
-            stmt.line)
+        found = self.bridge.find_flow(target, "", "")
+        if not found:
+            raise BasicError(f"Flow not found: '{target}'", stmt.line)
+        if found.get("ambiguous"):
+            raise BasicError(f"'{target}' matches {found['ambiguous']} flows. "
+                             f"Give the exact name of the one you mean.",
+                             stmt.line)
+        ops = []
+        for op in stmt.operations:
+            entry = {"op": op["op"], "property": self._eval_str(op["property"])}
+            if op["op"] in ("add", "update"):
+                amount = self._eval(op["amount"])
+                if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                    raise BasicError("The amount in a property relation must "
+                                     "be a number", op.get("line", stmt.line))
+                entry.update(amount=float(amount), unit=op["unit"],
+                             per_unit=op["per_unit"])
+            ops.append(entry)
+
+        result = self.bridge.edit_flow(found["flow_id"], ops)
+        if "error" in result:
+            raise BasicError(result["error"], stmt.line)
+        print(f"  Edited flow: {result.get('flow_name', target)}")
+        for c in result.get("changes", []):
+            print(f"    {c}")
+        # A flow outside your own folders is shared with other models
+        cat = (result.get("category") or found.get("category") or "").lower()
+        mine = [f.lower().rstrip("/") for f in (self.runtime.flow_folder,
+                                                self.runtime.process_folder) if f]
+        if not any(cat == m or cat.startswith(m + "/") for m in mine):
+            print(f"  NOTE: '{target}' isn't in your build folders, so this "
+                  f"change affects every model that uses it.")
+
+    def _exec_edit_process(self, stmt: EditProcessStmt):
+        """EDIT PROCESS: add, remove and update exchanges and
+        parameters, and set description, folder and location."""
+        self._require_bridge(stmt.line)
+        target = self._eval_str(stmt.target)
+        found = self.bridge.resolve_process_strict(target)
+        if "error" in found:
+            raise BasicError(found["error"], stmt.line)
+        proc_id = found["process_id"]
+        proc = self.bridge.get_process_object(proc_id)
+        if proc is None:
+            raise BasicError(f"Could not load process '{target}'", stmt.line)
+        current = list(proc.exchanges or [])
+
+        def find_exchange(spec, action):
+            """One exchange matching a flow or provider name."""
+            name = self._eval_str(spec["name"])
+            want = spec["direction"]
+            lname = name.lower()
+            hits = [ex for ex in current
+                    if (not want or ex.is_input == (want == "INPUT"))
+                    and ((ex.flow and ex.flow.name.lower() == lname) or
+                         (ex.default_provider and ex.default_provider.name
+                          and ex.default_provider.name.lower() == lname))]
+            line = spec.get("line", stmt.line)
+            if not hits:
+                names = sorted({ex.flow.name for ex in current if ex.flow})
+                raise BasicError(
+                    f"'{target}' has no {want.lower() or 'exchange'} called "
+                    f"'{name}'. Its exchanges are: {', '.join(names)}", line)
+            if len(hits) > 1:
+                raise BasicError(
+                    f"'{name}' matches {len(hits)} exchanges in '{target}'. "
+                    f"Say INPUT or OUTPUT to pick one.", line)
+            return name, hits[0], line
+
+        # Removals. The MCP removes by flow, so a flow that appears
+        # more than once can't be removed on its own.
+        remove_ids = []
+        for spec in stmt.remove_exchanges:
+            name, ex, line = find_exchange(spec, "remove")
+            if getattr(ex, "is_quantitative_reference", False):
+                raise BasicError(
+                    f"'{name}' is the reference product of '{target}' and "
+                    f"can't be removed. Delete the process instead.", line)
+            if sum(1 for e in current if e.flow and e.flow.id == ex.flow.id) > 1:
+                raise BasicError(
+                    f"'{name}' appears more than once in '{target}', so "
+                    f"EDIT can't remove just one of them yet.", line)
+            remove_ids.append(ex.flow.id)
+
+        # Updates
+        updates = []
+        for spec in stmt.update_exchanges:
+            name, ex, line = find_exchange(spec, "update")
+            upd = {"flow_id": ex.flow.id}
+            if "amount" in spec:
+                if self._expr_is_variable(spec["amount"]):
+                    formula = self._expr_to_formula(spec["amount"])
+                    for var_name in self._referenced_globals(formula):
+                        self._sync_global(var_name, line)
+                    upd["formula"] = formula
+                else:
+                    upd["amount"] = float(self._eval(spec["amount"]))
+            if "formula" in spec:
+                upd["formula"] = self._eval_str(spec["formula"])
+            if "unit" in spec:
+                upd["unit"] = spec["unit"]
+            if "pedigree" in spec:
+                ped = spec["pedigree"]
+                upd["dq_entry"] = (ped if isinstance(ped, str)
+                                   else "(" + ";".join(str(n) for n in ped) + ")")
+            if "comment" in spec:
+                upd["comment"] = self._eval_str(spec["comment"])
+            if "provider" in spec:
+                prov = self.bridge.resolve_process_strict(
+                    self._eval_str(spec["provider"]))
+                if "error" in prov:
+                    raise BasicError(f"PROVIDER: {prov['error']}", line)
+                upd["provider_id"] = prov["process_id"]
+            if "location" in spec:
+                # Same product, supplied from another location
+                prov_name = (ex.default_provider.name
+                             if ex.default_provider else name)
+                match = self.bridge.find_process_qref_flow(
+                    prov_name, self._eval_str(spec["location"]))
+                if not match:
+                    raise BasicError(f"No process '{prov_name}' to relink",
+                                     line)
+                if "error" in match:
+                    raise BasicError(match["error"], line)
+                if match["flow_id"] != ex.flow.id:
+                    raise BasicError(
+                        f"The '{prov_name}' at that location makes a "
+                        f"different product, so it can't supply '{name}'",
+                        line)
+                upd["provider_id"] = match["process_id"]
+            updates.append(upd)
+
+        # Additions use exactly the same resolution as PROCESS
+        folder = self.runtime.process_folder
+        added = self._build_exchanges(stmt, folder, stmt.add_exchanges)
+        for ex_dict in added:
+            for var_name in self._referenced_globals(ex_dict.get("formula", "")):
+                self._sync_global(var_name, stmt.line)
+
+        add_params = []
+        for let_stmt in stmt.add_params:
+            val = self._eval(let_stmt.expr)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                raise BasicError(f"Parameter '{let_stmt.name}' must be a "
+                                 f"number", stmt.line)
+            add_params.append({"name": let_stmt.name, "value": float(val)})
+        upd_params = {}
+        for pname, expr in stmt.update_params.items():
+            upd_params[pname] = float(self._eval(expr))
+
+        kwargs = {}
+        if added:
+            kwargs["add_exchanges"] = added
+        if remove_ids:
+            kwargs["remove_exchanges"] = remove_ids
+        if updates:
+            kwargs["update_exchanges"] = updates
+        if add_params:
+            kwargs["add_parameters"] = add_params
+        if upd_params:
+            kwargs["update_parameters"] = upd_params
+        if stmt.set_description is not None:
+            kwargs["description"] = self._eval_str(stmt.set_description)
+        if stmt.set_category is not None:
+            kwargs["category"] = self._eval_str(stmt.set_category)
+        if stmt.set_location is not None:
+            kwargs["location"] = self._eval_str(stmt.set_location)
+        if not kwargs:
+            print(f"  Nothing to change in '{target}'.")
+            return
+
+        result = self.bridge.edit_process(proc_id, **kwargs)
+        if "error" in result:
+            raise BasicError(result["error"], stmt.line)
+        changes = result.get("changes", [])
+        warnings = [c for c in changes if str(c).startswith("WARNING")]
+        print(f"  Edited process: {target}")
+        for c in changes:
+            if c not in warnings:
+                print(f"    {c}")
+        for w in warnings:
+            print(f"  {w}")
+        if (stmt.set_location is not None and
+                not any("location set" in str(c) for c in changes)):
+            print(f"  WARNING: location '{kwargs['location']}' wasn't found, "
+                  f"so the location is unchanged.")
+        if added or remove_ids or any("provider_id" in u for u in updates):
+            print("  NOTE: product systems that already use this process "
+                  "keep their old links. DELETE SYSTEM and SYSTEM again "
+                  "to include these changes.")
+        self.bridge.refresh_caches()
+
+    def _exec_show(self, stmt: ShowStmt):
+        """SHOW PROCESS/FLOW/PARAMETER with optional sub-command."""
+        self._require_bridge(stmt.line)
+        ref = self._eval_str(stmt.ref)
+        sub = stmt.sub_command.upper()
+        etype = stmt.entity_type.upper()
+
+        if etype == "PROCESS":
+            proc = self.bridge.resolve_process_strict(ref)
+            if "error" in proc:
+                raise BasicError(proc["error"], stmt.line)
+            result = self.bridge.get_process_details(proc["process_id"])
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+
+            if not sub:
+                print(format_process_details(result))
+            elif sub == "INPUTS":
+                exchanges = result.get("exchanges", [])
+                inputs = [e for e in exchanges if e.get("is_input")]
+                if not inputs:
+                    print(f"  {result.get('name', ref)}: no inputs")
+                else:
+                    print(f"  {result.get('name', ref)}: "
+                          f"{len(inputs)} inputs")
+                    headers = ["Flow", "Amount", "Unit", "Provider"]
+                    rows = []
+                    values = param_values_of(result)
+                    for e in inputs:
+                        amt = exchange_amount(e, values)
+                        rows.append([
+                            e.get("flow", "?"), amt,
+                            e.get("unit", ""),
+                            e.get("provider", "") or "",
+                        ])
+                    print(format_table(headers, rows,
+                                       max_widths=[45, 30, 8, 30]))
+            elif sub == "OUTPUTS":
+                exchanges = result.get("exchanges", [])
+                outputs = [e for e in exchanges if not e.get("is_input")]
+                if not outputs:
+                    print(f"  {result.get('name', ref)}: no outputs")
+                else:
+                    print(f"  {result.get('name', ref)}: "
+                          f"{len(outputs)} outputs")
+                    headers = ["Flow", "Amount", "Unit", "QRef"]
+                    rows = []
+                    values = param_values_of(result)
+                    for e in outputs:
+                        amt = exchange_amount(e, values)
+                        qref = "*" if e.get("is_qref") else ""
+                        rows.append([
+                            e.get("flow", "?"), amt,
+                            e.get("unit", ""), qref,
+                        ])
+                    print(format_table(headers, rows,
+                                       max_widths=[45, 30, 8, 4]))
+            elif sub == "LOCATION":
+                print(f"  {result.get('location', '(none)')}")
+            elif sub == "DESCRIPTION":
+                desc = result.get("description", "(none)")
+                print(f"  {desc}")
+            elif sub == "PARAMS":
+                params = result.get("parameters", [])
+                if not params:
+                    print(f"  {result.get('name', ref)}: no parameters")
+                else:
+                    headers = ["Name", "Value", "Formula"]
+                    rows = [[p.get("name", "?"),
+                             str(p.get("value", "")),
+                             p.get("formula", "") or ""]
+                            for p in params]
+                    print(format_table(headers, rows))
+
+        elif etype == "FLOW":
+            found = self.bridge.find_flow(ref, "", "")
+            if not found:
+                raise BasicError(f"Flow not found: {ref}", stmt.line)
+            if found.get("ambiguous"):
+                raise BasicError(f"'{ref}' matches {found['ambiguous']} flows. "
+                                 f"Give the exact name of the one you mean.",
+                                 stmt.line)
+            flow = self.bridge.get_flow_details(found["flow_id"])
+            if "error" in flow:
+                raise BasicError(flow["error"], stmt.line)
+            if sub == "DESCRIPTION":
+                print(f"  {flow['description'] or '(none)'}")
+            else:
+                print(format_flow_details(flow, units_only=(sub == "UNITS")))
+
+        elif etype == "PARAMETER":
+            result = self.bridge.get_global_parameters(ref)
+            params = result.get("parameters", [])
+            if not params:
+                raise BasicError(f"Parameter not found: {ref}", stmt.line)
+            exact = [q for q in params if q.get("name") == ref]
+            if not exact and len(params) > 1:
+                names = ", ".join(q.get("name", "?") for q in params[:10])
+                raise BasicError(f"'{ref}' matches several parameters: "
+                                 f"{names}", stmt.line)
+            p = (exact or params)[0]
+            if not sub or sub == "VALUE":
+                name = p.get("name", "?")
+                if p.get("formula"):
+                    # openLCA stores 0 as the value of a formula parameter,
+                    # so show the formula and olcaBASIC's current value
+                    now = (self.runtime.get_var(name)
+                           if self.runtime.has_var(name) else None)
+                    now_txt = f"  (currently {_fmt_num(now)})" if now is not None else ""
+                    print(f"  {name} = {p['formula']}{now_txt}")
+                else:
+                    print(f"  {name} = {_fmt_num(p.get('value', '?'))}")
+            elif sub == "DESCRIPTION":
+                print(f"  {p.get('description', '(none)')}")
+
+    def _exec_link(self, stmt: LinkStmt):
+        """LINK PROCESS "source" TO PROCESS "target" WITH amount, unit.
+        Adds an input exchange to the target process using the source's
+        output flow."""
+        self._require_bridge(stmt.line)
+        source_name = self._eval_str(stmt.source)
+        target_name = self._eval_str(stmt.target)
+
+        # Both ends must identify exactly one process
+        src = self.bridge.resolve_process_strict(source_name)
+        if "error" in src:
+            raise BasicError(f"Source: {src['error']}", stmt.line)
+        tgt = self.bridge.resolve_process_strict(target_name)
+        if "error" in tgt:
+            raise BasicError(f"Target: {tgt['error']}", stmt.line)
+
+        # The source's reference flow is what the target takes in
+        source_info = self.bridge.find_process_qref_flow(src["process_id"])
+        if not source_info or "error" in source_info:
+            raise BasicError(
+                f"Source process '{source_name}' has no reference flow "
+                f"to link", stmt.line)
+
+        unit = stmt.unit or source_info.get("unit", "")
+        exchange = {
+            "flow_id": source_info["flow_id"],
+            "unit": unit,
+            "is_input": True,
+            "provider_id": src["process_id"],
+        }
+        # Variables stay live as formulas, exactly as in PROCESS
+        if stmt.amount is not None and self._expr_is_variable(stmt.amount):
+            formula = self._expr_to_formula(stmt.amount)
+            for var_name in self._referenced_globals(formula):
+                self._sync_global(var_name, stmt.line)
+            exchange["formula"] = formula
+            amount = formula
+        else:
+            amount = float(self._eval(stmt.amount)) if stmt.amount else 1.0
+            exchange["amount"] = amount
+
+        # Add exchange to target
+        result = self.bridge.edit_process(
+            tgt["process_id"], add_exchanges=[exchange])
+
+        if "error" in result:
+            raise BasicError(result["error"], stmt.line)
+
+        print(f"  Linked: {source_name} -> {target_name} "
+              f"({amount} {unit})")
+
+    def _active_folder(self) -> str:
+        """Get the folder for the active navigation tree."""
+        mode = self.runtime.navigation_mode
+        return self.runtime.nav_folders.get(mode, "")
+
+    def _set_active_folder(self, path: str):
+        """Set the browsing folder for the active tree, saving previous.
+        Browsing never changes where new processes and flows are built:
+        only SET PROCESS FOLDER, SET FLOW FOLDER and CDIR do that."""
+        mode = self.runtime.navigation_mode
+        self.runtime.nav_previous[mode] = self.runtime.nav_folders[mode]
+        self.runtime.nav_folders[mode] = path
+
+    def _nav_entity_type(self) -> str:
+        """Map navigation mode to entity type for list_category_contents."""
+        mode = self.runtime.navigation_mode
+        return {"PROCESSES": "PROCESSES", "FLOWS": "FLOWS",
+                "METHODS": "", "SYSTEMS": "SYSTEMS"}.get(mode, "")
+
+    def _exec_navigate(self, stmt: NavigateStmt):
+        """NAVIGATE — switch browsing context."""
+        if stmt.target:
+            self.runtime.navigation_mode = stmt.target
+            print(f"  Now browsing: {stmt.target.title()}")
+        else:
+            # Show menu
+            modes = ["PROCESSES", "FLOWS", "METHODS", "SYSTEMS"]
+            labels = ["Processes", "Flows", "Methods and parameters",
+                      "Product systems"]
+            print("  Browse:")
+            for i, label in enumerate(labels, 1):
+                marker = " *" if modes[i-1] == self.runtime.navigation_mode else ""
+                print(f"    {i}. {label}{marker}")
+            try:
+                choice = input("\n  : ").strip()
+                if choice.isdigit() and 1 <= int(choice) <= 4:
+                    self.runtime.navigation_mode = modes[int(choice) - 1]
+                    print(f"  Now browsing: {labels[int(choice) - 1]}")
+                elif choice.upper() in modes:
+                    self.runtime.navigation_mode = choice.upper()
+                    print(f"  Now browsing: {choice.title()}")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
     def _exec_cat(self, stmt):
-        """CAT/LS — list category contents, with optional wildcard filter."""
+        """CAT/LS — list category contents in the active tree."""
         self._require_bridge(stmt.line)
         if stmt.path:
             path = self._eval_str(stmt.path)
         else:
-            path = self.runtime.process_folder
+            path = self._active_folder()
 
-        result = self.bridge.list_category_contents(
-            path, stmt.entity_type)
+        # Use entity_type from statement if given, otherwise from nav mode
+        entity_type = stmt.entity_type or self._nav_entity_type()
 
-        # Apply wildcard filter if specified
+        result = self.bridge.list_category_contents(path, entity_type)
+
         from fnmatch import fnmatch
         pattern = stmt.filter_pattern.lower() if stmt.filter_pattern else ""
 
+        mode_label = self.runtime.navigation_mode.title()
         if pattern:
-            print(f"  {result['path']}  (filter: {stmt.filter_pattern})")
+            print(f"  [{mode_label}] {result['path']}  "
+                  f"(filter: {stmt.filter_pattern})")
         else:
-            print(f"  {result['path']}")
+            print(f"  [{mode_label}] {result['path']}")
         print()
 
         shown_folders = 0
@@ -1404,34 +1886,28 @@ class Interpreter:
             print(f"  {result['subfolder_count']} folders, "
                   f"{result['entity_count']} entities")
 
-    def _navigate_to(self, path: str):
-        """Internal: navigate to a folder, saving previous for BACK."""
-        self.runtime.previous_folder = self.runtime.process_folder
-        self.runtime.process_folder = path
-
     def _exec_dir_nav(self, stmt):
-        """DIR "path" — navigate. Absolute if path exists in database,
-        relative to current folder otherwise."""
+        """DIR "path" — navigate within the active tree."""
         if stmt.path is None:
-            pf = self.runtime.process_folder or "(root)"
-            ff = self.runtime.flow_folder or "(root)"
-            print(f"  Process folder: {pf}")
-            print(f"  Flow folder:    {ff}")
+            mode = self.runtime.navigation_mode
+            folder = self._active_folder() or "(root)"
+            print(f"  {mode.title()}: {folder}")
             return
 
         path = self._eval_str(stmt.path)
 
         if path == "/" or path == "":
-            self._navigate_to("")
+            self._set_active_folder("")
         else:
             self._require_bridge(stmt.line)
-            current = self.runtime.process_folder
+            entity_type = self._nav_entity_type()
+            current = self._active_folder()
             relative = (current.rstrip("/") + "/" + path) if current else path
             # Relative first (DIR "subfolder"), then absolute
-            if current and self.bridge.folder_exists(relative):
-                self._navigate_to(relative)
-            elif self.bridge.folder_exists(path):
-                self._navigate_to(path)
+            if current and self.bridge.folder_exists(relative, entity_type):
+                self._set_active_folder(relative)
+            elif self.bridge.folder_exists(path, entity_type):
+                self._set_active_folder(path)
             else:
                 # Don't invent a folder: that silently sends later
                 # PROCESS and CDIR commands somewhere that isn't there
@@ -1439,40 +1915,112 @@ class Interpreter:
                     f"Folder not found: '{path}'. Use CAT to list folders, "
                     f"or CDIR to create a new one.", stmt.line)
 
-        pf = self.runtime.process_folder or "(root)"
-        print(f"  {pf}")
+        folder = self._active_folder() or "(root)"
+        print(f"  {folder}")
 
     def _exec_up(self):
-        """UP — go up one level."""
-        current = self.runtime.process_folder
-        self.runtime.previous_folder = current
+        """UP — go up one level in the active tree."""
+        current = self._active_folder()
         if "/" in current:
-            self.runtime.process_folder = current.rsplit("/", 1)[0]
+            self._set_active_folder(current.rsplit("/", 1)[0])
         else:
-            self.runtime.process_folder = ""
-        pf = self.runtime.process_folder or "(root)"
-        print(f"  {pf}")
+            self._set_active_folder("")
+        folder = self._active_folder() or "(root)"
+        print(f"  {folder}")
 
     def _exec_back(self):
-        """BACK — toggle to previous directory."""
-        prev = self.runtime.previous_folder
-        self.runtime.previous_folder = self.runtime.process_folder
-        self.runtime.process_folder = prev
-        pf = self.runtime.process_folder or "(root)"
-        print(f"  {pf}")
+        """BACK — toggle to previous folder in the active tree."""
+        mode = self.runtime.navigation_mode
+        prev = self.runtime.nav_previous.get(mode, "")
+        self.runtime.nav_previous[mode] = self.runtime.nav_folders[mode]
+        self.runtime.nav_folders[mode] = prev
+        folder = prev or "(root)"
+        print(f"  {folder}")
 
     def _exec_cdir(self, stmt):
-        """CDIR — create a category folder."""
+        """CDIR — create and enter a folder in the active tree."""
         name = self._eval_str(stmt.name)
-        current = self.runtime.process_folder
+        current = self._active_folder()
         if current:
             new_path = current.rstrip("/") + "/" + name
         else:
             new_path = name
-        # openLCA creates categories on demand when entities are placed,
-        # so we just navigate there
-        self._navigate_to(new_path)
+        self._set_active_folder(new_path)
+        # A folder is created to put things in, so it becomes the
+        # build folder for this tree
+        mode = self.runtime.navigation_mode
+        if mode == "FLOWS":
+            self.runtime.flow_folder = new_path
+            what = "New flows"
+        else:
+            self.runtime.previous_folder = self.runtime.process_folder
+            self.runtime.process_folder = new_path
+            what = "New processes"
         print(f"  Created and moved to: {new_path}")
+        print(f"  {what} will be built here.")
+
+    def _exec_tree(self, stmt: TreeStmt):
+        """TREE: multi-level contribution tree for one impact category,
+        with the pedigree scores on each branch's link."""
+        self._require_bridge(stmt.line)
+        system = self._eval_str(stmt.system)
+        method = self._eval_str(stmt.method)
+        if stmt.category is None:
+            calc = self.bridge.calculate(system, method, stmt.allocation)
+            if "error" in calc:
+                raise BasicError(calc["error"], stmt.line)
+            cats = ", ".join(i.get("category", "?") for i in calc.get("impacts", []))
+            raise BasicError(f"TREE needs CATEGORY. Categories in "
+                             f"{method}: {cats}", stmt.line)
+        category = self._eval_str(stmt.category)
+        print(f"  Building contribution tree: {system}...")
+        result = self.bridge.upstream_tree(
+            system, method, category, stmt.levels, stmt.top,
+            stmt.allocation, stmt.with_quality)
+        if "error" in result:
+            extra = result.get("available")
+            msg = result["error"] + (f". Available: {', '.join(extra)}" if extra else "")
+            raise BasicError(msg, stmt.line)
+        self.runtime.store_results(result, "tree")
+        print(format_tree(result, stmt.with_quality))
+
+    def _exec_move(self, stmt: MoveStmt):
+        """MOVE PROCESS/FLOW/SYSTEM to a different folder."""
+        self._require_bridge(stmt.line)
+        ref = self._eval_str(stmt.ref)
+        etype = stmt.entity_type.upper()
+
+        if stmt.destination:
+            dest = self._eval_str(stmt.destination)
+        else:
+            # MOVE ... TO FOLDER uses current SET folder
+            if etype == "FLOW":
+                dest = self.runtime.flow_folder
+            else:
+                dest = self.runtime.process_folder
+
+        if not dest:
+            raise BasicError(
+                "No destination folder. Use MOVE ... TO \"path\" "
+                "or SET PROCESS FOLDER first.", stmt.line)
+
+        if etype == "PROCESS":
+            # Strict: moving the wrong one of two same-named processes
+            # could pull a background dataset out of its folder
+            proc = self.bridge.resolve_process_strict(ref)
+            if "error" in proc:
+                raise BasicError(proc["error"], stmt.line)
+            result = self.bridge.edit_process(
+                proc["process_id"], category=dest)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+        else:
+            raise BasicError(
+                f"MOVE {etype} not yet supported. "
+                f"Use MOVE PROCESS for now.", stmt.line)
+
+        print(f"  Moved {etype.lower()} '{ref}' to '{dest}'")
+        self.bridge.refresh_caches()
 
     def _exec_help(self, stmt):
         if stmt.topic:

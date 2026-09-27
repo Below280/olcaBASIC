@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "olcabasic"
-version = "0.2.1"
+version = "0.3.0"
 description = "A BASIC-like language for controlling openLCA"
 readme = "README.md"
 license = {text = "MPL-2.0"}
@@ -19,8 +19,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "b280-olca-mcp>=1.15.0",
+    "b280-olca-mcp>=1.16.0",
 ]
+
+[project.optional-dependencies]
+completion = ["pyreadline3; sys_platform == 'win32'"]
 
 [project.scripts]
 olcabasic = "olcabasic.__main__:main"

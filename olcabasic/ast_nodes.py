@@ -147,9 +147,13 @@ class ExchangeDef:
     flow_name: Expr = None
     amount: Expr = None        # number, variable, or expression
     unit: str = ""
-    is_new: bool = False       # NEW marker: create flow instead of finding
+    is_new: bool = False       # MAKE FLOW: create flow
     is_product: bool = False   # PRODUCT marker (qref)
     is_waste: bool = False     # WASTE marker
+    use_type: str = ""         # "PROCESS" or "FLOW" from USE keyword
+    legacy_new: bool = False   # written as INPUT NEW / OUTPUT NEW (deprecated)
+    pedigree: Any = None       # list of ints, or a string like "(1;2;1;1;3)"
+    comment: Expr = None       # COMMENT "text"
     direction_compartment: str = ""  # TO AIR, TO WATER, etc.
     provider: Expr = None      # PROVIDER "name-or-uuid"
     formula: Expr = None       # explicit FORMULA "expr"
@@ -193,12 +197,28 @@ class EditProcessStmt(Statement):
     target: Expr = None  # name or UUID
     add_exchanges: List[ExchangeDef] = field(default_factory=list)
     update_exchanges: List[Dict] = field(default_factory=list)
-    remove_exchanges: List[str] = field(default_factory=list)
+    remove_exchanges: List[Dict] = field(default_factory=list)
     add_params: List[LetStmt] = field(default_factory=list)
     update_params: Dict[str, float] = field(default_factory=dict)
     set_description: Expr = None
     set_category: Expr = None
     set_location: Expr = None
+
+
+# ── Edit flow / update parameter ─────────────────────
+
+@dataclass
+class EditFlowStmt(Statement):
+    """EDIT FLOW "name" ... END EDIT"""
+    target: Expr = None
+    operations: List[Dict] = field(default_factory=list)
+
+
+@dataclass
+class UpdateParamStmt(Statement):
+    """UPDATE PARAMETER name = expr (writes the global parameter now)"""
+    name: str = ""
+    expr: Expr = None
 
 
 # ── System ───────────────────────────────────────────────
@@ -325,7 +345,7 @@ class AuditStmt(Statement):
 
 @dataclass
 class DeleteStmt(Statement):
-    """DELETE PROCESS/FLOW/SYSTEM "ref" """
+    """DELETE PROCESS/SYSTEM "ref" (flows are deleted in openLCA)"""
     entity_type: str = ""  # PROCESS, FLOW, SYSTEM
     ref: Expr = None
 
@@ -428,6 +448,61 @@ class FindStmt(Statement):
     location: Expr = None
     category: Expr = None
     assign_to: str = ""  # variable name to store result
+
+
+# ── Show ─────────────────────────────────────────────────
+
+@dataclass
+class ShowStmt(Statement):
+    """SHOW PROCESS/FLOW/PARAMETER "name" [INPUTS|OUTPUTS|LOCATION|...]"""
+    entity_type: str = ""   # PROCESS, FLOW, PARAMETER
+    ref: Expr = None
+    sub_command: str = ""   # INPUTS, OUTPUTS, LOCATION, DESCRIPTION, UNITS, VALUE, or empty (all)
+
+
+# ── Link ─────────────────────────────────────────────────
+
+@dataclass
+class LinkStmt(Statement):
+    """LINK PROCESS "source" TO PROCESS "target" WITH amount, unit"""
+    source_type: str = "PROCESS"
+    source: Expr = None
+    target_type: str = "PROCESS"
+    target: Expr = None
+    amount: Expr = None
+    unit: str = ""
+
+
+# ── Navigate ─────────────────────────────────────────────
+
+@dataclass
+class NavigateStmt(Statement):
+    """NAVIGATE [PROCESSES|FLOWS|METHODS|SYSTEMS]"""
+    target: str = ""  # empty = show menu
+
+
+# ── Tree ─────────────────────────────────────────────────
+
+@dataclass
+class TreeStmt(Statement):
+    """TREE "system" USING "method" CATEGORY "cat" LEVELS n TOP n"""
+    system: Expr = None
+    method: Expr = None
+    category: Expr = None   # impact category name
+    levels: int = 3
+    top: int = 5
+    allocation: str = ""
+    with_quality: bool = True
+
+
+# ── Move ─────────────────────────────────────────────────
+
+@dataclass
+class MoveStmt(Statement):
+    """MOVE PROCESS/FLOW/SYSTEM "ref" TO "folder" """
+    entity_type: str = ""   # PROCESS, FLOW, SYSTEM
+    ref: Expr = None
+    destination: Expr = None  # folder path, or None for current SET folder
 
 
 # ── REPL commands ────────────────────────────────────────

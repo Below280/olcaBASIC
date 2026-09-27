@@ -54,6 +54,15 @@ class Runtime:
         self.flow_folder: str = ""
         self.previous_folder: str = ""  # for BACK command
 
+        # Navigation mode and per-tree folder tracking
+        self.navigation_mode: str = "PROCESSES"  # PROCESSES, FLOWS, METHODS, SYSTEMS
+        self.nav_folders: Dict[str, str] = {
+            "PROCESSES": "", "FLOWS": "", "METHODS": "", "SYSTEMS": "",
+        }
+        self.nav_previous: Dict[str, str] = {
+            "PROCESSES": "", "FLOWS": "", "METHODS": "", "SYSTEMS": "",
+        }
+
         # DATA queue for DATA/READ statements
         self.data_queue: deque = deque()
 
@@ -79,6 +88,9 @@ class Runtime:
 
         # Confirm delete flag
         self.confirm_delete: bool = False
+
+        # Deprecation notes already shown this session
+        self.deprecation_shown: set = set()
 
         # Error handling mode
         self.error_mode: str = "STOP"  # STOP, PRINT, SKIP
@@ -148,6 +160,13 @@ class Runtime:
         self.process_folder = ""
         self.flow_folder = ""
         self.previous_folder = ""
+        self.navigation_mode = "PROCESSES"
+        self.nav_folders = {
+            "PROCESSES": "", "FLOWS": "", "METHODS": "", "SYSTEMS": "",
+        }
+        self.nav_previous = {
+            "PROCESSES": "", "FLOWS": "", "METHODS": "", "SYSTEMS": "",
+        }
         self.data_queue.clear()
         self.subs.clear()
         self.functions.clear()
