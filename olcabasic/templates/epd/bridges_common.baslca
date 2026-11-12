@@ -34,6 +34,9 @@ FIND PROCESS "electricity" AT "GB"
 '   ENERGY SOURCE "Residual mix, United Kingdom"
 '   LOCATION BASED PROVIDER "uuid of the consumption mix"
 '   DATA PRIMARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE
 
 ' ------------------------------------------------------------
@@ -44,6 +47,9 @@ FIND PROCESS "transport, freight, lorry"
 ' BRIDGE "Road transport", t*km
 '   PROVIDER "uuid of the lorry size and emission class used"
 '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE
 
 ' ------------------------------------------------------------
@@ -54,6 +60,9 @@ FIND PROCESS "tap water"
 ' BRIDGE "Tap water", kg
 '   PROVIDER "uuid of the water supply for the region"
 '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE
 
 ' ------------------------------------------------------------
@@ -64,6 +73,9 @@ FIND PROCESS "sanitary landfill"
 ' BRIDGE "Landfill", kg WASTE
 '   PROVIDER "uuid of the treatment for this waste"
 '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE
 
 ' ------------------------------------------------------------
@@ -74,4 +86,7 @@ FIND PROCESS "municipal incineration"
 ' BRIDGE "Incineration", kg WASTE
 '   PROVIDER "uuid of the treatment for this waste"
 '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE

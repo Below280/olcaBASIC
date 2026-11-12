@@ -311,3 +311,150 @@ END BRIDGE''')
         assert r.ok and "Nothing to parameterise" in r.text
     finally:
         live.session.run(cleanup)
+
+
+# ── 5. the EPD toolkit on a small EPD under a programme ──────
+
+TOOLKIT_FOLDER = "00: olcaBASIC live EPD toolkit"
+TOOLKIT_PARAM = "olcabasic_live_toolkit_kwh"
+
+
+@pytest.mark.slow
+def test_the_toolkit_on_a_small_epd(live, bridge, tmp_path):
+    """Data quality over the impact indicators with the residual check
+    and ratings, the register, the assessment table, group sensitivity
+    and the model export, against the real EN 15804+A2 method. The
+    model is the live EPD test model with a programme named: one
+    process in A3 that buys electricity through the bridge.
+
+    The global parameter stays in the database (deleting one on a
+    server before openLCA 2.7 means reading every process)."""
+    if not _has_epd_method(live):
+        pytest.skip(f"this database has no '{EPD_METHOD}' method")
+    import json
+    sheet = tmp_path / "register.csv"
+    table = tmp_path / "assessment.md"
+    sens = tmp_path / "sensitivity.csv"
+    model = tmp_path / "model.json"
+    report = tmp_path / "report.csv"
+    ratings = ('  RATING GEOGRAPHY "Good" REASON "Live test, same market"\n'
+               '  RATING TECHNOLOGY "Good" REASON "Live test"\n'
+               '  RATING TIME "Fair" REASON "Live test"\n')
+    name = "olcaBASIC live toolkit EPD"
+    names = ["A1: Raw material supply", "A2: Transport", "A3: Manufacturing",
+             "A3 | Manufacturing"]
+
+    def cleanup():
+        client = live.engine.client
+        import olca_schema as o
+        code = ["CONFIRM DELETE ON", "EPD CLOSE"]
+        for cls, word in ((o.ProductSystem, "SYSTEM"), (o.Process, "PROCESS")):
+            for d in client.get_descriptors(cls):
+                if (d.category or "").startswith(TOOLKIT_FOLDER) \
+                        and d.name in names:
+                    code.append(f'DELETE {word} "{d.id}"')
+        live.session.run("\n".join(code))
+
+    cleanup()
+    program = f'''
+LET {TOOLKIT_PARAM} = 2
+EPD "{name}"
+  PROGRAMME "IES" GPI "5.1.0"
+  PCR "Live test PCR" VERSION "1"
+  DATABASE "Live test database" VERSION "1"
+  DECLARED UNIT 1, kg
+  METHOD "{EPD_METHOD}"
+  FOLDER "{TOOLKIT_FOLDER}"
+  MODULES A1, A2, A3
+  BIOGENIC CARBON NO
+  EXEMPT C AND D
+    INTEGRATED "Live test"
+    NOT IDENTIFIABLE "Live test"
+    END OF LIFE SCENARIOS "Live test"
+  END EXEMPT
+END EPD
+EDIT PROCESS "{bridge["id"]}"
+{ratings}END EDIT
+MODULE A1
+  TOTAL "Raw material supply"
+END MODULE
+MODULE A2
+  TOTAL "Transport"
+END MODULE
+MODULE A3
+  MAKE PROCESS "Manufacturing"
+    DESCRIPTION "olcaBASIC live EPD toolkit test"
+    DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
+{ratings}    OUTPUT MAKE FLOW "olcaBASIC live toolkit product", 1, kg, PRODUCT
+    INPUT USE PROCESS "{bridge["name"]}", {TOOLKIT_PARAM}, kWh
+  END PROCESS
+  TOTAL "Manufacturing"
+END MODULE
+EPD SYSTEMS
+EPD CHECK
+EPD CALCULATE
+EPD DQ SHEET "{sheet.as_posix()}"
+EPD DATA QUALITY
+EPD DQ TABLE "{table.as_posix()}"
+EPD SENSITIVITY BY 10% SAVE "{sens.as_posix()}"
+  GROUP "Electricity" VARY {TOOLKIT_PARAM}
+END EPD SENSITIVITY
+EPD EXPORT MODEL "{model.as_posix()}"
+EPD REPORT "{report.as_posix()}"
+'''
+    try:
+        r = live.session.run(program)
+        assert r.ok, f"{r.errors}\n{r.text[-4000:]}"
+        epd = live.session.runtime.epd
+        calls = {c["call"]: c["result"] for c in r.data}
+
+        # the impact indicators are found by their codes in the real method
+        dq = calls["epd_data_quality"]
+        assert dq["passed"] and dq["errors"] == []
+        assert dq["impact_indicators"] == 20
+        assert dq["indicators_reported"] == 38
+        from olcabasic.workflows import en15804
+        assert en15804.indicator_code(epd.gwp_indicator) == "GWP-GHG"
+        assert epd.category_with_code("GWP-biogenic")
+        # everything comes through the bridge, so it carries the result
+        assert dq["rows"][0]["process"] == bridge["name"]
+        assert dq["rows"][0]["share_of_gwp"] > 99.0
+        assert [c["process"] for c in dq["coverage"]] == [bridge["name"]]
+
+        # the register names what stands behind the bridge
+        with open(sheet, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        row = dict(zip(rows[0], rows[1]))
+        assert row["Dataset"] == bridge["name"] and row["Kind"] == "bridge"
+        assert row["Background process"]
+        assert row["Rating: geography"] == "Good"
+        assert row["Reason: geography"] == "Live test, same market"
+        text = table.read_text(encoding="utf-8")
+        assert "Good. Live test, same market" in text
+
+        # one group, one module recalculated twice; electricity is all
+        # of A3, so 10% more of it is 10% more of every indicator
+        s = calls["epd_sensitivity"]
+        assert s["calculations"] == 2
+        assert s["groups"][0]["modules"] == ["A3"]
+        gwp = next(x for x in s["table"]["A to C"]
+                   if x["indicator"] == epd.gwp_indicator)
+        base = gwp["baseline"]
+        assert base != 0
+        assert abs(gwp["Electricity +10%"] - 1.1 * base) <= 1e-6 * abs(base)
+        assert abs(gwp["Electricity -10%"] - 0.9 * base) <= 1e-6 * abs(base)
+
+        # the model, written out
+        data = json.loads(model.read_text(encoding="utf-8"))
+        assert data["metadata"]["system_count"] == 3
+        made = [p for p in data["processes"].values()
+                if p["name"] == "A3 | Manufacturing"]
+        assert len(made) == 1
+        ex = next(x for x in made[0]["exchanges"] if x["default_provider"])
+        assert ex["default_provider"]["name"] == bridge["name"]
+        assert ex["amount_formula"] == TOOLKIT_PARAM
+        assert any(g["name"] == TOOLKIT_PARAM
+                   for g in data["global_parameters"])
+        assert live.session.open_results == []
+    finally:
+        cleanup()

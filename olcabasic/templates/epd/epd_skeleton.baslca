@@ -37,7 +37,16 @@ EPD "Product name"
   MODULES A1, A2, A3, C1, C2, C3, C4, D
 
   ' DECIDE: does the product contain biogenic carbon? YES or NO.
+  ' With YES, give the carbon in the product (and its packaging) per
+  ' declared unit, in kg C, or the oven-dry mass of wood. EPD CALCULATE
+  ' then checks the carbon balance and refuses a model that does not
+  ' close it. A co-product that leaves A1 to A3 with its carbon is
+  ' declared with BIOGENIC EXPORT.
   BIOGENIC CARBON NO
+  ' BIOGENIC CARBON YES
+  ' BIOGENIC CONTENT PRODUCT 0.45 kg C PACKAGING 0 kg C
+  ' BIOGENIC CONTENT PRODUCT FROM MASS 0.9 kg DRY
+  ' BIOGENIC EXPORT A3 "Sawdust and chips", 0.05 kg C
 
   ' DECIDE: anything left out of the model is declared here, per
   ' module, as a share of mass or energy.
@@ -61,6 +70,12 @@ END EPD
 ' BRIDGE "Raw material", kg
 '   PROVIDER "uuid of the background process"
 '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+'   ' DECIDE: how well the dataset stands for what is modelled. The
+'   ' levels are Very good, Good, Fair, Poor and Very poor. EPD DATA
+'   ' QUALITY needs all three on every dataset that matters.
+'   RATING GEOGRAPHY "Good" REASON "why this dataset fits the place"
+'   RATING TECHNOLOGY "Good" REASON "why it fits the technology"
+'   RATING TIME "Good" REASON "why it fits the period"
 ' END BRIDGE
 
 ' ------------------------------------------------------------
@@ -124,8 +139,26 @@ END MODULE
 EPD SYSTEMS
 EPD CHECK
 EPD CALCULATE
+
+' The register of the datasets the data quality assessment has to
+' cover, with the ratings recorded so far. Run it to see what still
+' needs a RATING line; add those with EDIT PROCESS and run again.
+' EPD DQ SHEET "dq_register.csv"
+
 EPD DATA QUALITY
 EPD REPORT "epd_results.csv"
+
+' The assessment table for the accompanying report.
+' EPD DQ TABLE "data_quality_assessment.md"
+
+' DECIDE: the parameters to vary together, and by how much.
+' EPD SENSITIVITY BY 20% SAVE "sensitivity.csv"
+'   GROUP "Electricity" VARY electricity_kwh
+'   GROUP "Transport" VARY road_tkm, sea_tkm
+' END EPD SENSITIVITY
+
+' The whole model as one file, for the verifier.
+' EPD EXPORT MODEL "model.json"
 
 ' Once the report is right, EPD SAVE writes the EPD into openLCA as
 ' well: its own EPD entity with a stored result per module, which can

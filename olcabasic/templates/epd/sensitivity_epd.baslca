@@ -32,4 +32,13 @@ LET range_percent = 10
 '   SAVE "sensitivity_a3.csv"
 ' END SENSITIVITY
 
+' The whole EPD at once: groups of parameters that move together,
+' summed over modules A to C, with module D shown on its own. It needs
+' the EPD block and EPD CALCULATE earlier in the same session. Only the
+' modules that hold a parameter of a group are calculated again.
+' EPD SENSITIVITY BY 20% SAVE "sensitivity_epd.csv"
+'   GROUP "Electricity" VARY electricity_kwh
+'   GROUP "Raw materials" VARY cement_mass, aggregate_mass
+' END EPD SENSITIVITY
+
 PRINT "Take the apostrophes off the SENSITIVITY blocks and put your own names in."
