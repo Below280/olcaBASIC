@@ -158,6 +158,7 @@ class ExchangeDef:
     provider: Expr = None      # PROVIDER "name-or-uuid"
     formula: Expr = None       # explicit FORMULA "expr"
     location: Expr = None      # LOCATION "code" for disambiguation
+    line: int = 0              # source line of this exchange
 
 
 # ── Bridge ───────────────────────────────────────────────
@@ -310,6 +311,7 @@ class SensitivityStmt(Statement):
     from_csv: Expr = None
     save_to: Expr = None
     allocation: str = ""
+    parameter_lines: List[int] = field(default_factory=list)  # one per VARY name
 
 
 # ── Audit / validation ──────────────────────────────────

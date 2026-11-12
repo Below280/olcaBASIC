@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Optional
 from .ast_nodes import *
 from .runtime import Runtime
 from .bridge import LCABridge
+from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
+from .errors import BasicError, split_hint
 from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
@@ -51,21 +53,42 @@ def _fmt_num(v):
     return str(v)
 
 
-class BasicError(Exception):
-    """Runtime error in olcaBASIC with line number."""
-    def __init__(self, message: str, line: int = 0):
-        self.line = line
-        prefix = f"Line {line}: " if line else ""
-        super().__init__(f"{prefix}{message}")
+class _QuietSink(OutputSink):
+    """Swallows output during a look-up-only pass, keeping the line."""
+
+    def __init__(self, real: OutputSink):
+        self.real = real
+        self.line = real.line
+        self.interactive = real.interactive
+
+    def write(self, text: str = "") -> None:
+        pass
+
+    def ask(self, prompt: str) -> str:
+        return self.real.ask(prompt)
+
+
+def _command_word(stmt) -> str:
+    """CalculateStmt -> CALCULATE, RunScenariosStmt -> RUN SCENARIOS."""
+    name = type(stmt).__name__
+    for suffix in ("Stmt", "Def"):
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
 
 
 class Interpreter:
     """Executes olcaBASIC AST nodes."""
 
-    def __init__(self, bridge: Optional[LCABridge] = None):
+    def __init__(self, bridge: Optional[LCABridge] = None,
+                 out: Optional[OutputSink] = None,
+                 runtime: Optional[Runtime] = None):
         self.bridge = bridge
-        self.runtime = Runtime()
+        self.runtime = runtime or Runtime()
+        self.out = out or PrintSink()      # where output goes
         self._stop_requested = False
+        self._line = 0                     # line being executed
+        self._command = ""                 # command word of that line
 
         # Register built-in math functions
         self._builtins = {
@@ -98,11 +121,34 @@ class Interpreter:
         try:
             statements = parse(source)
         except ParseError as e:
-            print(f"Parse error: {e}")
+            self.out.write(f"Parse error: {e}")
             return
 
         self._stop_requested = False
         self._execute_block(statements)
+
+    # ── Output helpers ───────────────────────────────────
+
+    def _emit(self, call: str, result):
+        """Hand a structured engine result to the sink (Session.run
+        returns these as RunResult.data). Failures are reported as
+        errors, not as data."""
+        if isinstance(result, dict) and "error" in result:
+            return
+        self.out.data(self._command, call, result)
+
+    def _ask(self, prompt: str, line: int = 0, hint: str = "") -> str:
+        """Ask the person at the terminal. In a Session nobody is
+        there, so the program has to say what it wants instead."""
+        try:
+            return self.out.ask(prompt)
+        except NoInteraction:
+            raise BasicError(
+                "This needs an answer from the keyboard "
+                f"({prompt.strip()}), and nobody is there to give one "
+                "when a program runs through a Session.",
+                line, hint=hint or "Run it in the olcaBASIC terminal, or "
+                                   "give the value in the program.")
 
     def run_line(self, text: str) -> bool:
         """Execute a single line (REPL mode). Returns False to quit."""
@@ -117,7 +163,7 @@ class Interpreter:
         try:
             statements = parse(text)
         except ParseError as e:
-            print(f"  Error: {e}")
+            self.out.write(f"  Error: {e}")
             return True
 
         for stmt in statements:
@@ -128,11 +174,11 @@ class Interpreter:
             try:
                 self._execute(stmt)
             except BasicError as e:
-                print(f"  Error: {e}")
+                self.out.write(f"  Error: {e}")
             except RuntimeError as e:
-                print(f"  Error: {e}")
+                self.out.write(f"  Error: {e}")
             except Exception as e:
-                print(f"  Error: {e}")
+                self.out.write(f"  Error: {e}")
 
         return True
 
@@ -188,7 +234,30 @@ class Interpreter:
     # ── Statement dispatch ───────────────────────────────
 
     def _execute(self, stmt: Statement):
-        """Execute a single statement."""
+        """Execute a single statement. An error raised without a line
+        number (from deep inside an expression, say) gets the line of
+        the statement, or of the line inside a block, being run."""
+        outer = (self._line, self._command)
+        self._line = stmt.line or self._line
+        self._command = _command_word(stmt)
+        self.out.line = self._line
+        try:
+            self._dispatch(stmt)
+        except BasicError as e:
+            if not e.line and self._line:
+                raise e.at(self._line) from None
+            raise
+        finally:
+            self._line, self._command = outer
+            self.out.line = self._line
+
+    def _at(self, line: int):
+        """Note the line being worked on inside a block."""
+        if line:
+            self._line = line
+            self.out.line = line
+
+    def _dispatch(self, stmt: Statement):
         if isinstance(stmt, CommentStmt):
             return
 
@@ -203,7 +272,7 @@ class Interpreter:
 
         elif isinstance(stmt, PrintExprStmt):
             val = self._eval(stmt.expr)
-            print(f"  {_fmt_num(val)}")
+            self.out.write(f"  {_fmt_num(val)}")
 
         elif isinstance(stmt, DataStmt):
             self._exec_data(stmt)
@@ -324,11 +393,11 @@ class Interpreter:
             folder = self._eval_str(stmt.folder)
             if stmt.target == "FLOW":
                 self.runtime.flow_folder = folder
-                print(f"  Flow folder set: {folder}")
+                self.out.write(f"  Flow folder set: {folder}")
             else:
                 self.runtime.previous_folder = self.runtime.process_folder
                 self.runtime.process_folder = folder
-                print(f"  Process folder set: {folder}")
+                self.out.write(f"  Process folder set: {folder}")
 
         elif isinstance(stmt, HelpStmt):
             self._exec_help(stmt)
@@ -347,9 +416,9 @@ class Interpreter:
             here = self.runtime.nav_folders.get(mode, "") or "(root)"
             pf = self.runtime.process_folder or "(root)"
             ff = self.runtime.flow_folder or "(root)"
-            print(f"  Browsing:         [{mode.title()}] {here}")
-            print(f"  Build processes:  {pf}")
-            print(f"  Build flows:      {ff}")
+            self.out.write(f"  Browsing:         [{mode.title()}] {here}")
+            self.out.write(f"  Build processes:  {pf}")
+            self.out.write(f"  Build flows:      {ff}")
 
         elif isinstance(stmt, UpStmt):
             self._exec_up()
@@ -361,12 +430,12 @@ class Interpreter:
             self._exec_cdir(stmt)
 
         elif isinstance(stmt, ClearStmt):
-            os.system("cls" if os.name == "nt" else "clear")
+            self.out.clear_screen()
 
         elif isinstance(stmt, RefreshStmt):
             if self.bridge:
                 self.bridge.refresh_caches()
-                print("  Caches cleared.")
+                self.out.write("  Caches cleared.")
 
     # ── Expression evaluation ────────────────────────────
 
@@ -528,7 +597,7 @@ class Interpreter:
             self.runtime.push_data(val)
 
     def _exec_input(self, stmt: InputStmt):
-        response = input(f"  {stmt.prompt} ")
+        response = self._ask(f"  {stmt.prompt} ", stmt.line)
         # Try to convert to number
         try:
             value = float(response)
@@ -541,8 +610,10 @@ class Interpreter:
     def _require_bridge(self, line: int = 0):
         if not self.bridge or not self.bridge.connected:
             raise BasicError(
-                "Not connected to openLCA. Cannot execute this command.",
-                line)
+                "Not connected to openLCA.", line,
+                hint="Open a database in openLCA, start the IPC server "
+                     "(Tools > Developer Tools > IPC Server), then run "
+                     "this again.")
 
     def _exec_print(self, stmt: PrintStmt):
         sub = stmt.sub_command.upper()
@@ -550,7 +621,8 @@ class Interpreter:
         if sub == "DATABASE":
             self._require_bridge(stmt.line)
             result = self.bridge.database_info()
-            print(format_database_info(result))
+            self._emit("database_info", result)
+            self.out.write(format_database_info(result))
 
         elif sub == "PROCESSES":
             self._require_bridge(stmt.line)
@@ -559,35 +631,40 @@ class Interpreter:
             cat = args[1] if len(args) > 1 else ""
             loc = args[2] if len(args) > 2 else ""
             result = self.bridge.search_processes(term, cat, loc)
-            print(format_processes(result))
+            self._emit("search_processes", result)
+            self.out.write(format_processes(result))
 
         elif sub == "METHODS":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             term = args[0] if args else ""
             result = self.bridge.list_methods(term)
-            print(format_methods(result))
+            self._emit("list_methods", result)
+            self.out.write(format_methods(result))
 
         elif sub == "SYSTEMS":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             term = args[0] if args else ""
             result = self.bridge.list_systems(term)
-            print(format_systems(result))
+            self._emit("list_systems", result)
+            self.out.write(format_systems(result))
 
         elif sub == "PARAMS":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             ref = args[0] if args else ""
             result = self.bridge.get_system_parameters(ref)
-            print(format_params(result))
+            self._emit("get_system_parameters", result)
+            self.out.write(format_params(result))
 
         elif sub == "GLOBAL_PARAMS":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             filt = args[0] if args else ""
             result = self.bridge.get_global_parameters(filt)
-            print(format_params(result))
+            self._emit("get_global_parameters", result)
+            self.out.write(format_params(result))
 
         elif sub == "DETAILS":
             self._require_bridge(stmt.line)
@@ -597,14 +674,16 @@ class Interpreter:
             if "error" in proc:
                 raise BasicError(proc["error"], stmt.line)
             result = self.bridge.get_process_details(proc["process_id"])
-            print(format_process_details(result))
+            self._emit("get_process_details", result)
+            self.out.write(format_process_details(result))
 
         elif sub == "QUALITY":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             ref = args[0] if args else ""
             result = self.bridge.get_data_quality(ref)
-            print(format_generic(result))
+            self._emit("get_data_quality", result)
+            self.out.write(format_generic(result))
 
         elif sub == "LINKS":
             self._require_bridge(stmt.line)
@@ -612,52 +691,56 @@ class Interpreter:
             ref = args[0] if args else ""
             filt = args[1] if len(args) > 1 else ""
             result = self.bridge.get_system_links(ref, filt)
-            print(format_generic(result))
+            self._emit("get_system_links", result)
+            self.out.write(format_generic(result))
 
         elif sub == "UNITS":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             name = args[0] if args else ""
             result = self.bridge.find_unit(name)
-            print(format_generic(result))
+            self._emit("find_unit", result)
+            self.out.write(format_generic(result))
 
         elif sub == "DQ_SYSTEMS":
             self._require_bridge(stmt.line)
             result = self.bridge.list_dq_systems()
+            self._emit("list_dq_systems", result)
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
-            print(format_dq_systems(result))
+            self.out.write(format_dq_systems(result))
 
         elif sub == "FAMILY":
             self._require_bridge(stmt.line)
             args = [self._eval_str(a) for a in stmt.args]
             family = args[0] if args else ""
             result = self.bridge.set_database_family(family)
-            print(format_generic(result))
+            self._emit("set_database_family", result)
+            self.out.write(format_generic(result))
 
         elif sub == "EXPR":
             # Multiple comma-separated expressions
             vals = [self._eval(a) for a in stmt.args]
-            print("  " + "  ".join(_fmt_num(v) for v in vals))
+            self.out.write("  " + "  ".join(_fmt_num(v) for v in vals))
 
         else:
-            print(f"  Unknown PRINT sub-command: {sub}")
+            self.out.write(f"  Unknown PRINT sub-command: {sub}")
 
     def _exec_print_results(self):
         results = self.runtime.last_results
         if not results:
-            print("  No results to display. Run a calculation first.")
+            self.out.write("  No results to display. Run a calculation first.")
             return
 
         rtype = self.runtime.last_results_type
         if rtype == "calculate":
-            print(format_impacts(results))
+            self.out.write(format_impacts(results))
         elif rtype == "scenarios":
-            print(format_scenarios(results))
+            self.out.write(format_scenarios(results))
         elif rtype == "sensitivity":
-            print(format_sensitivity(results))
+            self.out.write(format_sensitivity(results))
         else:
-            print(format_generic(results))
+            self.out.write(format_generic(results))
 
     def _exec_flow(self, stmt: FlowStmt):
         self._require_bridge(stmt.line)
@@ -680,23 +763,25 @@ class Interpreter:
         if stmt.is_new:
             # NEW: always create
             result = self.bridge.create_flow(name, stmt.unit, folder, ft)
+            self._emit("create_flow", result)
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
             existed = result.get("already_existed", False)
             status = "exists" if existed else "created"
-            print(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
+            self.out.write(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
         else:
             # Default: find existing
             found = self.bridge.find_flow(
                 name, stmt.unit, search_cat, strict=bool(search_cat))
             if found:
-                print(f"  Flow found: {found['flow_name']}")
+                self.out.write(f"  Flow found: {found['flow_name']}")
             else:
                 # Not found: create it
                 result = self.bridge.create_flow(name, stmt.unit, folder, ft)
+                self._emit("create_flow", result)
                 if "error" in result:
                     raise BasicError(result["error"], stmt.line)
-                print(f"  Flow created: {name} ({stmt.unit}, {ft})")
+                self.out.write(f"  Flow created: {name} ({stmt.unit}, {ft})")
 
     def _exec_bridge(self, stmt: BridgeStmt):
         self._require_bridge(stmt.line)
@@ -718,13 +803,14 @@ class Interpreter:
         result = self.bridge.create_bridge(
             name, stmt.unit, folder, provider_id,
             provider_flow_id, stmt.is_waste)
+        self._emit("create_bridge", result)
 
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
         existed = result.get("already_existed", False)
         status = "exists" if existed else "created"
-        print(f"  Bridge {status}: {name} ({stmt.unit})")
+        self.out.write(f"  Bridge {status}: {name} ({stmt.unit})")
 
     def _exec_process(self, stmt: ProcessStmt):
         self._require_bridge(stmt.line)
@@ -753,9 +839,27 @@ class Interpreter:
 
         # Local LETs inside the PROCESS block must be visible to the
         # exchange amounts, so evaluate them into a temporary scope.
+        self._flows_made = []
+        try:
+            return self._exec_process_body(stmt, name, folder, description,
+                                           location, flow_schema,
+                                           process_schema, ex_list)
+        except BasicError as e:
+            if self._flows_made:
+                made = ", ".join(f'"{n}"' for n in self._flows_made)
+                note = (f"The process was not created. Flows this block "
+                        f"had already created stay in the database "
+                        f"({made}); running the block again reuses them.")
+                raise BasicError(e.message, e.line or stmt.line,
+                                 hint=f"{e.hint} {note}".strip()) from None
+            raise
+
+    def _exec_process_body(self, stmt, name, folder, description, location,
+                           flow_schema, process_schema, ex_list):
         self.runtime.push_scope()
         try:
             for let_stmt in stmt.local_params:
+                self._at(let_stmt.line)
                 self.runtime.set_var(let_stmt.name,
                                      self._eval(let_stmt.expr))
             exchanges = self._build_exchanges(stmt, folder, ex_list)
@@ -772,7 +876,7 @@ class Interpreter:
             if not isinstance(val, (int, float)):
                 raise BasicError(
                     f"Parameter '{let_stmt.name}' must be a number",
-                    stmt.line)
+                    let_stmt.line or stmt.line)
             parameters.append({"name": let_stmt.name, "value": float(val)})
             param_names.add(let_stmt.name)
 
@@ -781,16 +885,20 @@ class Interpreter:
         # shared by several processes is one parameter, and scenarios
         # and sensitivity change it everywhere. Local LETs above stay
         # process-scope and take precedence inside this process.
-        for ex_dict in exchanges:
+        ex_lines = [ex.line or stmt.line for ex in ex_list]
+        for ex_dict, ex_line in zip(exchanges, ex_lines):
             formula = ex_dict.get("formula", "")
             if formula:
+                self._at(ex_line)
                 for var_name in self._referenced_globals(formula):
                     if var_name not in param_names:
-                        self._sync_global(var_name, stmt.line)
+                        self._sync_global(var_name, ex_line)
+        self._at(stmt.line)
 
-        return self._create_process(stmt, name, folder, exchanges,
-                                    parameters, description, location,
-                                    flow_schema, process_schema)
+        return self._create_process(
+            stmt, name, folder, exchanges, parameters, description,
+            location, flow_schema, process_schema, ex_lines=ex_lines,
+            param_lines=[l.line or stmt.line for l in stmt.local_params])
 
     def _referenced_globals(self, formula: str) -> list:
         """Top-level variables named in a formula (whole words only,
@@ -831,9 +939,11 @@ class Interpreter:
         if desired[0] == "formula":
             result = self.bridge.create_global_parameter(
                 name, formula=desired[1])
+            self._emit("create_global_parameter", result)
         else:
             result = self.bridge.create_global_parameter(
                 name, value=desired[1])
+            self._emit("create_global_parameter", result)
         if "error" in result:
             raise BasicError(f"Global parameter '{name}': "
                              f"{result['error']}", line)
@@ -850,7 +960,7 @@ class Interpreter:
         if (previous is None and result.get("already_existed")
                 and really_changed):
             was = prev.get("formula") or prev.get("value")
-            print(f"  NOTE: global parameter '{name}' already existed "
+            self.out.write(f"  NOTE: global parameter '{name}' already existed "
                   f"(was {was}) and has been updated. Other models in "
                   f"this database that use it will change too.")
         self.runtime.synced_globals[name] = desired
@@ -869,11 +979,30 @@ class Interpreter:
 
     def _build_exchanges(self, stmt: ProcessStmt, folder: str,
                          ex_list: list) -> list:
+        """Resolve the exchanges of a PROCESS or EDIT block.
+
+        Done twice: a first pass that looks everything up but creates
+        nothing, so a wrong name on any line stops the block before a
+        single flow is written; then the real pass."""
+        if any(ex.is_new or not ex.direction_compartment for ex in ex_list):
+            real_out, self.out = self.out, _QuietSink(self.out)
+            try:
+                self._resolve_exchanges(stmt, folder, ex_list, check_only=True)
+            finally:
+                self.out = real_out
+        return self._resolve_exchanges(stmt, folder, ex_list)
+
+    def _resolve_exchanges(self, stmt, folder: str, ex_list: list,
+                           check_only: bool = False) -> list:
         exchanges = []
         for ex in ex_list:
-            if ex.legacy_new and "NEW" not in self.runtime.deprecation_shown:
+            # errors below report this exchange's own line
+            line = ex.line or stmt.line
+            self._at(line)
+            if (ex.legacy_new and not check_only
+                    and "NEW" not in self.runtime.deprecation_shown):
                 self.runtime.deprecation_shown.add("NEW")
-                print("  NOTE: INPUT NEW and OUTPUT NEW are deprecated. Use "
+                self.out.write("  NOTE: INPUT NEW and OUTPUT NEW are deprecated. Use "
                       "INPUT MAKE FLOW and OUTPUT MAKE FLOW instead; the old "
                       "form will be removed in a future version.")
             flow_name = self._eval_str(ex.flow_name)
@@ -898,15 +1027,20 @@ class Interpreter:
             flow_id = None
             provider_id = None
 
-            if ex.is_new:
+            if ex.is_new and check_only:
+                flow_id = "(to be created)"
+
+            elif ex.is_new:
                 # NEW keyword: always create a fresh flow
                 flow_result = self.bridge.create_flow(
                     flow_name, unit, category, flow_type)
                 if "error" in flow_result:
                     raise BasicError(
                         f"Flow '{flow_name}': {flow_result['error']}",
-                        stmt.line)
+                        line)
                 flow_id = flow_result["flow_id"]
+                if not flow_result.get("already_existed"):
+                    self._made_flow(flow_name)
 
             elif ex.direction_compartment:
                 # Elementary flow (TO AIR, TO WATER, etc.)
@@ -916,7 +1050,7 @@ class Interpreter:
                 if flow_match:
                     flow_id = flow_match["flow_id"]
                     if flow_match.get("ambiguous"):
-                        print(f"  NOTE: '{flow_name}' exists in "
+                        self.out.write(f"  NOTE: '{flow_name}' exists in "
                               f"{flow_match['ambiguous']} sub-compartments; "
                               f"using {flow_match['category']}")
                 else:
@@ -928,7 +1062,7 @@ class Interpreter:
                         f"database, or use NEW to create it (note: "
                         f"new elementary flows have no characterisation "
                         f"factors and will contribute zero to impacts).",
-                        stmt.line)
+                        line)
 
             else:
                 # Product/waste flow: find existing process or flow.
@@ -940,25 +1074,25 @@ class Interpreter:
                     if location_filter:
                         raise BasicError(
                             "LOCATION picks between processes, so it "
-                            "can't be used with USE FLOW", stmt.line)
+                            "can't be used with USE FLOW", line)
                     proc_match = None
                 else:
                     proc_match = self.bridge.find_process_qref_flow(
                         flow_name, location_filter)
                 if proc_match and "error" in proc_match:
-                    raise BasicError(proc_match["error"], stmt.line)
+                    raise BasicError(proc_match["error"], line)
                 if not proc_match and ex.use_type == "PROCESS":
                     raise BasicError(
                         f"No process found matching '{flow_name}'. "
                         f"FIND PROCESS shows the names in your database, "
                         f"or use USE FLOW to link a flow without a "
-                        f"provider.", stmt.line)
+                        f"provider.", line)
                 if proc_match:
                     flow_id = proc_match["flow_id"]
                     provider_id = proc_match["process_id"]
                     if proc_match.get("ambiguous"):
                         loc = proc_match.get("location", "")
-                        print(f"  WARNING: '{flow_name}' matched "
+                        self.out.write(f"  WARNING: '{flow_name}' matched "
                               f"{proc_match['ambiguous']} processes, "
                               f"using '{proc_match['process_name']}'"
                               f"{' | ' + loc if loc else ''}. "
@@ -973,11 +1107,11 @@ class Interpreter:
                             f"LOCATION was given, but '{flow_name}' "
                             f"matched a flow rather than a process, so "
                             f"there is no provider to choose between",
-                            stmt.line)
+                            line)
                     if flow_match:
                         flow_id = flow_match["flow_id"]
                         if flow_match.get("ambiguous"):
-                            print(f"  WARNING: '{flow_name}' matched "
+                            self.out.write(f"  WARNING: '{flow_name}' matched "
                                   f"{flow_match['ambiguous']} flows, "
                                   f"using first match.")
                     else:
@@ -988,9 +1122,11 @@ class Interpreter:
                                 f"'{flow_name}'. Check the spelling, "
                                 f"or use INPUT MAKE FLOW to create a "
                                 f"new flow.",
-                                stmt.line)
+                                line)
+                        elif check_only:
+                            flow_id = "(to be created)"
                         else:
-                            print(f"  NOTE: Creating new flow "
+                            self.out.write(f"  NOTE: Creating new flow "
                                   f"'{flow_name}' (use OUTPUT NEW to "
                                   f"suppress this message)")
                             flow_result = self.bridge.create_flow(
@@ -999,8 +1135,10 @@ class Interpreter:
                                 raise BasicError(
                                     f"Flow '{flow_name}': "
                                     f"{flow_result['error']}",
-                                    stmt.line)
+                                    line)
                             flow_id = flow_result["flow_id"]
+                            if not flow_result.get("already_existed"):
+                                self._made_flow(flow_name)
 
             # Build exchange dict
             ex_dict = {
@@ -1042,18 +1180,36 @@ class Interpreter:
                     hint = (" Or use LOCATION \"code\" on this line instead "
                             "of PROVIDER." if prov.get("ambiguous") else "")
                     raise BasicError(f"PROVIDER: {prov['error']}{hint}",
-                                     stmt.line)
+                                     line)
                 ex_dict["provider_id"] = prov["process_id"]
 
             exchanges.append(ex_dict)
         return exchanges
 
+    @staticmethod
+    def _engine_error_line(message: str, ex_lines, param_lines, default: int) -> int:
+        """The engine numbers the exchange or parameter it objects to
+        ("Exchange 2: ..."). Turn that into the line it was written on."""
+        m = re.match(r"(Exchange|Parameter) (\d+)\b", message or "")
+        if m:
+            lines = ex_lines if m.group(1) == "Exchange" else param_lines
+            index = int(m.group(2))
+            if lines and 0 <= index < len(lines):
+                return lines[index]
+        return default
+
+    def _made_flow(self, name: str):
+        made = getattr(self, "_flows_made", None)
+        if made is not None and name not in made:
+            made.append(name)
+
     def _create_process(self, stmt, name, folder, exchanges, parameters,
                         description, location, flow_schema,
-                        process_schema):
+                        process_schema, ex_lines=None, param_lines=None):
         result = self.bridge.create_process(
             name, folder, exchanges, parameters or None,
             description, location, flow_schema, process_schema)
+        self._emit("create_process", result)
 
         if "error" in result:
             # Put the engine's wording into olcaBASIC terms
@@ -1061,17 +1217,18 @@ class Interpreter:
                 "Set flow_schema.",
                 'Add a FLOW SCHEMA "name" line to the PROCESS block '
                 '(PRINT DQ SYSTEMS lists the names).')
-            raise BasicError(msg, stmt.line)
+            raise BasicError(msg, self._engine_error_line(
+                result["error"], ex_lines, param_lines, stmt.line))
 
         if result.get("already_existed", False):
             where = folder or "(root)"
-            print(f"  WARNING: process '{name}' already exists in {where}. "
+            self.out.write(f"  WARNING: process '{name}' already exists in {where}. "
                   f"It was NOT changed, so the exchanges above were not "
                   f"applied. DELETE PROCESS \"{name}\" first to rebuild it.")
             return
         ex_count = result.get("exchange_count", 0)
         p_count = result.get("parameter_count", 0)
-        print(f"  Process created: {name} "
+        self.out.write(f"  Process created: {name} "
               f"({ex_count} exchanges, {p_count} parameters)")
 
     def _exec_system(self, stmt: SystemStmt):
@@ -1083,80 +1240,90 @@ class Interpreter:
         target_unit = stmt.target_unit or None
         target_prop = self._eval_str(stmt.target_property) if stmt.target_property else None
 
-        print(f"  Creating product system from: {proc_ref}...")
+        self.out.write(f"  Creating product system from: {proc_ref}...")
         result = self.bridge.create_system(
             proc_ref, linking, target_amount, target_unit,
             target_prop, folder)
+        self._emit("create_system", result)
 
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
         sys_name = result.get("system_name", proc_ref)
         if result.get("already_existed", False):
-            print(f"  WARNING: product system '{sys_name}' already exists "
+            self.out.write(f"  WARNING: product system '{sys_name}' already exists "
                   f"and was reused as it is. If the process changed, "
                   f"DELETE SYSTEM \"{sys_name}\" first to rebuild it.")
         else:
-            print(f"  System created: {sys_name}")
+            self.out.write(f"  System created: {sys_name}")
         if result.get("warnings"):
             for w in result["warnings"]:
-                print(f"  WARNING: {w}")
+                self.out.write(f"  WARNING: {w}")
 
     def _exec_calculate(self, stmt: CalculateStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._eval_str(stmt.method)
-        print(f"  Calculating: {system} using {method}...")
+        self.out.write(f"  Calculating: {system} using {method}...")
         result = self.bridge.calculate(system, method, stmt.allocation)
+        self._emit("calculate", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "calculate")
-        print(format_impacts(result))
+        self.out.write(format_impacts(result))
 
     def _exec_contribution(self, stmt: ContributionStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._eval_str(stmt.method)
         cats = [self._eval_str(c) for c in stmt.categories] or None
-        print(f"  Contribution analysis: {system}...")
+        self.out.write(f"  Contribution analysis: {system}...")
         result = self.bridge.contribution(
             system, method, stmt.top, cats, stmt.allocation)
+        self._emit("contribution", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "contribution")
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_inventory(self, stmt: InventoryStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._eval_str(stmt.method)
-        print(f"  Inventory: {system}...")
+        self.out.write(f"  Inventory: {system}...")
         result = self.bridge.inventory(
             system, method, stmt.max_flows, stmt.allocation)
+        self._emit("inventory", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "inventory")
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_montecarlo(self, stmt: MonteCarloStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._eval_str(stmt.method)
-        print(f"  Monte Carlo ({stmt.runs} runs): {system}...")
+        self.out.write(f"  Monte Carlo ({stmt.runs} runs): {system}...")
         result = self.bridge.monte_carlo(
             system, method, stmt.runs, stmt.allocation)
+        self._emit("monte_carlo", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "montecarlo")
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_scenario(self, stmt: ScenarioStmt):
         """Accumulate a scenario definition."""
-        self._check_overridable([l.name for l in stmt.overrides],
-                                "SCENARIO", stmt.line)
         overrides = {}
         for let_stmt in stmt.overrides:
+            self._at(let_stmt.line)
+            self._check_overridable([let_stmt.name], "SCENARIO",
+                                    let_stmt.line or stmt.line)
             val = self._eval(let_stmt.expr)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                raise BasicError(
+                    f"'{let_stmt.name}' must be set to a number in a "
+                    f"SCENARIO, not {val!r}.", let_stmt.line or stmt.line)
             overrides[let_stmt.name] = float(val)
         self.runtime.scenarios[stmt.name] = overrides
 
@@ -1169,9 +1336,10 @@ class Interpreter:
             # CSV-based scenarios
             csv_path = self._eval_str(stmt.from_csv)
             save_to = self._eval_str(stmt.save_to) if stmt.save_to else ""
-            print(f"  Running scenarios from {csv_path}...")
+            self.out.write(f"  Running scenarios from {csv_path}...")
             result = self.bridge.run_scenarios_csv(
                 system, method, csv_path, save_to, stmt.allocation)
+            self._emit("run_scenarios_csv", result)
         else:
             # Use accumulated SCENARIO blocks
             scenarios = self.runtime.scenarios
@@ -1179,15 +1347,16 @@ class Interpreter:
                 raise BasicError(
                     "No scenarios defined. Use SCENARIO blocks before "
                     "RUN SCENARIOS.", stmt.line)
-            print(f"  Running {len(scenarios)} scenarios...")
+            self.out.write(f"  Running {len(scenarios)} scenarios...")
             result = self.bridge.run_scenarios(
                 system, method, scenarios, stmt.allocation)
+            self._emit("run_scenarios", result)
 
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
         self.runtime.store_results(result, "scenarios")
-        print(format_scenarios(result))
+        self.out.write(format_scenarios(result))
 
         # Clear accumulated scenarios after running
         self.runtime.scenarios.clear()
@@ -1200,66 +1369,76 @@ class Interpreter:
         if stmt.from_csv:
             csv_path = self._eval_str(stmt.from_csv)
             save_to = self._eval_str(stmt.save_to) if stmt.save_to else ""
-            print(f"  Running sensitivity from {csv_path}...")
+            self.out.write(f"  Running sensitivity from {csv_path}...")
             result = self.bridge.run_sensitivity_csv(
                 system, method, csv_path, stmt.variation_pct,
                 save_to, stmt.allocation)
+            self._emit("run_sensitivity_csv", result)
         else:
             params = stmt.parameters
-            self._check_overridable(params, "SENSITIVITY", stmt.line)
-            print(f"  Sensitivity +/-{stmt.variation_pct}% on "
+            lines = stmt.parameter_lines or []
+            for i, pname in enumerate(params):
+                self._check_overridable(
+                    [pname], "SENSITIVITY",
+                    lines[i] if i < len(lines) else stmt.line)
+            self.out.write(f"  Sensitivity +/-{stmt.variation_pct}% on "
                   f"{len(params)} parameters...")
             result = self.bridge.run_sensitivity(
                 system, method, params, stmt.variation_pct,
                 stmt.allocation)
+            self._emit("run_sensitivity", result)
 
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
         self.runtime.store_results(result, "sensitivity")
-        print(format_sensitivity(result))
+        self.out.write(format_sensitivity(result))
 
     def _exec_validate(self, stmt: ValidateStmt):
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.system)
-        print(f"  Validating: {ref}...")
+        self.out.write(f"  Validating: {ref}...")
         result = self.bridge.validate_system(ref, stmt.with_calc)
+        self._emit("validate_system", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_check(self, stmt: CheckStmt):
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.system)
-        print(f"  Checking: {ref} (Tier {stmt.tier})...")
+        self.out.write(f"  Checking: {ref} (Tier {stmt.tier})...")
         if stmt.tier == 1:
             result = self.bridge.validate_system(ref)
-            print(format_generic(result))
+            self._emit("validate_system", result)
+            self.out.write(format_generic(result))
         elif stmt.tier >= 2:
-            print("  Tier 2/3 checks require extract_model comparison.")
-            print("  Use EXTRACT and COMPARE for source comparison.")
+            self.out.write("  Tier 2/3 checks require extract_model comparison.")
+            self.out.write("  Use EXTRACT and COMPARE for source comparison.")
 
     def _exec_extract(self, stmt: ExtractStmt):
         self._require_bridge(stmt.line)
         folder = self._eval_str(stmt.folder)
-        print(f"  Extracting: {folder}...")
+        self.out.write(f"  Extracting: {folder}...")
         result = self.bridge.extract_model(folder)
+        self._emit("extract_model", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_audit(self, stmt: AuditStmt):
         self._require_bridge(stmt.line)
         folder = self._eval_str(stmt.folder)
-        print(f"  Auditing: {folder}...")
+        self.out.write(f"  Auditing: {folder}...")
         result = self.bridge.audit_model(folder)
+        self._emit("audit_model", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
-        print(format_generic(result))
+        self.out.write(format_generic(result))
 
     def _exec_save_results(self, stmt: SaveResultsStmt):
         if not self.runtime.last_results:
-            print("  No results to save.")
+            self.out.write("  No results to save.")
             return
         filename = self._eval_str(stmt.filename)
         csv_str = results_to_csv(
@@ -1272,7 +1451,7 @@ class Interpreter:
         # newline="" stops Windows writing blank rows between lines
         with open(filename, "w", newline="", encoding="utf-8") as f:
             f.write(csv_str)
-        print(f"  Results saved to {filename}")
+        self.out.write(f"  Results saved to {filename}")
 
     def _exec_delete(self, stmt: DeleteStmt):
         self._require_bridge(stmt.line)
@@ -1290,22 +1469,25 @@ class Interpreter:
         if "error" in target:
             raise BasicError(target["error"], stmt.line)
         if target.get("not_found"):
-            print(f"  Not found: {ref} (nothing to delete)")
+            self.out.write(f"  Not found: {ref} (nothing to delete)")
             return
 
         if not self.runtime.confirm_delete:
-            confirm = input(
-                f"  Delete {stmt.entity_type} '{target['name']}'? (yes/no) ")
+            confirm = self._ask(
+                f"  Delete {stmt.entity_type} '{target['name']}'? (yes/no) ",
+                stmt.line,
+                'Put CONFIRM DELETE ON before the DELETE line.')
             if confirm.lower() not in ("yes", "y"):
-                print("  Cancelled.")
+                self.out.write("  Cancelled.")
                 return
         else:
-            print(f"  Deleting {stmt.entity_type} '{target['name']}'...")
+            self.out.write(f"  Deleting {stmt.entity_type} '{target['name']}'...")
 
         result = self.bridge.delete_entity(etype, target["id"])
+        self._emit("delete_entity", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
-        print(f"  Deleted: {result.get('name', ref)}")
+        self.out.write(f"  Deleted: {result.get('name', ref)}")
         self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
@@ -1317,24 +1499,29 @@ class Interpreter:
             loc = self._eval_str(stmt.location) if stmt.location else ""
             cat = self._eval_str(stmt.category) if stmt.category else ""
             result = self.bridge.search_processes(term, cat, loc)
-            print(format_processes(result))
+            self._emit("search_processes", result)
+            self.out.write(format_processes(result))
         elif etype == "FLOW":
             cat = self._eval_str(stmt.category) if stmt.category else ""
             result = self.bridge.search_flows(term, cat)
+            self._emit("search_flows", result)
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
-            print(format_flows(result))
+            self.out.write(format_flows(result))
         elif etype == "METHOD":
             result = self.bridge.list_methods(term)
-            print(format_methods(result))
+            self._emit("list_methods", result)
+            self.out.write(format_methods(result))
         elif etype == "CHEMICAL":
             result = self.bridge.chemical_synonyms(term)
-            print(format_generic(result))
+            self._emit("chemical_synonyms", result)
+            self.out.write(format_generic(result))
         elif etype == "UNIT":
             result = self.bridge.find_unit(term)
-            print(format_generic(result))
+            self._emit("find_unit", result)
+            self.out.write(format_generic(result))
         else:
-            print(f"  Unknown FIND type: {etype}")
+            self.out.write(f"  Unknown FIND type: {etype}")
 
         # Store result if assigned to a variable
         if stmt.assign_to:
@@ -1422,7 +1609,7 @@ class Interpreter:
         shown = (f"{self._expr_to_formula(expr)} (currently {_fmt_num(now)})"
                  if expr is not None else _fmt_num(now))
         was = f" (was {_fmt_num(before)})" if before is not None else ""
-        print(f"  Global parameter {stmt.name} = {shown}{was}")
+        self.out.write(f"  Global parameter {stmt.name} = {shown}{was}")
 
     def _exec_edit_flow(self, stmt: EditFlowStmt):
         """EDIT FLOW: add or update flow properties, set the reference."""
@@ -1448,17 +1635,18 @@ class Interpreter:
             ops.append(entry)
 
         result = self.bridge.edit_flow(found["flow_id"], ops)
+        self._emit("edit_flow", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
-        print(f"  Edited flow: {result.get('flow_name', target)}")
+        self.out.write(f"  Edited flow: {result.get('flow_name', target)}")
         for c in result.get("changes", []):
-            print(f"    {c}")
+            self.out.write(f"    {c}")
         # A flow outside your own folders is shared with other models
         cat = (result.get("category") or found.get("category") or "").lower()
         mine = [f.lower().rstrip("/") for f in (self.runtime.flow_folder,
                                                 self.runtime.process_folder) if f]
         if not any(cat == m or cat.startswith(m + "/") for m in mine):
-            print(f"  NOTE: '{target}' isn't in your build folders, so this "
+            self.out.write(f"  NOTE: '{target}' isn't in your build folders, so this "
                   f"change affects every model that uses it.")
 
     def _exec_edit_process(self, stmt: EditProcessStmt):
@@ -1477,6 +1665,7 @@ class Interpreter:
 
         def find_exchange(spec, action):
             """One exchange matching a flow or provider name."""
+            self._at(spec.get("line", stmt.line))
             name = self._eval_str(spec["name"])
             want = spec["direction"]
             lname = name.lower()
@@ -1563,16 +1752,19 @@ class Interpreter:
         # Additions use exactly the same resolution as PROCESS
         folder = self.runtime.process_folder
         added = self._build_exchanges(stmt, folder, stmt.add_exchanges)
-        for ex_dict in added:
+        add_lines = [ex.line or stmt.line for ex in stmt.add_exchanges]
+        for ex_dict, ex_line in zip(added, add_lines):
             for var_name in self._referenced_globals(ex_dict.get("formula", "")):
-                self._sync_global(var_name, stmt.line)
+                self._sync_global(var_name, ex_line)
+        self._at(stmt.line)
 
         add_params = []
         for let_stmt in stmt.add_params:
+            self._at(let_stmt.line)
             val = self._eval(let_stmt.expr)
             if not isinstance(val, (int, float)) or isinstance(val, bool):
                 raise BasicError(f"Parameter '{let_stmt.name}' must be a "
-                                 f"number", stmt.line)
+                                 f"number", let_stmt.line or stmt.line)
             add_params.append({"name": let_stmt.name, "value": float(val)})
         upd_params = {}
         for pname, expr in stmt.update_params.items():
@@ -1596,26 +1788,27 @@ class Interpreter:
         if stmt.set_location is not None:
             kwargs["location"] = self._eval_str(stmt.set_location)
         if not kwargs:
-            print(f"  Nothing to change in '{target}'.")
+            self.out.write(f"  Nothing to change in '{target}'.")
             return
 
         result = self.bridge.edit_process(proc_id, **kwargs)
+        self._emit("edit_process", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         changes = result.get("changes", [])
         warnings = [c for c in changes if str(c).startswith("WARNING")]
-        print(f"  Edited process: {target}")
+        self.out.write(f"  Edited process: {target}")
         for c in changes:
             if c not in warnings:
-                print(f"    {c}")
+                self.out.write(f"    {c}")
         for w in warnings:
-            print(f"  {w}")
+            self.out.write(f"  {w}")
         if (stmt.set_location is not None and
                 not any("location set" in str(c) for c in changes)):
-            print(f"  WARNING: location '{kwargs['location']}' wasn't found, "
+            self.out.write(f"  WARNING: location '{kwargs['location']}' wasn't found, "
                   f"so the location is unchanged.")
         if added or remove_ids or any("provider_id" in u for u in updates):
-            print("  NOTE: product systems that already use this process "
+            self.out.write("  NOTE: product systems that already use this process "
                   "keep their old links. DELETE SYSTEM and SYSTEM again "
                   "to include these changes.")
         self.bridge.refresh_caches()
@@ -1632,18 +1825,19 @@ class Interpreter:
             if "error" in proc:
                 raise BasicError(proc["error"], stmt.line)
             result = self.bridge.get_process_details(proc["process_id"])
+            self._emit("get_process_details", result)
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
 
             if not sub:
-                print(format_process_details(result))
+                self.out.write(format_process_details(result))
             elif sub == "INPUTS":
                 exchanges = result.get("exchanges", [])
                 inputs = [e for e in exchanges if e.get("is_input")]
                 if not inputs:
-                    print(f"  {result.get('name', ref)}: no inputs")
+                    self.out.write(f"  {result.get('name', ref)}: no inputs")
                 else:
-                    print(f"  {result.get('name', ref)}: "
+                    self.out.write(f"  {result.get('name', ref)}: "
                           f"{len(inputs)} inputs")
                     headers = ["Flow", "Amount", "Unit", "Provider"]
                     rows = []
@@ -1655,15 +1849,15 @@ class Interpreter:
                             e.get("unit", ""),
                             e.get("provider", "") or "",
                         ])
-                    print(format_table(headers, rows,
+                    self.out.write(format_table(headers, rows,
                                        max_widths=[45, 30, 8, 30]))
             elif sub == "OUTPUTS":
                 exchanges = result.get("exchanges", [])
                 outputs = [e for e in exchanges if not e.get("is_input")]
                 if not outputs:
-                    print(f"  {result.get('name', ref)}: no outputs")
+                    self.out.write(f"  {result.get('name', ref)}: no outputs")
                 else:
-                    print(f"  {result.get('name', ref)}: "
+                    self.out.write(f"  {result.get('name', ref)}: "
                           f"{len(outputs)} outputs")
                     headers = ["Flow", "Amount", "Unit", "QRef"]
                     rows = []
@@ -1675,24 +1869,24 @@ class Interpreter:
                             e.get("flow", "?"), amt,
                             e.get("unit", ""), qref,
                         ])
-                    print(format_table(headers, rows,
+                    self.out.write(format_table(headers, rows,
                                        max_widths=[45, 30, 8, 4]))
             elif sub == "LOCATION":
-                print(f"  {result.get('location', '(none)')}")
+                self.out.write(f"  {result.get('location', '(none)')}")
             elif sub == "DESCRIPTION":
                 desc = result.get("description", "(none)")
-                print(f"  {desc}")
+                self.out.write(f"  {desc}")
             elif sub == "PARAMS":
                 params = result.get("parameters", [])
                 if not params:
-                    print(f"  {result.get('name', ref)}: no parameters")
+                    self.out.write(f"  {result.get('name', ref)}: no parameters")
                 else:
                     headers = ["Name", "Value", "Formula"]
                     rows = [[p.get("name", "?"),
                              str(p.get("value", "")),
                              p.get("formula", "") or ""]
                             for p in params]
-                    print(format_table(headers, rows))
+                    self.out.write(format_table(headers, rows))
 
         elif etype == "FLOW":
             found = self.bridge.find_flow(ref, "", "")
@@ -1706,12 +1900,13 @@ class Interpreter:
             if "error" in flow:
                 raise BasicError(flow["error"], stmt.line)
             if sub == "DESCRIPTION":
-                print(f"  {flow['description'] or '(none)'}")
+                self.out.write(f"  {flow['description'] or '(none)'}")
             else:
-                print(format_flow_details(flow, units_only=(sub == "UNITS")))
+                self.out.write(format_flow_details(flow, units_only=(sub == "UNITS")))
 
         elif etype == "PARAMETER":
             result = self.bridge.get_global_parameters(ref)
+            self._emit("get_global_parameters", result)
             params = result.get("parameters", [])
             if not params:
                 raise BasicError(f"Parameter not found: {ref}", stmt.line)
@@ -1729,11 +1924,11 @@ class Interpreter:
                     now = (self.runtime.get_var(name)
                            if self.runtime.has_var(name) else None)
                     now_txt = f"  (currently {_fmt_num(now)})" if now is not None else ""
-                    print(f"  {name} = {p['formula']}{now_txt}")
+                    self.out.write(f"  {name} = {p['formula']}{now_txt}")
                 else:
-                    print(f"  {name} = {_fmt_num(p.get('value', '?'))}")
+                    self.out.write(f"  {name} = {_fmt_num(p.get('value', '?'))}")
             elif sub == "DESCRIPTION":
-                print(f"  {p.get('description', '(none)')}")
+                self.out.write(f"  {p.get('description', '(none)')}")
 
     def _exec_link(self, stmt: LinkStmt):
         """LINK PROCESS "source" TO PROCESS "target" WITH amount, unit.
@@ -1779,11 +1974,12 @@ class Interpreter:
         # Add exchange to target
         result = self.bridge.edit_process(
             tgt["process_id"], add_exchanges=[exchange])
+        self._emit("edit_process", result)
 
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
 
-        print(f"  Linked: {source_name} -> {target_name} "
+        self.out.write(f"  Linked: {source_name} -> {target_name} "
               f"({amount} {unit})")
 
     def _active_folder(self) -> str:
@@ -1809,24 +2005,24 @@ class Interpreter:
         """NAVIGATE — switch browsing context."""
         if stmt.target:
             self.runtime.navigation_mode = stmt.target
-            print(f"  Now browsing: {stmt.target.title()}")
+            self.out.write(f"  Now browsing: {stmt.target.title()}")
         else:
             # Show menu
             modes = ["PROCESSES", "FLOWS", "METHODS", "SYSTEMS"]
             labels = ["Processes", "Flows", "Methods and parameters",
                       "Product systems"]
-            print("  Browse:")
+            self.out.write("  Browse:")
             for i, label in enumerate(labels, 1):
                 marker = " *" if modes[i-1] == self.runtime.navigation_mode else ""
-                print(f"    {i}. {label}{marker}")
+                self.out.write(f"    {i}. {label}{marker}")
             try:
-                choice = input("\n  : ").strip()
+                choice = self._ask("\n  : ", stmt.line, "Say which: NAVIGATE PROCESSES, NAVIGATE FLOWS, NAVIGATE METHODS or NAVIGATE SYSTEMS.").strip()
                 if choice.isdigit() and 1 <= int(choice) <= 4:
                     self.runtime.navigation_mode = modes[int(choice) - 1]
-                    print(f"  Now browsing: {labels[int(choice) - 1]}")
+                    self.out.write(f"  Now browsing: {labels[int(choice) - 1]}")
                 elif choice.upper() in modes:
                     self.runtime.navigation_mode = choice.upper()
-                    print(f"  Now browsing: {choice.title()}")
+                    self.out.write(f"  Now browsing: {choice.title()}")
             except (EOFError, KeyboardInterrupt):
                 pass
 
@@ -1842,17 +2038,18 @@ class Interpreter:
         entity_type = stmt.entity_type or self._nav_entity_type()
 
         result = self.bridge.list_category_contents(path, entity_type)
+        self._emit("list_category_contents", result)
 
         from fnmatch import fnmatch
         pattern = stmt.filter_pattern.lower() if stmt.filter_pattern else ""
 
         mode_label = self.runtime.navigation_mode.title()
         if pattern:
-            print(f"  [{mode_label}] {result['path']}  "
+            self.out.write(f"  [{mode_label}] {result['path']}  "
                   f"(filter: {stmt.filter_pattern})")
         else:
-            print(f"  [{mode_label}] {result['path']}")
-        print()
+            self.out.write(f"  [{mode_label}] {result['path']}")
+        self.out.write()
 
         shown_folders = 0
         if result["subfolders"]:
@@ -1860,7 +2057,7 @@ class Interpreter:
                 last = sf.split("/")[-1]
                 if pattern and not fnmatch(last.lower(), pattern):
                     continue
-                print(f"    [DIR]  {last}/")
+                self.out.write(f"    [DIR]  {last}/")
                 shown_folders += 1
 
         shown_entities = 0
@@ -1869,21 +2066,21 @@ class Interpreter:
                 if pattern and not fnmatch(e["name"].lower(), pattern):
                     continue
                 tag = e["type"][0].upper()
-                print(f"    [{tag}]    {e['name']}")
+                self.out.write(f"    [{tag}]    {e['name']}")
                 shown_entities += 1
 
         if shown_folders == 0 and shown_entities == 0:
             if pattern:
-                print(f"    No matches for {stmt.filter_pattern}")
+                self.out.write(f"    No matches for {stmt.filter_pattern}")
             else:
-                print("    (empty)")
+                self.out.write("    (empty)")
 
-        print()
+        self.out.write()
         if pattern:
-            print(f"  {shown_folders} folders, "
+            self.out.write(f"  {shown_folders} folders, "
                   f"{shown_entities} entities (filtered)")
         else:
-            print(f"  {result['subfolder_count']} folders, "
+            self.out.write(f"  {result['subfolder_count']} folders, "
                   f"{result['entity_count']} entities")
 
     def _exec_dir_nav(self, stmt):
@@ -1891,7 +2088,7 @@ class Interpreter:
         if stmt.path is None:
             mode = self.runtime.navigation_mode
             folder = self._active_folder() or "(root)"
-            print(f"  {mode.title()}: {folder}")
+            self.out.write(f"  {mode.title()}: {folder}")
             return
 
         path = self._eval_str(stmt.path)
@@ -1916,7 +2113,7 @@ class Interpreter:
                     f"or CDIR to create a new one.", stmt.line)
 
         folder = self._active_folder() or "(root)"
-        print(f"  {folder}")
+        self.out.write(f"  {folder}")
 
     def _exec_up(self):
         """UP — go up one level in the active tree."""
@@ -1926,7 +2123,7 @@ class Interpreter:
         else:
             self._set_active_folder("")
         folder = self._active_folder() or "(root)"
-        print(f"  {folder}")
+        self.out.write(f"  {folder}")
 
     def _exec_back(self):
         """BACK — toggle to previous folder in the active tree."""
@@ -1935,7 +2132,7 @@ class Interpreter:
         self.runtime.nav_previous[mode] = self.runtime.nav_folders[mode]
         self.runtime.nav_folders[mode] = prev
         folder = prev or "(root)"
-        print(f"  {folder}")
+        self.out.write(f"  {folder}")
 
     def _exec_cdir(self, stmt):
         """CDIR — create and enter a folder in the active tree."""
@@ -1956,8 +2153,8 @@ class Interpreter:
             self.runtime.previous_folder = self.runtime.process_folder
             self.runtime.process_folder = new_path
             what = "New processes"
-        print(f"  Created and moved to: {new_path}")
-        print(f"  {what} will be built here.")
+        self.out.write(f"  Created and moved to: {new_path}")
+        self.out.write(f"  {what} will be built here.")
 
     def _exec_tree(self, stmt: TreeStmt):
         """TREE: multi-level contribution tree for one impact category,
@@ -1973,16 +2170,17 @@ class Interpreter:
             raise BasicError(f"TREE needs CATEGORY. Categories in "
                              f"{method}: {cats}", stmt.line)
         category = self._eval_str(stmt.category)
-        print(f"  Building contribution tree: {system}...")
+        self.out.write(f"  Building contribution tree: {system}...")
         result = self.bridge.upstream_tree(
             system, method, category, stmt.levels, stmt.top,
             stmt.allocation, stmt.with_quality)
+        self._emit("upstream_tree", result)
         if "error" in result:
             extra = result.get("available")
             msg = result["error"] + (f". Available: {', '.join(extra)}" if extra else "")
             raise BasicError(msg, stmt.line)
         self.runtime.store_results(result, "tree")
-        print(format_tree(result, stmt.with_quality))
+        self.out.write(format_tree(result, stmt.with_quality))
 
     def _exec_move(self, stmt: MoveStmt):
         """MOVE PROCESS/FLOW/SYSTEM to a different folder."""
@@ -2012,6 +2210,7 @@ class Interpreter:
                 raise BasicError(proc["error"], stmt.line)
             result = self.bridge.edit_process(
                 proc["process_id"], category=dest)
+            self._emit("edit_process", result)
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
         else:
@@ -2019,7 +2218,7 @@ class Interpreter:
                 f"MOVE {etype} not yet supported. "
                 f"Use MOVE PROCESS for now.", stmt.line)
 
-        print(f"  Moved {etype.lower()} '{ref}' to '{dest}'")
+        self.out.write(f"  Moved {etype.lower()} '{ref}' to '{dest}'")
         self.bridge.refresh_caches()
 
     def _exec_help(self, stmt):
@@ -2088,13 +2287,13 @@ class Interpreter:
   END SENSITIVITY""",
             }
             if topic in topics:
-                print(topics[topic])
+                self.out.write(topics[topic])
             else:
-                print(f"  No help for: {stmt.topic}")
-                print(f"  Try: HELP PROCESS, HELP FOLDER, HELP NEW, "
+                self.out.write(f"  No help for: {stmt.topic}")
+                self.out.write(f"  Try: HELP PROCESS, HELP FOLDER, HELP NEW, "
                       f"HELP SCENARIO, HELP SENSITIVITY")
         else:
-            print("""
+            self.out.write("""
   olcaBASIC Commands:
 
   Navigation:

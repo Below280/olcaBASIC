@@ -13,9 +13,15 @@ from .ast_nodes import *
 
 
 class ParseError(Exception):
-    def __init__(self, message: str, line: int = 0):
+    """A program that does not parse. Carries the line and, where the
+    message does not already say it, a hint on what to type instead."""
+
+    def __init__(self, message: str, line: int = 0, hint: str = ""):
         self.line = line
-        super().__init__(f"Line {line}: {message}" if line else message)
+        self.message = message
+        self.hint = hint
+        full = f"{message} {hint}".strip() if hint else message
+        super().__init__(f"Line {line}: {full}" if line else full)
 
 
 class Parser:
@@ -84,6 +90,22 @@ class Parser:
                              f"got '{tok.value}'", tok.line)
         self.advance()
         return float(tok.value)
+
+    ALLOCATIONS = ("AS_DEFINED", "PHYSICAL", "ECONOMIC", "CAUSAL", "NONE")
+
+    def parse_allocation(self) -> str:
+        """The word after ALLOCATE: one of ALLOCATIONS."""
+        tok = self.peek()
+        if (tok.type in (TokenType.KEYWORD, TokenType.IDENTIFIER)
+                and tok.upper() in self.ALLOCATIONS):
+            return self.advance().upper()
+        shown = tok.value if tok.type not in (TokenType.NEWLINE,
+                                              TokenType.EOF) else ""
+        raise ParseError(
+            f"Unknown allocation method '{shown}'." if shown
+            else "ALLOCATE needs a method.",
+            tok.line,
+            hint="Use one of: " + ", ".join(self.ALLOCATIONS) + ".")
 
     def peek_at(self, offset: int) -> Token:
         i = self.pos + offset
@@ -879,6 +901,7 @@ class Parser:
         Supports: INPUT USE PROCESS "name", INPUT USE FLOW "name",
         INPUT MAKE FLOW "name", and legacy INPUT NEW "name",
         INPUT "name" (defaults to USE PROCESS)."""
+        ex_line = self.peek().line
         direction = self.advance().upper()  # INPUT or OUTPUT
 
         # Check for MAKE/USE/NEW keywords
@@ -975,7 +998,7 @@ class Parser:
             is_waste=is_waste, use_type=use_type, legacy_new=legacy_new,
             pedigree=pedigree, comment=comment,
             direction_compartment=compartment, provider=provider,
-            formula=formula, location=location)
+            formula=formula, location=location, line=ex_line)
 
     def parse_system(self, line: int) -> SystemStmt:
         self.advance()  # consume SYSTEM
@@ -1036,8 +1059,7 @@ class Parser:
         method = self.parse_string_or_expr()
         allocation = ""
         if self.match_keyword("ALLOCATE"):
-            if self.peek().type == TokenType.KEYWORD:
-                allocation = self.advance().upper()
+            allocation = self.parse_allocation()
         self.expect_newline()
         return CalculateStmt(line=line, system=system, method=method,
                               allocation=allocation)
@@ -1054,8 +1076,7 @@ class Parser:
         if self.match_keyword("TOP"):
             top = self.parse_int("TOP")
         if self.match_keyword("ALLOCATE"):
-            if self.peek().type == TokenType.KEYWORD:
-                allocation = self.advance().upper()
+            allocation = self.parse_allocation()
 
         self.expect_newline()
         self.skip_newlines()
@@ -1089,8 +1110,7 @@ class Parser:
         if self.match_keyword("MAX"):
             max_flows = self.parse_int("MAX")
         if self.match_keyword("ALLOCATE"):
-            if self.peek().type == TokenType.KEYWORD:
-                allocation = self.advance().upper()
+            allocation = self.parse_allocation()
         self.expect_newline()
         return InventoryStmt(line=line, system=system, method=method,
                               max_flows=max_flows, allocation=allocation)
@@ -1105,8 +1125,7 @@ class Parser:
         if self.match_keyword("RUNS"):
             runs = self.parse_int("RUNS")
         if self.match_keyword("ALLOCATE"):
-            if self.peek().type == TokenType.KEYWORD:
-                allocation = self.advance().upper()
+            allocation = self.parse_allocation()
         self.expect_newline()
         return MonteCarloStmt(line=line, system=system, method=method,
                                runs=runs, allocation=allocation)
@@ -1158,13 +1177,13 @@ class Parser:
                 self.advance()
 
         if self.match_keyword("ALLOCATE"):
-            if self.peek().type == TokenType.KEYWORD:
-                allocation = self.advance().upper()
+            allocation = self.parse_allocation()
 
         self.expect_newline()
         self.skip_newlines()
 
         parameters = []
+        parameter_lines = []
         from_csv = None
         save_to = None
 
@@ -1179,6 +1198,7 @@ class Parser:
                 while True:
                     if self.peek().type in (TokenType.IDENTIFIER,
                                             TokenType.STRING):
+                        parameter_lines.append(self.peek().line)
                         parameters.append(self.advance().value)
                     else:
                         raise ParseError(
@@ -1213,7 +1233,8 @@ class Parser:
         return SensitivityStmt(
             line=line, system=system, method=method,
             variation_pct=variation, parameters=parameters,
-            from_csv=from_csv, save_to=save_to, allocation=allocation)
+            from_csv=from_csv, save_to=save_to, allocation=allocation,
+            parameter_lines=parameter_lines)
 
     def parse_run(self, line: int) -> Statement:
         self.advance()  # consume RUN
@@ -1230,8 +1251,7 @@ class Parser:
             save_to = None
 
             if self.match_keyword("ALLOCATE"):
-                if self.peek().type == TokenType.KEYWORD:
-                    allocation = self.advance().upper()
+                allocation = self.parse_allocation()
 
             self.expect_newline()
             self.skip_newlines()
@@ -1606,11 +1626,7 @@ class Parser:
             elif kw == "TOP":
                 top = self.parse_int("TOP")
             elif kw == "ALLOCATE":
-                if self.peek().type not in (TokenType.KEYWORD,
-                                            TokenType.IDENTIFIER):
-                    raise ParseError("Expected an allocation method after "
-                                     "ALLOCATE", line)
-                allocation = self.advance().upper()
+                allocation = self.parse_allocation()
             else:
                 with_quality = False
 
@@ -2122,7 +2138,10 @@ def parse(source: str) -> List[Statement]:
     try:
         tokens = tokenise(source)
     except TokeniseError as e:
-        raise ParseError(str(e).split(": ", 1)[-1], e.line)
+        message = str(e)
+        if e.line and message.startswith(f"Line {e.line}: "):
+            message = message[len(f"Line {e.line}: "):]
+        raise ParseError(message, e.line)
     parser = Parser(tokens)
     return parser.parse_program()
 

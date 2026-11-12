@@ -4,28 +4,26 @@ import os
 
 
 class LiveRunner:
-    """One connection to openLCA for a whole test module.
+    """One Session on the live openLCA for a whole test module.
 
     run(code) executes a program and returns the structured result of
-    its last calculation command. Errors fail the test with the text
-    olcaBASIC printed.
+    its last engine call. An error fails the test with the text
+    olcaBASIC produced.
     """
 
     def __init__(self, port: int = None):
+        from olcabasic import Session
         self.port = port or int(os.getenv("OLCA_PORT", "8080"))
-        from olcabasic.bridge import LCABridge
-        from olcabasic.interpreter import Interpreter
-        self.bridge = LCABridge(port=self.port)
-        if not self.bridge.connect():
+        self.session = Session(port=self.port)
+        if not self.session.connected:
             raise RuntimeError(
                 f"could not connect to openLCA on port {self.port}")
-        self.interp = Interpreter(self.bridge)
 
     @property
     def engine(self):
-        return self.bridge.lca
+        return self.session.engine
 
     def run(self, code: str):
-        self.interp.runtime.last_results = None
-        self.interp.run_program(code)
-        return self.interp.runtime.last_results
+        result = self.session.run(code)
+        assert result.ok, f"{result.errors}\n{result.text}"
+        return result.data[-1]["result"] if result.data else None
