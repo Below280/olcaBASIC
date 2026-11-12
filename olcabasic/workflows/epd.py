@@ -36,7 +36,8 @@ import re
 from typing import Dict, List, Optional
 
 from ..errors import BasicError
-from . import programmes
+from . import en15804, programmes
+from .epd_toolkit import EpdToolkitMixin
 
 MODULE_ORDER = ["A1", "A2", "A3", "A4", "A5",
                 "B1", "B2", "B3", "B4", "B5", "B6", "B7",
@@ -320,7 +321,11 @@ def check_definition(name: str, f: Dict, lines: Dict, line: int) -> Dict:
                     hint="Model more of what was left out until the "
                          "declared cut-offs are within the limit.")
 
+    biogenic_content, biogenic_exports = _check_biogenic(f, modules, at)
+
     return {
+        "biogenic_content": biogenic_content,
+        "biogenic_exports": biogenic_exports,
         "name": name.strip(), "modules": modules, "type": kind,
         "unit_kind": f["unit_kind"], "unit_amount": float(amount),
         "unit": f["unit"], "method": method, "expected_categories": expected,
@@ -339,6 +344,73 @@ def check_definition(name: str, f: Dict, lines: Dict, line: int) -> Dict:
     }
 
 
+def _check_biogenic(f: Dict, modules: List[str], at):
+    """The biogenic carbon content and the co-products that carry
+    carbon out of A1 to A3, as declared in the EPD block."""
+    content = f.get("biogenic_content")
+    exports = f.get("biogenic_exports") or []
+    if not f["biogenic"]:
+        if content or exports:
+            line = content["line"] if content else exports[0]["line"]
+            raise BasicError(
+                "BIOGENIC CONTENT and BIOGENIC EXPORT belong with BIOGENIC "
+                "CARBON YES, and the block says BIOGENIC CARBON NO.", line,
+                hint="Say BIOGENIC CARBON YES if the product or its "
+                     "packaging contains biogenic carbon; otherwise remove "
+                     "the line.")
+        return None, []
+    if not content:
+        raise BasicError(
+            f"BIOGENIC CARBON YES needs the biogenic carbon content of "
+            f"the product ({en15804.CLAUSE_BIOGENIC_CONTENT}).",
+            at("biogenic"),
+            hint="Add BIOGENIC CONTENT PRODUCT n kg C [PACKAGING n kg C] "
+                 "per declared unit, or BIOGENIC CONTENT PRODUCT FROM MASS "
+                 "n kg DRY to work it out from the oven-dry mass of wood.")
+    out = {"line": content["line"], "packaging": 0.0}
+    for part in ("product", "packaging"):
+        given = content.get(part)
+        if given is None:
+            continue
+        if "dry_mass" in given:
+            mass = given["dry_mass"]
+            if not isinstance(mass, (int, float)) or mass < 0:
+                raise BasicError(
+                    "The oven-dry mass is a number of kg, zero or more.",
+                    content["line"])
+            out[part] = float(mass) * en15804.CARBON_FRACTION_OF_DRY_WOOD
+            out[part + "_from_mass"] = float(mass)
+        else:
+            carbon = given["carbon"]
+            if not isinstance(carbon, (int, float)) or carbon < 0:
+                raise BasicError(
+                    "The biogenic carbon content is a number of kg C, zero "
+                    "or more.", content["line"])
+            out[part] = float(carbon)
+    if out["product"] + out["packaging"] <= 0:
+        raise BasicError(
+            "BIOGENIC CARBON YES, but the declared content is zero.",
+            content["line"],
+            hint="Give the kg of biogenic carbon in the product (and the "
+                 "packaging) per declared unit, or say BIOGENIC CARBON NO.")
+    checked = []
+    for x in exports:
+        if x["module"] not in PRODUCT_STAGE:
+            raise BasicError(
+                f"BIOGENIC EXPORT names module {x['module']}. It declares "
+                f"co-products that leave the product stage, so the module "
+                f"is A1, A2 or A3.", x["line"],
+                hint="Carbon that leaves at end of life is an emission in "
+                     "the C module where it leaves; it needs no line here.")
+        if not isinstance(x["carbon"], (int, float)) or x["carbon"] <= 0:
+            raise BasicError(
+                "The carbon a co-product carries out is a number of kg C "
+                "above zero.", x["line"])
+        checked.append({"module": x["module"], "item": str(x["item"]),
+                        "carbon": float(x["carbon"])})
+    return out, checked
+
+
 def field_values(stmt, eval_str, eval_num) -> Dict:
     """The fields of an EpdStmt with their expressions evaluated."""
     f = dict(stmt.fields)
@@ -352,6 +424,17 @@ def field_values(stmt, eval_str, eval_num) -> Dict:
         elif key == "exempt":
             out[key] = {k: (v if k == "line" else eval_str(v))
                         for k, v in value.items()}
+        elif key == "biogenic_content":
+            content = {"line": value["line"]}
+            for part in ("product", "packaging"):
+                if part in value:
+                    content[part] = {k: eval_num(v)
+                                     for k, v in value[part].items()}
+            out[key] = content
+        elif key == "biogenic_exports":
+            out[key] = [{"module": x["module"], "item": eval_str(x["item"]),
+                         "carbon": eval_num(x["carbon"]), "line": x["line"]}
+                        for x in value]
         elif key == "cutoffs":
             out[key] = [{"module": c["module"], "item": eval_str(c["item"]),
                          "percent": c["percent"], "line": c["line"]}
@@ -363,7 +446,7 @@ def field_values(stmt, eval_str, eval_num) -> Dict:
 
 # ── the workflow ─────────────────────────────────────────────
 
-class EpdWorkflow:
+class EpdWorkflow(EpdToolkitMixin):
     """The active EPD of a session: its definition and how far the
     work has got. Held in runtime.epd."""
 
@@ -382,6 +465,7 @@ class EpdWorkflow:
         self.results: Dict[str, Dict[str, float]] = {}
         self.units = {c["name"]: c["unit"] for c in categories}
         self.dq: Optional[Dict] = None
+        self.biogenic: Optional[Dict] = None     # the carbon balances
         self.reported = False           # EPD REPORT has passed
         self.current: Optional[Dict] = None      # process being built
         self._notes: List[str] = []
@@ -421,6 +505,12 @@ class EpdWorkflow:
         names = [c["name"] for c in self.categories]
         if given:
             return given if given in names else ""
+        # by the code in brackets at the end of the name, then by name
+        code = (self.profile.gwp_ghg_code if self.profile is not None
+                else "GWP-GHG")
+        by_code = self.category_with_code(code)
+        if by_code:
+            return by_code
         hits = [n for n in names if "gwp-ghg" in n.lower()
                 or re.search(r"\bghg\b", n.lower())]
         return hits[0] if len(hits) == 1 else ""
@@ -624,6 +714,7 @@ class EpdWorkflow:
             tags = {"module": code, "role": "process",
                     "control": current["control"]}
             tags.update(provenance_tags(stmt.provenance, self.i._eval_str))
+            tags.update(self.i._rating_tags(stmt.ratings))
             done = self.bridge.set_process_tags(
                 result["process_id"], tags, TAG_PREFIX,
                 provenance_documentation(stmt.provenance))
@@ -881,10 +972,12 @@ class EpdWorkflow:
         total = self._total_of(code)
         if not total:
             return None
-        desc = self.bridge.find_system(total["name"])
-        if desc is None or desc.name != total["name"]:
+        # by its reference process, not by name: two products of one
+        # study have module systems with the same names
+        found = self.bridge.system_for_process(total["id"])
+        if found is None:
             return None
-        state["system"] = {"id": desc.id, "name": desc.name}
+        state["system"] = {"id": found["id"], "name": found["name"]}
         return state["system"]
 
     def _require_systems(self, line: int, command: str) -> Dict[str, Dict]:
@@ -1055,7 +1148,7 @@ class EpdWorkflow:
 
         problems, notes = [], []
         for code, system in systems.items():
-            result = self.bridge.validate_system(system["name"], False)
+            result = self.bridge.validate_system(system["id"], False)
             if "error" in result:
                 raise BasicError(f"Module {code}: {result['error']}", line)
             self.i._record_validation(result)
@@ -1131,14 +1224,39 @@ class EpdWorkflow:
         systems = self._require_systems(line, "EPD CALCULATE")
         self.i._default("ALLOCATE")
         names = [c["name"] for c in self.categories]
+        biogenic_category = ""
+        if self.d["biogenic"]:
+            biogenic_category = self.category_with_code(
+                en15804.GWP_BIOGENIC_CODE)
+            if not biogenic_category:
+                raise BasicError(
+                    f"The GWP-biogenic indicator of '{self.d['method']}' "
+                    f"could not be picked out: no category name ends with "
+                    f"({en15804.GWP_BIOGENIC_CODE}).", line,
+                    hint="BIOGENIC CARBON YES checks the carbon balance on "
+                         "that indicator. openLCA's EN 15804 method packs "
+                         "name it 'Climate change - Biogenic "
+                         "(GWP-biogenic)'.")
         results = {}
+        bio_split = {}
         for code, system in systems.items():
-            self.i._require_valid(system["name"], line, "EPD CALCULATE")
+            self.i._require_valid(system["id"], line, "EPD CALCULATE")
             self.out.write(f"  Calculating {code}: {system['name']}...")
-            result = self.bridge.calculate(system["name"], self.d["method"], "")
-            if "error" in result:
-                raise BasicError(f"Module {code}: {result['error']}", line)
-            got = {i["category"]: i["amount"] for i in result["impacts"]}
+            if biogenic_category:
+                split = self.bridge.flow_split(
+                    system["id"], self.d["method"], biogenic_category,
+                    en15804.BIOGENIC_CO2_FLOW_NAME)
+                if "error" in split:
+                    raise BasicError(f"Module {code}: {split['error']}", line)
+                bio_split[code] = split
+                got = split["impacts"]
+            else:
+                result = self.bridge.calculate(system["id"],
+                                               self.d["method"], "")
+                if "error" in result:
+                    raise BasicError(f"Module {code}: {result['error']}",
+                                     line)
+                got = {i["category"]: i["amount"] for i in result["impacts"]}
             lost = [n for n in names if n not in got]
             if lost:
                 raise BasicError(
@@ -1146,10 +1264,27 @@ class EpdWorkflow:
                     f"{len(lost)} of the method's categories (first: "
                     f"'{lost[0]}').", line)
             results[code] = got
-        self.results = results
         self.dq = None
         self.reported = False
+        self.biogenic = None
         self.out.write(self._table_text(results))
+        if biogenic_category:
+            found = self.biogenic_check(line, bio_split)
+            self._biogenic_print(found, biogenic_category)
+            if not found["passed"]:
+                self.results = {}
+                self.i._emit("epd_biogenic", found)
+                n = len(found["problems"])
+                raise BasicError(
+                    f"EPD CALCULATE: the biogenic carbon of the model does "
+                    f"not balance ({n} problem{'s' if n != 1 else ''}, "
+                    f"listed above). The results are not kept.", line,
+                    hint="Correct the model (the uptake in A1 to A3, the "
+                         "carbon co-products carry out, the release or "
+                         "export at end of life, module D), then run EPD "
+                         "SYSTEMS, EPD CHECK and EPD CALCULATE again.")
+            self.biogenic = found
+        self.results = results
         self.out.write("  Module D is shown on its own: it is never part of "
                        "a total.")
         nxt = ("EPD DATA QUALITY" if self.profile is not None
@@ -1159,6 +1294,28 @@ class EpdWorkflow:
             "epd": self.name, "method": self.d["method"],
             "modules": results, "units": self.units,
             "A1-A3": self._stage_total(results)})
+
+    def _biogenic_print(self, found: Dict, category: str):
+        out = self.out
+        d = self.d
+        co2 = found["biogenic_co2"]
+        out.write(f"  Biogenic carbon ('{category}', the CO2 in it):")
+        out.write("    " + "  ".join(f"{c} {_fmt(co2[c])}"
+                                     for c in d["modules"]))
+        out.write(
+            f"    Declared content: {found['content_product_kg_c']:g} kg C "
+            f"in the product, {found['content_packaging_kg_c']:g} kg C in "
+            f"the packaging = {_fmt(found['stored_kg_co2'])} kg CO2. "
+            f"A1 to A3: {_fmt(found['uptake_a1_a3'])} (expected "
+            f"{_fmt(found['expected_a1_a3'])}). A to C: "
+            f"{_fmt(found['sum_a_to_c'])}.")
+        for x in found["exports"]:
+            out.write(f"    Co-product leaving {x['module']}: {x['item']}, "
+                      f"{x['carbon']:g} kg C")
+        for text in found["problems"]:
+            out.write(f"  ERROR: {text}")
+        if found["passed"]:
+            out.write("    The balances close.")
 
     def _stage_total(self, results: Dict) -> Dict[str, float]:
         return {c["name"]: sum(results[m][c["name"]] for m in PRODUCT_STAGE)
@@ -1198,253 +1355,6 @@ class EpdWorkflow:
 
     # ── EPD DATA QUALITY ─────────────────────────────────────
 
-    def _parts(self, code: str, system: Dict, line: int,
-               parameters: Optional[Dict] = None) -> Dict:
-        """Split a module's result between the foreground processes
-        (their direct impacts) and the bridges that feed them (their
-        upstream impacts). Together they are the module's total."""
-        total = self._total_of(code)
-        direct, upstream, info = [], [], {}
-        seen = set()
-        stack = [total["id"]]
-        while stack:
-            pid = stack.pop()
-            if pid in seen:
-                continue
-            seen.add(pid)
-            st = self.bridge.process_structure(pid)
-            if "error" in st:
-                continue
-            bridged = self.i._is_bridge(st["name"], st["category"])
-            mine = self.in_folder(st["category"])
-            tags = self._tags(pid)
-            info[pid] = {"id": pid, "name": st["name"], "module": code,
-                         "tags": tags, "is_bridge": bridged,
-                         "is_total": tags.get("role") == "total"
-                         or pid == total["id"]}
-            if bridged or not mine:
-                upstream.append(pid)
-                continue
-            direct.append(pid)
-            stack.extend(l["provider_id"] for l in st["links"])
-        got = self.bridge.process_contributions(
-            system["name"], self.d["method"], direct=direct,
-            upstream=upstream, parameters=parameters)
-        if "error" in got:
-            raise BasicError(f"Module {code}: {got['error']}", line)
-        parts = []
-        for pid in direct:
-            if pid in got["direct"]:
-                parts.append(dict(info[pid], values=got["direct"][pid]))
-        for pid in upstream:
-            if pid in got["upstream"]:
-                parts.append(dict(info[pid], values=got["upstream"][pid]))
-        return {"totals": got["totals"], "parts": parts}
-
-    def data_quality(self, line: int):
-        p = self.profile
-        if p is None:
-            raise BasicError(
-                "EPD DATA QUALITY applies a programme's rules, and the EPD "
-                "block names no programme.", line,
-                hint='Add PROGRAMME "IES" GPI "5.1.0" to the EPD block.')
-        if not self.results:
-            raise BasicError(
-                "EPD DATA QUALITY needs the results.", line,
-                hint="Run EPD CALCULATE first.")
-        if not self.gwp_indicator:
-            raise BasicError(
-                f"The GWP-GHG indicator of '{self.d['method']}' could not "
-                f"be picked out by name.", line,
-                hint='Name it in the EPD block: GWP INDICATOR "full name of '
-                     'the category".')
-        systems = self._require_systems(line, "EPD DATA QUALITY")
-        gwp = self.gwp_indicator
-        year_now = self.today().year
-        errors: List[str] = []
-
-        split = {code: self._parts(code, systems[code], line)
-                 for code in self.d["modules"]}
-
-        # One entry per process or bridge, across the modules it is in.
-        entries: Dict[str, Dict] = {}
-        for code, data in split.items():
-            for part in data["parts"]:
-                e = entries.setdefault(part["id"], {
-                    "id": part["id"], "name": part["name"],
-                    "tags": part["tags"], "is_bridge": part["is_bridge"],
-                    "is_total": part["is_total"], "modules": [],
-                    "by_module": {}})
-                e["modules"].append(code)
-                e["by_module"][code] = part["values"]
-
-        def magnitude(e, cat, codes):
-            return sum(abs(e["by_module"][c].get(cat, 0.0))
-                       for c in codes if c in e["by_module"])
-
-        for e in entries.values():
-            tags = e["tags"]
-            category = tags.get("data", "")
-            e["category"] = category
-            e["effective"] = category
-            e["year"] = int(tags["year"]) if tags.get("year", "").isdigit() else None
-            share = tags.get("share")
-            e["primary_share"] = (float(share) if share not in (None, "")
-                                  else (100.0 if category == "PRIMARY" else 0.0))
-            carries = any(magnitude(e, c["name"], e["modules"]) > 0
-                          for c in self.categories)
-            if e["is_total"] and not category:
-                continue
-            if not category:
-                if carries:
-                    errors.append(
-                        f"'{e['name']}' has no data declaration, so its "
-                        f"share cannot be placed ({p.clause('data_quality')}).")
-                continue
-            if e["year"] is None:
-                continue
-            age = year_now - e["year"]
-            if category == "PRIMARY" and age > p.primary_max_age_years:
-                errors.append(
-                    f"'{e['name']}': primary data from {e['year']} is "
-                    f"{age} years old; the limit is "
-                    f"{p.primary_max_age_years} ({p.clause('primary_age')}).")
-            if category == "SECONDARY" and age > p.secondary_max_age_years:
-                e["effective"] = "PROXY"
-                errors.append(
-                    f"'{e['name']}': secondary data with reference year "
-                    f"{e['year']} is {age} years old; the limit is "
-                    f"{p.secondary_max_age_years}, and older data counts as "
-                    f"proxy data ({p.clause('secondary_age')}).")
-
-        # Share of primary data, and the rows above the threshold
-        stage = [c for c in p.product_stage if c in split]
-        stage_total = sum(magnitude(e, gwp, stage) for e in entries.values())
-        rows, others = [], {"share": 0.0, "primary": 0.0, "count": 0}
-        primary_total = 0.0
-        for e in sorted(entries.values(),
-                        key=lambda e: -magnitude(e, gwp, stage)):
-            amount = magnitude(e, gwp, stage)
-            if not stage_total or not amount:
-                continue
-            share = 100.0 * amount / stage_total
-            primary = share * e["primary_share"] / 100.0
-            primary_total += primary
-            if share > p.gwp_row_threshold_pct:
-                rows.append({
-                    "process": e["name"],
-                    "modules": [m for m in e["modules"] if m in stage],
-                    "source_type": e["tags"].get("source", ""),
-                    "source": e["tags"].get("provider", ""),
-                    "year": e["year"], "category": e["effective"],
-                    "share_of_gwp": share, "primary_share": primary})
-            else:
-                others["share"] += share
-                others["primary"] += primary
-                others["count"] += 1
-        primary_text = (f">{p.primary_share_cap_pct:g}%"
-                        if primary_total > p.primary_share_cap_pct
-                        else _pct(primary_total))
-
-        # Proxy data, per indicator: A to C together, D on its own
-        groups = [("A to C", [c for c in self.d["modules"] if c != "D"])]
-        if "D" in self.d["modules"]:
-            groups.append(("D", ["D"]))
-        proxy = []
-        for label, codes in groups:
-            for c in self.categories:
-                cat = c["name"]
-                whole = sum(magnitude(e, cat, codes) for e in entries.values())
-                if not whole:
-                    continue
-                part = sum(magnitude(e, cat, codes) for e in entries.values()
-                           if e["effective"] == "PROXY")
-                share = 100.0 * part / whole
-                if share > 0:
-                    proxy.append({"modules": label, "indicator": cat,
-                                  "share": share})
-                if share > p.proxy_limit_pct:
-                    errors.append(
-                        f"Proxy data gives {_pct(share)} of '{cat}' in "
-                        f"modules {label}; the limit is "
-                        f"{p.proxy_limit_pct:g}% of any indicator "
-                        f"({p.clause('proxy')}).")
-
-        # What the data quality assessment has to cover
-        codes = groups[0][1]
-        needed: Dict[str, int] = {}
-        for c in self.categories:
-            cat = c["name"]
-            ranked = sorted(entries.values(),
-                            key=lambda e: -magnitude(e, cat, codes))
-            whole = sum(magnitude(e, cat, codes) for e in ranked)
-            if not whole:
-                continue
-            running = 0.0
-            for e in ranked:
-                if running >= p.coverage_pct / 100.0 * whole:
-                    break
-                running += magnitude(e, cat, codes)
-                needed[e["name"]] = needed.get(e["name"], 0) + 1
-        coverage = sorted(needed.items(), key=lambda kv: (-kv[1], kv[0]))
-
-        out = self.out
-        out.write(f"  EPD DATA QUALITY: {self.name} "
-                  f"({p.title}, GPI {self.d['gpi']})")
-        out.write(f"  Processes above {p.gwp_row_threshold_pct:g}% of "
-                  f"'{gwp}' in A1-A3:")
-        out.write("    " + "Process".ljust(44) + "Source type".ljust(16)
-                  + "Source".ljust(20) + "Year".ljust(6)
-                  + "Category".ljust(11) + "Share".rjust(8)
-                  + "Primary".rjust(9))
-        for r in rows:
-            out.write("    " + r["process"][:42].ljust(44)
-                      + r["source_type"][:14].ljust(16)
-                      + r["source"][:18].ljust(20)
-                      + str(r["year"] or "").ljust(6)
-                      + r["category"].lower().ljust(11)
-                      + _pct(r["share_of_gwp"]).rjust(8)
-                      + _pct(r["primary_share"]).rjust(9))
-        if others["count"]:
-            out.write("    " + f"Other processes ({others['count']})".ljust(97)
-                      + _pct(others["share"]).rjust(8)
-                      + _pct(others["primary"]).rjust(9))
-        out.write(f"  Share of primary data in '{gwp}', A1-A3: {primary_text}")
-        if proxy:
-            worst = max(proxy, key=lambda r: r["share"])
-            out.write(f"  Proxy data: at most {_pct(worst['share'])} of an "
-                      f"indicator ('{worst['indicator']}', modules "
-                      f"{worst['modules']}); limit {p.proxy_limit_pct:g}%.")
-        else:
-            out.write("  Proxy data: none.")
-        out.write(f"  The data quality assessment has to cover these "
-                  f"({p.coverage_pct:g}% of each indicator, modules A to C):")
-        for name, count in coverage:
-            out.write(f"    {name} (needed for {count} of "
-                      f"{len(self.categories)} indicators)")
-        out.write(f"  The EPD has to carry the programme's statement on how "
-                  f"the share of primary data is calculated "
-                  f"({p.clause('primary_share_statement')}).")
-        for text in errors:
-            out.write(f"  ERROR: {text}")
-
-        self.dq = {
-            "passed": not errors, "indicator": gwp, "rows": rows,
-            "others": others, "primary_share": primary_total,
-            "primary_share_text": primary_text, "proxy": proxy,
-            "coverage": [{"process": n, "indicators": k} for n, k in coverage],
-            "errors": errors}
-        self.i._emit("epd_data_quality", self.dq)
-        if errors:
-            raise BasicError(
-                f"EPD DATA QUALITY found {len(errors)} "
-                f"problem{'s' if len(errors) != 1 else ''} (listed above). "
-                f"Programme rules have no override.", line,
-                hint="Replace or re-declare the data, rebuild what "
-                     "changed, then run EPD SYSTEMS, EPD CHECK, EPD "
-                     "CALCULATE and EPD DATA QUALITY again.")
-        out.write('  EPD DATA QUALITY passed. Next: EPD REPORT "file.csv"')
-
     # ── EPD REPORT ───────────────────────────────────────────
 
     def _electricity_rows(self, line: int) -> List[Dict]:
@@ -1480,7 +1390,8 @@ class EpdWorkflow:
                              "running the bridge for 1 kWh, so its unit "
                              "has to convert to kWh.")
                 result = self.bridge.calculate(
-                    made.get("system_name", b["name"]), self.d["method"], "")
+                    made.get("system_id") or made.get("system_name", b["name"]),
+                    self.d["method"], "")
                 if "error" in result:
                     raise BasicError(
                         f"Electricity bridge '{b['name']}': "
@@ -1521,7 +1432,7 @@ class EpdWorkflow:
             got = None
             if switched:
                 got = self.bridge.process_contributions(
-                    system["name"], self.d["method"],
+                    system["id"], self.d["method"],
                     parameters={LOCATION_SWITCH: 1.0})
                 if "error" in got and "not found in the system" in got["error"]:
                     got = None          # no switched bridge in this module
@@ -1572,6 +1483,24 @@ class EpdWorkflow:
                                              d["database_version"]) if x)
              or "Not stated"])
         add(["Biogenic carbon in the product", "Yes" if d["biogenic"] else "No"])
+        if d["biogenic"]:
+            content = d["biogenic_content"]
+            add(["Biogenic carbon content in product (kg C)",
+                 f"{content['product']:g}"])
+            add(["Biogenic carbon content in packaging (kg C)",
+                 f"{content['packaging']:g}"])
+            if "product_from_mass" in content:
+                add(["Biogenic carbon content worked out from",
+                     f"{content['product_from_mass']:g} kg oven-dry mass at "
+                     f"{en15804.CARBON_FRACTION_OF_DRY_WOOD:g} kg C per kg "
+                     f"({en15804.CLAUSE_BIOGENIC_UPTAKE})"])
+            for x in d["biogenic_exports"]:
+                add([f"Biogenic carbon leaving {x['module']} in co-products "
+                     f"(kg C)", f"{x['carbon']:g}", x["item"]])
+            add(["Biogenic carbon balance",
+                 "Checked: the biogenic CO2 of GWP-biogenic is the declared "
+                 "content in A1 to A3, sums to zero over A to C and is zero "
+                 f"in D ({self._biogenic_clause(en15804.CLAUSE_BIOGENIC_FACTORS)})"])
         add(["Modules declared", ", ".join(d["modules"])])
         if d["exempt"]:
             add(["Modules C1 to C4 and D",
@@ -1717,10 +1646,10 @@ class EpdWorkflow:
         folder = f"{self.folder}/{self.RESULTS_FOLDER}"
         modules = []
         for code, system in systems.items():
-            self.i._require_valid(system["name"], line, "EPD SAVE")
+            self.i._require_valid(system["id"], line, "EPD SAVE")
             self.out.write(f"  Storing the result of {code}: "
                            f"{system['name']}...")
-            opened = self.bridge.open_result(system["name"], d["method"],
+            opened = self.bridge.open_result(system["id"], d["method"],
                                              temporary=True)
             if "error" in opened:
                 raise BasicError(f"Module {code}: {opened['error']}", line)

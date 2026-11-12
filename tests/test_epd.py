@@ -70,6 +70,14 @@ def epd_block(modules=FULL, programme=True, extra="", unit="DECLARED UNIT 1, kg"
 SECONDARY = 'DATA SECONDARY SOURCE "Database" PROVIDER "synthetic 1" YEAR 2024'
 PRIMARY = 'DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025'
 
+# The three representativeness ratings every dataset in the 80% coverage
+# has to carry (0.4.0). The reason holds a comma on purpose.
+RATINGS = (
+    'RATING GEOGRAPHY "Good" REASON "Synthetic data, same region"\n'
+    '  RATING TECHNOLOGY "Very good" REASON "Synthetic data, same '
+    'technology"\n'
+    '  RATING TIME "Fair" REASON "Synthetic data, nine years old"')
+
 
 def bridges(client, electricity="RESIDUAL", steel_data=SECONDARY,
             location_based=True, country="GB", region=""):
@@ -82,6 +90,7 @@ def bridges(client, electricity="RESIDUAL", steel_data=SECONDARY,
 BRIDGE "Steel", kg
   PROVIDER "{STEEL}"
   {steel_data}
+  {RATINGS}
 END BRIDGE
 BRIDGE "Electricity", kWh
   PROVIDER "{gb}"
@@ -89,14 +98,17 @@ BRIDGE "Electricity", kWh
   COUNTRY "{country}"
 {reg}  ENERGY SOURCE "Test mix"
 {second}  DATA PRIMARY SOURCE "Database" PROVIDER "synthetic 1" YEAR 2024
+  {RATINGS}
 END BRIDGE
 BRIDGE "Lorry", t*km
   PROVIDER "{TRANSPORT}"
   DATA PRIMARY SOURCE "Database" PROVIDER "synthetic 1" YEAR 2024
+  {RATINGS}
 END BRIDGE
 BRIDGE "Landfill", kg WASTE
   PROVIDER "{LANDFILL}"
   {SECONDARY}
+  {RATINGS}
 END BRIDGE
 '''
 
@@ -1366,8 +1378,12 @@ def test_the_coverage_list(session, client):
     build(session, client)
     _, data = dq(session)
     cover = {c["process"]: c["indicators"] for c in data["coverage"]}
-    assert cover["BRIDGE | Steel | kg"] >= 30
-    assert all(1 <= n <= 38 for n in cover.values())
+    # 0.4.0: the coverage runs over the 20 impact indicators only, not
+    # over all 38 categories of the method
+    assert data["impact_indicators"] == 20
+    assert data["indicators_reported"] == 38
+    assert cover["BRIDGE | Steel | kg"] >= 15
+    assert all(1 <= n <= 20 for n in cover.values())
     assert "A1: Raw material supply" not in cover        # totals carry nothing
 
 

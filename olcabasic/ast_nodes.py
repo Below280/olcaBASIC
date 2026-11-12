@@ -186,6 +186,7 @@ class BridgeStmt(Statement):
     region: Expr = None            # REGION "name" (sub-national grid)
     energy_source: Expr = None     # ENERGY SOURCE "wind"
     location_based_provider: Expr = None   # LOCATION BASED PROVIDER "uuid"
+    ratings: Dict = field(default_factory=dict)   # RATING aspect "level" ...
 
 
 # ── Process ──────────────────────────────────────────────
@@ -205,6 +206,7 @@ class ProcessStmt(Statement):
     provenance: Dict = None  # DATA PRIMARY|SECONDARY|PROXY ...
     control: str = ""        # CONTROL DIRECT|NONE
     fields: Dict = field(default_factory=dict)  # ALLOCATION, DOCUMENT, ...
+    ratings: Dict = field(default_factory=dict)  # RATING aspect "level" ...
 
 
 # ── Edit process ─────────────────────────────────────────
@@ -228,6 +230,7 @@ class EditProcessStmt(Statement):
     param_uncertainty: Dict = field(default_factory=dict)  # name -> spec
     remove_allocation: List = field(default_factory=list)
     remove_social: List = field(default_factory=list)
+    ratings: Dict = field(default_factory=dict)  # RATING aspect "level" ...
 
 
 @dataclass
@@ -676,6 +679,8 @@ class EpdCommandStmt(Statement):
     skip: bool = False                 # EPD CHECK SKIP "reason"
     location_based: bool = False       # EPD REPORT ... LOCATION BASED
     replace: bool = False              # EPD SAVE REPLACE
+    parameter_set: Expr = None         # EPD DATA QUALITY PARAMETER SET "x"
+    from_file: Expr = None             # EPD DATA QUALITY FROM "file.csv"
     options: Dict = field(default_factory=dict)   # EPD SAVE: who and when
 
 
@@ -856,3 +861,14 @@ class SaveResultAsStmt(Statement):
 class ShutdownStmt(Statement):
     """SHUTDOWN SERVER CONFIRM"""
     confirm: bool = False
+
+
+# ── EPD toolkit (olcaBASIC 0.4.0) ────────────────────────
+
+@dataclass
+class EpdSensitivityStmt(Statement):
+    """EPD SENSITIVITY BY n% ... GROUP "name" VARY a, b ... END EPD
+    SENSITIVITY"""
+    percent: float = 0.0
+    groups: List[Dict] = field(default_factory=list)  # {"name", "params", "line"}
+    save: Expr = None

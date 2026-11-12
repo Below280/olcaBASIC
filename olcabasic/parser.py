@@ -13,6 +13,7 @@ from .ast_nodes import *
 from .parser_results import ResultsParserMixin, RESULT_HEADS
 from .parser_fields import FieldsParserMixin
 from .parser_entities import EntitiesParserMixin, SIMPLE_TYPES
+from .parser_toolkit import ToolkitParserMixin
 
 
 class ParseError(Exception):
@@ -27,7 +28,8 @@ class ParseError(Exception):
         super().__init__(f"Line {line}: {full}" if line else full)
 
 
-class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
+class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
+             ToolkitParserMixin):
     """Recursive descent parser for olcaBASIC."""
 
     def __init__(self, tokens: List[Token]):
@@ -841,7 +843,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
             if (self.at_keyword("FOLDER", "PROVIDER", "WASTE", "DATA",
                                 "LOCATION")
                     or self.at_word("ELECTRICITY", "COUNTRY", "REGION",
-                                    "ENERGY")
+                                    "ENERGY", "RATING")
                     or self.at_end_of("BRIDGE")):
                 # Block form
                 while not self.at_keyword("END"):
@@ -858,6 +860,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                         is_waste = True
                     elif self.at_keyword("DATA"):
                         extra["provenance"] = self.parse_provenance()
+                    elif self.match_word("RATING"):
+                        self.parse_rating(extra.setdefault("ratings", {}))
                     elif self.match_word("ELECTRICITY"):
                         if not self.at_word("CONTRACT", "RESIDUAL",
                                             "CONSUMPTION"):
@@ -891,8 +895,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                         raise ParseError(
                             f"'{self.peek().value}' is not allowed inside "
                             f"BRIDGE (expected FOLDER, PROVIDER, WASTE, DATA, "
-                            f"ELECTRICITY, COUNTRY, REGION, ENERGY SOURCE, "
-                            f"LOCATION BASED PROVIDER or END BRIDGE)",
+                            f"RATING, ELECTRICITY, COUNTRY, REGION, ENERGY "
+                            f"SOURCE, LOCATION BASED PROVIDER or END BRIDGE)",
                             self.current_line())
                     self.expect_newline()
                     self.skip_newlines()
@@ -930,6 +934,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
         local_params = []
         read_data = False
         provenance = None
+        ratings = {}
         control = ""
         fields = {}
 
@@ -984,6 +989,11 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                 provenance = self.parse_provenance()
                 self.expect_newline()
 
+            elif self.at_word("RATING"):
+                self.advance()
+                self.parse_rating(ratings)
+                self.expect_newline()
+
             elif self.at_word("CONTROL"):
                 control = self.parse_control()
                 self.expect_newline()
@@ -1022,7 +1032,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
             description=description, flow_schema=flow_schema,
             process_schema=process_schema, exchanges=exchanges,
             local_params=local_params, read_data=read_data,
-            provenance=provenance, control=control, fields=fields)
+            provenance=provenance, control=control, fields=fields,
+            ratings=ratings)
 
     def parse_pedigree(self):
         """PEDIGREE (1,2,1,1,3) or PEDIGREE "(1;2;1;1;3)" """
@@ -2521,6 +2532,14 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                 stmt.provenance = self.parse_provenance()
                 self.expect_newline()
 
+            elif self.at_word("RATING") or (
+                    kw == "SET" and self.peek_at(1).upper() == "RATING"):
+                if kw == "SET":
+                    self.advance()
+                self.advance()
+                self.parse_rating(stmt.ratings)
+                self.expect_newline()
+
             elif self.at_word("CONTROL") or (
                     kw == "SET" and self.peek_at(1).upper() == "CONTROL"):
                 if kw == "SET":
@@ -2558,7 +2577,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
 
     DATA_CATEGORIES = ("PRIMARY", "SECONDARY", "PROXY")
     EPD_COMMANDS = ("SYSTEMS", "CHECK", "CALCULATE", "REPORT", "DATA",
-                    "STATUS", "CLOSE", "SAVE")
+                    "STATUS", "CLOSE", "SAVE", "DQ", "SENSITIVITY",
+                    "EXPORT")
 
     # EPD SAVE: word(s) -> (key, kind)
     EPD_SAVE_OPTIONS = {
@@ -2718,9 +2738,18 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                     self.advance()
                     codes.append(self._module_code("MODULES"))
                 f["modules"] = codes
+            elif self.at_word("BIOGENIC") and self.peek_at(1).upper() in (
+                    "CONTENT", "EXPORT"):
+                self.advance()
+                if self.advance().upper() == "CONTENT":
+                    self.parse_biogenic_content(f, lines, ln)
+                else:
+                    self.parse_biogenic_export(f, ln)
             elif self.match_word("BIOGENIC"):
                 if not self.match_word("CARBON"):
-                    raise ParseError("Expected BIOGENIC CARBON YES or NO.", ln)
+                    raise ParseError(
+                        "Expected BIOGENIC CARBON YES or NO, BIOGENIC "
+                        "CONTENT or BIOGENIC EXPORT.", ln)
                 once("biogenic", ln, "BIOGENIC CARBON")
                 if self.match_word("YES"):
                     f["biogenic"] = True
@@ -2793,8 +2822,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside EPD (expected "
                     f"PROGRAMME, PCR, DATABASE, DECLARED UNIT, FUNCTIONAL "
-                    f"UNIT, METHOD, FOLDER, MODULES, BIOGENIC CARBON, EXEMPT "
-                    f"C AND D, CUTOFF, GWP INDICATOR or END EPD)", ln)
+                    f"UNIT, METHOD, FOLDER, MODULES, BIOGENIC CARBON, "
+                    f"BIOGENIC CONTENT, BIOGENIC EXPORT, EXEMPT C AND D, "
+                    f"CUTOFF, GWP INDICATOR or END EPD)", ln)
             self.expect_newline()
             self.skip_newlines()
 
@@ -2805,11 +2835,48 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
 
     def parse_epd_command(self, line: int) -> EpdCommandStmt:
         command = self.advance().upper()
+        if command == "SENSITIVITY":
+            return self.parse_epd_sensitivity(line)
         stmt = EpdCommandStmt(line=line, command=command)
         if command == "DATA":
             if not self.match_keyword("QUALITY"):
                 raise ParseError("Expected EPD DATA QUALITY.", line)
             stmt.command = "DATA QUALITY"
+            if (self.at_word("PARAMETER")
+                    and self.peek_at(1).upper() == "SET"):
+                self.advance()
+                self.advance()
+                if self._end_of_line():
+                    raise ParseError(
+                        "PARAMETER SET needs the name of a parameter set.",
+                        line, hint='EPD DATA QUALITY PARAMETER SET "name"')
+                stmt.parameter_set = self.parse_string_or_expr()
+            elif self.match_keyword("FROM"):
+                if self._end_of_line():
+                    raise ParseError(
+                        "FROM needs a CSV file of scenarios.", line,
+                        hint='EPD DATA QUALITY FROM "scenarios.csv"')
+                stmt.from_file = self.parse_string_or_expr()
+        elif command == "DQ":
+            if self.match_word("SHEET"):
+                stmt.command = "DQ SHEET"
+                self.parse_epd_file_command(
+                    stmt, "DQ SHEET", 'EPD DQ SHEET "dq_register.csv"')
+            elif self.match_word("TABLE"):
+                stmt.command = "DQ TABLE"
+                self.parse_epd_file_command(
+                    stmt, "DQ TABLE", 'EPD DQ TABLE "data_quality.md"')
+            else:
+                raise ParseError(
+                    "Expected EPD DQ SHEET \"file.csv\" or EPD DQ TABLE "
+                    "\"file.md\".", line)
+        elif command == "EXPORT":
+            if not self.match_word("MODEL"):
+                raise ParseError(
+                    "Expected EPD EXPORT MODEL \"file.json\".", line)
+            stmt.command = "EXPORT MODEL"
+            self.parse_epd_file_command(
+                stmt, "EXPORT MODEL", 'EPD EXPORT MODEL "model.json"')
         elif command == "CHECK":
             if self.match_word("SKIP"):
                 stmt.skip = True

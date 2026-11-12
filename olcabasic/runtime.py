@@ -116,6 +116,9 @@ class Runtime:
         # The active EPD definition, if any (see workflows/epd.py)
         self.epd = None
         self.epd_module: str = ""
+        # The data quality registers of the EPDs assessed in this
+        # session: product name -> rows (EPD DQ TABLE reads them all)
+        self.dq_register: dict = {}
 
         # Results held open in openLCA: name -> {handle, system, method,
         # line}. "" is the current result (see interp_results.py). The
@@ -141,6 +144,17 @@ class Runtime:
 
     def has_var(self, name: str) -> bool:
         return self.current_scope.has(name)
+
+    def is_local(self, name: str) -> bool:
+        """True if the name is a variable of a SUB or FUNCTION that is
+        running (a parameter, or a variable set inside it), not a
+        top-level variable."""
+        scope = self.current_scope
+        while scope is not None and scope is not self.global_scope:
+            if name in scope.variables:
+                return True
+            scope = scope.parent
+        return False
 
     def get_global_vars(self) -> Dict[str, Any]:
         """Get all global-scope variables (for parameter export)."""
@@ -212,4 +226,5 @@ class Runtime:
         self.program_history.clear()
         self.epd = None
         self.epd_module = ""
+        self.dq_register = {}
         self.open_results.clear()

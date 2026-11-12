@@ -311,6 +311,25 @@ class BuildMixin:
                     return ref
         return fp_ref
 
+    def system_for_process(self, process_id: str) -> Optional[Dict]:
+        """The product system built from a process: {"id", "name",
+        "category"}, or None. Looked up by the system's reference
+        process, not by name, so that two processes with the same name
+        (in two folders) each find their own."""
+        process = next((d for d in self._get_descriptors(o.Process)
+                        if d.id == process_id), None)
+        if process is None:
+            return None
+        for ps in self._get_descriptors(o.ProductSystem):
+            if ps.name != process.name:
+                continue
+            full = self.client.get(o.ProductSystem, ps.id)
+            if full is not None and full.ref_process is not None \
+                    and full.ref_process.id == process_id:
+                return {"id": ps.id, "name": ps.name,
+                        "category": getattr(ps, "category", "") or ""}
+        return None
+
     def _fp_of_own_unit(self, unit_name: str):
         """The flow property of a unit the built-in table does not
         know (one made with MAKE UNITS): the unit must be in exactly
@@ -1794,21 +1813,42 @@ class BuildMixin:
             return {"error": f"Process not found: {process_ref}"}
 
         # BUG-06: Pre-flight duplicate check
+        # A system "exists already" when it was built from this very
+        # process. A system of the same name built from another process
+        # (two products with the same module names, say) is a different
+        # system: reusing it would calculate the wrong model.
         existing = self._get_descriptors(o.ProductSystem)
         for ps in existing:
             ps_cat = getattr(ps, "category", "") or ""
-            if ps.name == process.name:
+            if ps.name != process.name:
+                continue
+            full = self.client.get(o.ProductSystem, ps.id)
+            ref = full.ref_process if full is not None else None
+            if ref is not None and ref.id != process.id:
+                if category and ps_cat.strip("/") != category.strip("/"):
+                    continue        # the same name in another folder
                 return {
-                    "system_id": ps.id,
-                    "system_name": ps.name,
-                    "category": ps_cat,
-                    "already_existed": True,
-                    "hint": (
-                        "Product system already exists for this process. "
-                        "Use list_systems or validate_system to inspect it, "
-                        "or delete_entity to remove it before recreating."
-                    ),
+                    "error": (
+                        f"A product system called '{ps.name}' exists "
+                        f"already, built from another process of that name"
+                        + (f" (in folder '{ps_cat}')" if ps_cat else "")
+                        + ". A system takes the name of its process, so "
+                          "the two cannot be told apart by name."),
+                    "hint": "Rename one of the two processes, or give the "
+                            "new system its own folder: SYSTEM \"process\" "
+                            "... FOLDER \"path\" ... END SYSTEM.",
                 }
+            return {
+                "system_id": ps.id,
+                "system_name": ps.name,
+                "category": ps_cat,
+                "already_existed": True,
+                "hint": (
+                    "Product system already exists for this process. "
+                    "Use list_systems or validate_system to inspect it, "
+                    "or delete_entity to remove it before recreating."
+                ),
+            }
 
         # B07: Validate target_amount if provided
         if target_amount is not None:

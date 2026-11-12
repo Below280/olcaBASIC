@@ -25,6 +25,8 @@ from .workflows.epd import (
     EpdWorkflow, TAG_PREFIX, LOCATION_SWITCH, provenance_tags,
     provenance_documentation, tag_value,
 )
+from .workflows import en15804
+from .workflows.epd_toolkit import rating_tags
 from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
@@ -87,6 +89,7 @@ class _QuietSink(OutputSink):
 
 
 _ENTITY_HANDLERS = {
+    "EpdSensitivityStmt": "_exec_epd_sensitivity",
     "EntityFindStmt": "_exec_entity_find",
     "EntityShowStmt": "_exec_entity_show",
     "EntityDeleteStmt": "_exec_entity_delete",
@@ -100,6 +103,7 @@ _ENTITY_HANDLERS = {
 }
 
 _ENTITY_COMMANDS = {
+    "EpdSensitivityStmt": "EPD SENSITIVITY",
     "EntityFindStmt": "FIND", "EntityShowStmt": "SHOW",
     "EntityDeleteStmt": "DELETE", "EntityMoveStmt": "MOVE",
     "EntityExportStmt": "EXPORT", "MakeEntityStmt": "MAKE",
@@ -656,6 +660,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if isinstance(expr, NumberLiteral):
             return str(expr.value)
         if isinstance(expr, Identifier):
+            # A variable of a running SUB is a value, not a parameter:
+            # the SUB may run again with another value, and openLCA has
+            # no parameter of that name.
+            if self.runtime.is_local(expr.name):
+                value = self.runtime.get_var(expr.name)
+                if isinstance(value, (int, float)) \
+                        and not isinstance(value, bool):
+                    return repr(float(value))
             return expr.name
         if isinstance(expr, BinOp):
             left = self._expr_to_formula(expr.left)
@@ -671,9 +683,12 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         return str(self._eval(expr))
 
     def _expr_is_variable(self, expr: Expr) -> bool:
-        """Check if an expression references any named variables."""
+        """Check if an expression references any top-level variable
+        (which is, or becomes, an openLCA parameter). The variables of
+        a running SUB do not count: they are plain values."""
         if isinstance(expr, Identifier):
-            return self.runtime.has_var(expr.name)
+            return (self.runtime.has_var(expr.name)
+                    and not self.runtime.is_local(expr.name))
         if isinstance(expr, BinOp):
             return (self._expr_is_variable(expr.left)
                     or self._expr_is_variable(expr.right))
@@ -1004,6 +1019,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         # What the block declares about the data and the electricity
         tags = provenance_tags(stmt.provenance, self._eval_str)
+        tags.update(self._rating_tags(stmt.ratings))
         if stmt.electricity:
             tags["electricity"] = stmt.electricity
             tags["country"] = tag_value(self._eval_str(stmt.country)).upper()
@@ -1566,6 +1582,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         """Store what the DATA and CONTROL lines of a PROCESS or EDIT
         block declare, as tags on the process. True if there were any."""
         tags = provenance_tags(stmt.provenance, self._eval_str)
+        tags.update(self._rating_tags(stmt.ratings))
         if stmt.control:
             tags["control"] = stmt.control
         if not tags:
@@ -1576,6 +1593,31 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if "error" in done:
             raise BasicError(done["error"], stmt.line)
         return True
+
+    def _rating_tags(self, ratings) -> dict:
+        """The tags RATING lines become, checked against the scale of
+        the active EPD's programme (EN 15804+A2 Annex E otherwise)."""
+        if not ratings:
+            return {}
+        epd = self.runtime.epd
+        levels, clause = en15804.DQ_LEVELS, en15804.CLAUSE_DQ_SCHEME
+        if epd is not None and epd.profile is not None:
+            levels = epd.profile.dq_levels
+        return rating_tags(ratings, self._eval_str, levels, clause)
+
+    def _exec_epd_sensitivity(self, stmt):
+        self._require_bridge(stmt.line)
+        epd = self._require_epd(stmt.line, "EPD SENSITIVITY")
+        if self.runtime.epd_module:
+            raise BasicError(
+                f"EPD SENSITIVITY cannot run inside MODULE "
+                f"{self.runtime.epd_module}.", stmt.line,
+                hint="Close the module with END MODULE first.")
+        groups = [{"name": self._eval_str(g["name"]), "params": g["params"],
+                   "line": g["line"]} for g in stmt.groups]
+        epd.sensitivity(stmt.line, stmt.percent, groups,
+                        self._eval_str(stmt.save)
+                        if stmt.save is not None else "")
 
     # ── EPD workflow ─────────────────────────────────────
 
@@ -1621,7 +1663,18 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         elif command == "CALCULATE":
             epd.calculate(stmt.line)
         elif command == "DATA QUALITY":
-            epd.data_quality(stmt.line)
+            epd.data_quality(
+                stmt.line,
+                self._eval_str(stmt.parameter_set)
+                if stmt.parameter_set is not None else "",
+                self._eval_str(stmt.from_file)
+                if stmt.from_file is not None else "")
+        elif command == "DQ SHEET":
+            epd.dq_sheet(stmt.line, self._eval_str(stmt.argument))
+        elif command == "DQ TABLE":
+            epd.dq_table(stmt.line, self._eval_str(stmt.argument))
+        elif command == "EXPORT MODEL":
+            epd.export_model(stmt.line, self._eval_str(stmt.argument))
         elif command == "REPORT":
             epd.report(stmt.line, self._eval_str(stmt.argument),
                        stmt.location_based)

@@ -2,8 +2,9 @@
 Programme profile: the International EPD System (IES).
 
 Checked against the General Programme Instructions, version 5.1.0,
-Annex A. Clause numbers are given so that each rule can be looked up;
-none of the programme's text is reproduced here.
+Annex A, and PCR 2019:14 version 1.3.1 (Annexes 2 and 3). Clause
+numbers are given so that each rule can be looked up; none of the
+programme's text is reproduced here.
 
 Every threshold is a named value on the profile. A later version of the
 GPI, or another operator, is a new profile, not an edit to the EPD
@@ -15,6 +16,8 @@ override.
 
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Tuple
+
+from .. import en15804
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,43 @@ class Profile:
     # A.5.4: the data quality assessment covers data that together
     # give at least this share of each indicator
     coverage_pct: float = 80.0
+
+    # A.5.1, A.5.4: the proxy limit and the coverage run over the
+    # declared environmental impact indicators: the core and additional
+    # indicators of EN 15804+A2 (Tables 3 and 4) and the GWP-GHG
+    # indicator the PCR adds. Resource use, waste and output flow
+    # indicators are not impact indicators. The codes are the ones in
+    # brackets at the end of each category name in openLCA.
+    impact_indicator_codes: Tuple[str, ...] = (
+        en15804.CORE_INDICATOR_CODES + ("GWP-GHG",)
+        + en15804.ADDITIONAL_INDICATOR_CODES)
+
+    # The core indicators and GWP-GHG have to be found in the method;
+    # the additional ones are counted when the method has them
+    required_indicator_codes: Tuple[str, ...] = (
+        en15804.CORE_INDICATOR_CODES + ("GWP-GHG",))
+
+    # The code of the indicator the 10% rows and the share of primary
+    # data are calculated on
+    gwp_ghg_code: str = "GWP-GHG"
+
+    # The split of a module between its processes and bridges has to
+    # add up to the module's total: the largest gap allowed, as a share
+    # of the total, and the size of total below which it is not looked
+    # at. A model check, not a clause of the GPI.
+    residual_tolerance_pct: float = 0.1
+    residual_floor: float = 1e-9
+
+    # A.5.4: the scheme and the levels of the representativeness
+    # ratings (EN 15804+A2, Annex E; both schemes there use these)
+    dq_scheme: str = en15804.DQ_SCHEMES[0]
+    dq_levels: Tuple[str, ...] = en15804.DQ_LEVELS
+
+    # PCR 2019:14, Annex 2: biogenic carbon balances
+    biogenic_balance_tolerance_pct: float = (
+        en15804.BIOGENIC_BALANCE_TOLERANCE_PCT)
+    biogenic_content_tolerance_pct: float = (
+        en15804.BIOGENIC_CONTENT_TOLERANCE_PCT)
 
     # A.5.4, A.7.1: the modules whose GWP-GHG result the share of
     # primary data is calculated on
@@ -92,6 +132,14 @@ class Profile:
         "module_d": "A.7.5",
         "module_d_separate": "A.8",
         "location_based": "A.6.2",
+        "impact_indicators": "A.5.4",
+        "ratings": "A.5.4",
+    })
+
+    # Rules that come from the PCR, not the GPI
+    pcr_clauses: Dict[str, str] = field(default_factory=lambda: {
+        "biogenic": "PCR 2019:14, Annex 2",
+        "primary_energy": "PCR 2019:14, Annex 3",
     })
 
     def clause(self, key: str) -> str:

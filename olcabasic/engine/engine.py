@@ -28,6 +28,8 @@ The class is put together from one module per kind of work:
                   sources, currencies, locations, unit groups, flow
                   properties, social indicators, data quality systems,
                   impact methods, projects, stored results
+    model.py      whole-model reads for the EPD toolkit: parameters in
+                  use, an indicator split by flow, the model written out
 """
 
 import logging
@@ -40,6 +42,7 @@ from .core import CoreMixin
 from .entities import EntitiesMixin
 from .explore import ExploreMixin
 from .fields import FieldsMixin
+from .model import ModelMixin
 from .resolve import ResolveMixin
 from .results import ResultsMixin
 
@@ -48,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 class Engine(CoreMixin, ExploreMixin, BuildMixin, AuditMixin, CalculateMixin,
              AnalysisMixin, ResolveMixin, ResultsMixin, FieldsMixin,
-             EntitiesMixin):
+             EntitiesMixin, ModelMixin):
     """One connection's worth of openLCA operations.
 
     Methods return plain dictionaries. A failure is reported as

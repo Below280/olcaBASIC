@@ -399,6 +399,17 @@ def check(statements, runtime, connected: bool = True,
                 report.writes.append("EPD SYSTEMS")
             elif stmt.command in ("CALCULATE", "DATA QUALITY"):
                 report.calculations.append(f"EPD {stmt.command}")
+                target = _literal(stmt.from_file) if stmt.from_file else None
+                if target and not os.path.exists(target):
+                    report.error(line, f"File not found: {target}",
+                                 "EPD DATA QUALITY FROM reads a CSV file of "
+                                 "scenarios.")
+            elif stmt.command in ("DQ SHEET", "DQ TABLE", "EXPORT MODEL"):
+                report.writes.append(
+                    f"EPD {stmt.command} "
+                    f"\"{_literal(stmt.argument) or '?'}\" (file)")
+                if stmt.command != "EXPORT MODEL":
+                    report.calculations.append(f"EPD {stmt.command}")
             elif stmt.command == "REPORT":
                 report.writes.append(
                     f"EPD REPORT \"{_literal(stmt.argument) or '?'}\" (file)")
@@ -408,6 +419,16 @@ def check(statements, runtime, connected: bool = True,
                 report.calculations.append("EPD SAVE")
             elif stmt.command == "CLOSE":
                 epd_defined, epd_modules = False, None
+
+        elif isinstance(stmt, ast.EpdSensitivityStmt):
+            if not epd_defined:
+                report.error(line, "EPD SENSITIVITY needs an EPD, and none "
+                                   "is defined before it.",
+                             "Define one first: EPD \"name\" ... END EPD.")
+            report.calculations.append("EPD SENSITIVITY")
+            names = [_literal(g["name"]) for g in stmt.groups]
+            for n in {n for n in names if n and names.count(n) > 1}:
+                report.error(line, f"The group '{n}' is given twice.")
 
         elif isinstance(stmt, ast.ParameteriseStmt):
             name = _literal(stmt.target) or "?"

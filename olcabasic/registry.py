@@ -1382,6 +1382,9 @@ END SENSITIVITY''',
   FOLDER "path"
   MODULES A1, A2, A3, C1, C2, C3, C4, D
   BIOGENIC CARBON YES|NO
+  [BIOGENIC CONTENT PRODUCT n kg C [PACKAGING n kg C]]
+  [BIOGENIC CONTENT PRODUCT FROM MASS n kg DRY [PACKAGING n kg C]]
+  [BIOGENIC EXPORT A1|A2|A3 "co-product", n kg C]
   [CUTOFF module "item", n%]
   [GWP INDICATOR "category name"]
   [EXEMPT C AND D
@@ -1417,6 +1420,25 @@ END EPD''',
               "before EPD REPORT.\n"
               "CUTOFF declares what was left out of a module, as a share "
               "of mass or energy.\n"
+              "BIOGENIC CARBON YES needs BIOGENIC CONTENT: the kg of "
+              "biogenic carbon in the product (and the packaging) per "
+              "declared unit (EN 15804+A2, 6.4.4 and 7.2.5), or FROM MASS "
+              "n kg DRY, which takes the oven-dry mass of wood at 0.5 kg "
+              "of carbon per kg (EN 16485, 6.3.4.2). EPD CALCULATE then "
+              "checks the biogenic CO2 in the GWP-biogenic indicator: in "
+              "A1 to A3 it equals the content times 44/12, taken up; over "
+              "A to C it sums to zero; in D it is zero. A balance that "
+              "does not close is an error and the results are not kept. "
+              "Methane and other biogenic gases are left out of the "
+              "balance. BIOGENIC EXPORT declares a co-product that leaves "
+              "A1 to A3 with its carbon (sawdust, chips); the report lists "
+              "it, and the error says so when exactly that carbon is "
+              "missing. Packaging carbon is expected in A1 to A3 only "
+              "when A5 is declared; otherwise its release is reported in "
+              "A1 to A3 (PCR 2019:14, Annex 2). The renewable primary "
+              "energy used as material (PERM) is not checked: the PCR "
+              "allows three ways of declaring it (Annex 3, options A to "
+              "C).\n"
               "The steps: EPD block, bridges, MODULE blocks, EPD SYSTEMS, "
               "EPD CHECK, EPD CALCULATE, EPD DATA QUALITY, EPD REPORT. NEW "
               "FROM TEMPLATE \"epd_skeleton\" AS \"my_epd.baslca\" "
@@ -1488,7 +1510,7 @@ END MODULE''',
         statements=("EpdCommandStmt",)),
     Command(
         name="EPD DATA QUALITY", topic="EPD",
-        usage="EPD DATA QUALITY",
+        usage='EPD DATA QUALITY [PARAMETER SET "name" | FROM "scenarios.csv"]',
         summary="Do the programme's data quality arithmetic and apply its limits",
         example="EPD DATA QUALITY",
         notes="Needs PROGRAMME in the EPD block. From the DATA lines and "
@@ -1498,6 +1520,28 @@ END MODULE''',
               "comes from proxy data; the age of the data; and the "
               "processes that give 80% of each indicator. A limit that is "
               "passed is an error (GPI 5.1.0, A.5).\n"
+              "The coverage and the proxy limit run over the environmental "
+              "impact indicators only: the core and additional indicators "
+              "of EN 15804+A2 (Tables 3 and 4) and GWP-GHG. They are picked "
+              "by the code at the end of each category name (GWP-total, "
+              "ODP, AP and so on). Resource use, waste and output flow "
+              "indicators are reported, not counted.\n"
+              "Residual check: in every module, for every indicator, the "
+              "module's own processes and its bridges have to add up to "
+              "the module total (within 0.1%). A gap is an error naming "
+              "the module, the indicator and the size; the usual cause is "
+              "an input that does not go through a bridge.\n"
+              "Ratings: every dataset in the 80% coverage has to carry "
+              "RATING GEOGRAPHY, RATING TECHNOLOGY and RATING TIME (HELP "
+              "RATING). EPD DATA QUALITY refuses while one is missing; EPD "
+              "DQ SHEET lists what is needed.\n"
+              "PARAMETER SET \"name\" runs the analysis with the values of "
+              "that stored parameter set (EDIT SYSTEM ... PARAMETER SET) "
+              "on the module systems that have it. FROM \"scenarios.csv\" "
+              "runs it once per scenario of the file (a Parameter column, "
+              "then one column per scenario). Each scenario gets the same "
+              "checks. A parameter that no module holds is an error. The "
+              "gate before EPD REPORT is the run without scenarios.\n"
               "The thresholds are named values in the programme profile.",
         statements=("EpdCommandStmt",)),
     Command(
@@ -1546,6 +1590,97 @@ END MODULE''',
               "EPD SYSTEMS also sets one analysis group per module on "
               "each module's product system, named after the module, so "
               "openLCA and RESULT ... BY GROUP show results by module.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="RATING", topic="EPD",
+        usage='RATING GEOGRAPHY|TECHNOLOGY|TIME "level" REASON "why"',
+        summary="Rate how well a dataset represents what it stands for",
+        syntax='''RATING GEOGRAPHY "level" REASON "why"
+RATING TECHNOLOGY "level" REASON "why"
+RATING TIME "level" REASON "why"''',
+        example='''EDIT PROCESS "BRIDGE | Steel | kg"
+  RATING GEOGRAPHY "Fair" REASON "Global average used for a national supply"
+  RATING TECHNOLOGY "Good" REASON "Same route, average plant"
+  RATING TIME "Good" REASON "Valid 2018 to 2024"
+END EDIT''',
+        notes="A line inside BRIDGE, MAKE PROCESS or EDIT PROCESS. The "
+              "levels are Very good, Good, Fair, Poor and Very poor: the "
+              "scale of the two data quality schemes in EN 15804+A2, Annex "
+              "E, which the International EPD System allows (GPI 5.1.0, "
+              "A.5.4). A level that is not on the scale is an error. "
+              "REASON is required.\n"
+              "The ratings are stored on the process as tags, so they "
+              "stay with the model. A rating on a bridge that several "
+              "products share counts for each of them. EPD DATA QUALITY "
+              "needs all three on every dataset in the 80% coverage; EPD "
+              "DQ SHEET and EPD DQ TABLE write them out.",
+        statements=("EditProcessStmt",)),
+    Command(
+        name="EPD DQ SHEET", topic="EPD",
+        usage='EPD DQ SHEET "file.csv"',
+        summary="Write the register of the datasets the data quality assessment has to cover",
+        example='EPD DQ SHEET "dq_register.csv"',
+        notes="One row per dataset that is above 10% of GWP-GHG in A1-A3 "
+              "or in the 80% coverage of any impact indicator: its "
+              "modules and shares, its data declaration, the background "
+              "process behind a bridge (name, location, validity, "
+              "technology, geography and time descriptions, data quality "
+              "system), and the ratings and reasons recorded so far. It "
+              "runs before EPD DATA QUALITY passes, so it shows what still "
+              "needs a RATING.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD DQ TABLE", topic="EPD",
+        usage='EPD DQ TABLE "file.md"',
+        summary="Write the data quality assessment table for the accompanying report",
+        example='EPD DQ TABLE "data_quality_assessment.md"',
+        notes="A Markdown table: dataset, products, and the geographical, "
+              "technical and temporal representativeness ratings with "
+              "their reasons. It covers every product assessed in the "
+              "session so far, so with several products in one program, "
+              "run it after the last one (or after each: the file is "
+              "written again with one more product).",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD SENSITIVITY", topic="EPD",
+        usage='EPD SENSITIVITY BY n% ... END EPD SENSITIVITY',
+        summary="Vary groups of parameters together and sum the modules",
+        syntax='''EPD SENSITIVITY BY n% [SAVE "file.csv"]
+  GROUP "name" VARY parameter, parameter, ...
+  ...
+END EPD SENSITIVITY''',
+        example='''EPD SENSITIVITY BY 20% SAVE "sensitivity.csv"
+  GROUP "Electricity" VARY kiln_kwh, saw_kwh
+  GROUP "Transport" VARY road_tkm
+END EPD SENSITIVITY''',
+        notes="Needs EPD CALCULATE first: its results are the baseline. "
+              "The parameters of a group move together, down and then up "
+              "by the percentage, each from its own value. Only the "
+              "module systems that hold a parameter of the group are "
+              "calculated again; the others keep their baseline. Results "
+              "are summed per indicator over A to C; module D is shown on "
+              "its own and never added.\n"
+              "A parameter that no module holds is an error naming it "
+              "(a typing mistake does not pass as 'no effect'). A module "
+              "holds the input parameters of its own processes and "
+              "bridges, and the global parameters their formulas use. "
+              "SAVE writes the table: indicator, unit, modules, baseline, "
+              "then down and up for each group.",
+        statements=("EpdSensitivityStmt",)),
+    Command(
+        name="EPD EXPORT MODEL", topic="EPD",
+        usage='EPD EXPORT MODEL "file.json"',
+        summary="Write the whole model of the EPD folder as JSON, for a verifier",
+        example='EPD EXPORT MODEL "model.json"',
+        notes="Every process in the EPD folder with every exchange field "
+              "(amount, formula, unit, provider, uncertainty, cost, data "
+              "quality entry), its parameters, allocation factors, "
+              "documentation and tags; the flows those processes use; the "
+              "global parameters the model uses; and the module systems "
+              "with their parameter sets and analysis groups. It only "
+              "reads. Names of background datasets the model buys from "
+              "appear as providers: check the database licence before "
+              "passing the file on.",
         statements=("EpdCommandStmt",)),
     Command(
         name="EPD STATUS", aliases=("EPD CLOSE",), topic="EPD",
@@ -1845,6 +1980,12 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "LINK": _READ + ("data/put",),
     "MOVE": _READ + ("data/put",),
     "DELETE": _READ + ("data/delete", "data/get/usage", "data/get/all"),
+    "EPD DQ SHEET": _READ + ("result/calculate", "result/dispose"),
+    "EPD DQ TABLE": _READ + ("result/calculate", "result/dispose"),
+    "EPD SENSITIVITY": _READ + ("data/get/parameters", "result/calculate",
+                                "result/state", "result/total-impacts",
+                                "result/dispose"),
+    "EPD EXPORT MODEL": _READ + ("data/get/all",),
     "EPD SAVE": _READ + ("data/put", "result/calculate", "result/state",
                          "result/total-impacts", "result/total-flows",
                          "result/demand", "result/dispose"),
