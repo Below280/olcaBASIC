@@ -24,6 +24,10 @@ The class is put together from one module per kind of work:
     results.py    results that stay open, and every query on one
     fields.py     uncertainty, costs, allocation, documentation, social
                   aspects, parameter sets, analysis groups
+    entities.py   every entity type: find, show, move, delete; actors,
+                  sources, currencies, locations, unit groups, flow
+                  properties, social indicators, data quality systems,
+                  impact methods, projects, stored results
 """
 
 import logging
@@ -33,6 +37,7 @@ from .audit import AuditMixin
 from .build import BuildMixin
 from .calculate import CalculateMixin
 from .core import CoreMixin
+from .entities import EntitiesMixin
 from .explore import ExploreMixin
 from .fields import FieldsMixin
 from .resolve import ResolveMixin
@@ -42,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 class Engine(CoreMixin, ExploreMixin, BuildMixin, AuditMixin, CalculateMixin,
-             AnalysisMixin, ResolveMixin, ResultsMixin, FieldsMixin):
+             AnalysisMixin, ResolveMixin, ResultsMixin, FieldsMixin,
+             EntitiesMixin):
     """One connection's worth of openLCA operations.
 
     Methods return plain dictionaries. A failure is reported as

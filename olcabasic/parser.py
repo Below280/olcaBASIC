@@ -12,6 +12,7 @@ from .tokeniser import (Token, TokenType, TokeniseError,
 from .ast_nodes import *
 from .parser_results import ResultsParserMixin, RESULT_HEADS
 from .parser_fields import FieldsParserMixin
+from .parser_entities import EntitiesParserMixin, SIMPLE_TYPES
 
 
 class ParseError(Exception):
@@ -26,7 +27,7 @@ class ParseError(Exception):
         super().__init__(f"Line {line}: {full}" if line else full)
 
 
-class Parser(ResultsParserMixin, FieldsParserMixin):
+class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
     """Recursive descent parser for olcaBASIC."""
 
     def __init__(self, tokens: List[Token]):
@@ -383,6 +384,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
         if (tok.type == TokenType.IDENTIFIER and tok.upper() == "CLOSE"
                 and self.peek_at(1).upper() == "RESULT"):
             return self.parse_close_result(line)
+        if (tok.type == TokenType.IDENTIFIER and tok.upper() == "SHUTDOWN"
+                and self.peek_at(1).upper() == "SERVER"):
+            return self.parse_shutdown(line)
 
         kw = tok.upper() if tok.type == TokenType.KEYWORD else ""
 
@@ -443,6 +447,22 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
                 return self.parse_edit_flow(line)
             if self.peek_at(1).upper() == "SYSTEM":
                 return self.parse_edit_system(line)
+            if self.peek_at(1).upper() != "PROCESS":
+                self.advance()  # EDIT
+                etype, n = self.peek_entity_type()
+                if etype == "METHOD":
+                    for _ in range(n):
+                        self.advance()
+                    return self.parse_method(line, editing=True)
+                if etype in SIMPLE_TYPES:
+                    for _ in range(n):
+                        self.advance()
+                    return self.parse_make_entity(line, etype, editing=True)
+                raise ParseError(
+                    f"EDIT cannot change '{self.peek().value}'.", line,
+                    hint="EDIT takes PROCESS, FLOW, SYSTEM, METHOD, ACTOR, "
+                         "SOURCE, CURRENCY, LOCATION, UNITS, PROPERTY, "
+                         "SOCIAL INDICATOR or DQ SYSTEM.")
             return self.parse_edit(line)
 
         if kw == "UPDATE":
@@ -1543,6 +1563,10 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
 
     def parse_save(self, line: int) -> Statement:
         self.advance()  # consume SAVE
+        if self.at_word("RESULT") and self.peek_at(1).upper() == "AS":
+            self.advance()
+            self.advance()
+            return self.parse_save_result_as(line)
         if self.match_keyword("RESULTS"):
             filename = self.parse_string_or_expr()
             self.expect_newline()
@@ -1562,6 +1586,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
 
     def parse_export(self, line: int) -> ExportResultsStmt:
         self.advance()  # consume EXPORT
+        if self.peek_entity_type()[0] is not None:
+            return self.parse_entity_export(line)
         self.match_keyword("RESULTS")
         self.match_keyword("TO")
         filename = self.parse_string_or_expr()
@@ -1571,12 +1597,17 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
     def parse_delete(self, line: int) -> DeleteStmt:
         self.advance()  # consume DELETE
         entity_type = ""
+        etype, _n = self.peek_entity_type()
+        if etype is not None and etype not in ("PROCESS", "SYSTEM", "FLOW"):
+            return self.parse_entity_delete(line)
         if self.at_keyword("PROCESS", "SYSTEM", "FLOW"):
             entity_type = self.advance().upper()
         else:
             raise ParseError("Say what to delete.", line,
                              hint='DELETE PROCESS "name", DELETE SYSTEM '
-                                  '"name" or DELETE FLOW "name"')
+                                  '"name", DELETE FLOW "name", or another '
+                                  'type: DELETE ACTOR "name" (HELP DELETE '
+                                  'lists the types)')
         ref = self.parse_string_or_expr()
         self.expect_newline()
         return DeleteStmt(line=line, entity_type=entity_type, ref=ref)
@@ -1602,6 +1633,10 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
     def parse_find(self, line: int) -> FindStmt:
         self.advance()  # FIND
         entity_type = ""
+        etype, _n = self.peek_entity_type()
+        if etype is not None and etype not in ("PROCESS", "FLOW", "METHOD",
+                                               "SYSTEM"):
+            return self.parse_entity_find(line)
         if self.at_word("PROCESS", "FLOW", "METHOD", "CHEMICAL",
                          "UNIT", "SYSTEM"):
             entity_type = self.advance().upper()
@@ -1609,7 +1644,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
             raise ParseError(
                 "FIND needs a type: PROCESS, FLOW, SYSTEM, METHOD, "
                 "CHEMICAL or UNIT", line,
-                hint='For example: FIND PROCESS "cement"')
+                hint='For example: FIND PROCESS "cement". Every other '
+                     'type of entity can be found too: FIND ACTOR, FIND '
+                     'SOURCE, FIND LOCATION and so on (HELP FIND).')
         search_term = self.parse_string_or_expr()
         location = None
         category = None
@@ -1731,20 +1768,50 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
         """MAKE PROCESS/FLOW/BRIDGE — dispatches to existing parsers
         with is_new flag set."""
         self.advance()  # MAKE
+        two_words = self.peek_entity_type()[1] == 2
         if self.at_keyword("PROCESS"):
             return self.parse_process(line)
-        elif self.at_keyword("FLOW"):
+        elif self.at_keyword("FLOW") and not two_words:
             stmt = self.parse_flow(line)
             stmt.is_new = True
             return stmt
         elif self.at_keyword("BRIDGE"):
             return self.parse_bridge(line)
-        elif self.at_keyword("SYSTEM"):
+        elif self.at_keyword("SYSTEM") and not two_words:
             return self.parse_system(line)
-        else:
-            raise ParseError(
-                "Expected PROCESS, FLOW, BRIDGE, or SYSTEM after MAKE",
-                line)
+        etype, n = self.peek_entity_type()
+        if etype is not None:
+            for _ in range(n):
+                self.advance()
+            if etype in SIMPLE_TYPES:
+                return self.parse_make_entity(line, etype)
+            if etype == "METHOD":
+                return self.parse_method(line)
+            if etype == "PROJECT":
+                return self.parse_project(line)
+            if etype == "FLOW MAP":
+                self._name_after("MAKE FLOW MAP", 'MAKE FLOW MAP "name"')
+                raise ParseError(
+                    "olcaBASIC cannot make a flow map: openLCA's IPC "
+                    "server has no way to store one.", line,
+                    hint="Flow maps are made in openLCA's import "
+                         "dialogues.")
+            hints = {
+                "PARAMETER": "A global parameter is made with LET name = "
+                             "value.",
+                "CATEGORY": "An impact category is made inside MAKE "
+                            "METHOD ... END METHOD.",
+                "RESULT": "A stored result is made with SAVE RESULT AS "
+                          "\"name\" after CALCULATE.",
+                "EPD": "An EPD is made with the EPD block and EPD SAVE.",
+            }
+            raise ParseError(f"MAKE {etype} is not a command.", line,
+                             hint=hints.get(etype, ""))
+        raise ParseError(
+            f"MAKE cannot make '{self.peek().value}'.", line,
+            hint="MAKE takes PROCESS, FLOW, BRIDGE, SYSTEM, ACTOR, SOURCE, "
+                 "CURRENCY, LOCATION, UNITS, PROPERTY, SOCIAL INDICATOR, "
+                 "DQ SYSTEM, METHOD or PROJECT.")
 
     def parse_show(self, line: int) -> ShowStmt:
         """SHOW PROCESS|FLOW|SYSTEM|PARAMETER "name" [sub-command]
@@ -1761,6 +1828,10 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
             self.expect_newline()
             return ShowStmt(line=line, entity_type="GLOBAL_PARAMS",
                             ref=flt, filter=flt)
+        etype, _n = self.peek_entity_type()
+        if etype is not None and etype not in ("PROCESS", "FLOW", "SYSTEM",
+                                               "PARAMETER"):
+            return self.parse_entity_show(line)
         if self.at_keyword("PROCESS"):
             entity_type = self.advance().upper()
         elif self.at_keyword("FLOW"):
@@ -1773,7 +1844,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
         else:
             raise ParseError(
                 "Expected PROCESS, FLOW, SYSTEM or PARAMETER after SHOW.",
-                line, hint='For example: SHOW PROCESS "name"')
+                line, hint='For example: SHOW PROCESS "name". Every other '
+                           'type of entity can be shown too: SHOW ACTOR '
+                           '"name", SHOW METHOD "name" (HELP SHOW).')
 
         ref = self.parse_string_or_expr()
         sub_command = ""
@@ -1782,10 +1855,11 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
         allowed = {
             "PROCESS": ("INPUTS", "OUTPUTS", "LOCATION", "DESCRIPTION",
                         "PARAMS", "QUALITY", "DOCUMENT", "ALLOCATION",
-                        "SOCIAL", "FIELDS"),
-            "FLOW": ("UNITS", "DESCRIPTION", "USAGE", "FIELDS"),
-            "SYSTEM": ("PARAMS", "LINKS", "SETS", "GROUPS"),
-            "PARAMETER": ("VALUE", "DESCRIPTION"),
+                        "SOCIAL", "FIELDS", "JSON", "USAGE"),
+            "FLOW": ("UNITS", "DESCRIPTION", "USAGE", "FIELDS", "JSON"),
+            "SYSTEM": ("PARAMS", "LINKS", "SETS", "GROUPS", "JSON",
+                       "USAGE"),
+            "PARAMETER": ("VALUE", "DESCRIPTION", "JSON", "USAGE"),
         }[entity_type]
         if self.peek().type in (TokenType.KEYWORD, TokenType.IDENTIFIER):
             if not self.at_word(*allowed):
@@ -1898,6 +1972,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin):
         """MOVE PROCESS/FLOW/SYSTEM "ref" TO "folder" """
         self.advance()  # MOVE
         entity_type = ""
+        etype, _n = self.peek_entity_type()
+        if etype is not None and etype not in ("PROCESS", "FLOW", "SYSTEM"):
+            return self.parse_entity_move(line)
         if self.at_keyword("PROCESS"):
             entity_type = self.advance().upper()
         elif self.at_keyword("FLOW"):

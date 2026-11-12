@@ -50,8 +50,6 @@ def test_ipc_use_names_registered_commands_and_listed_methods():
             assert m in IPC_METHODS, f"{command} uses unknown method {m}"
 
 
-@pytest.mark.xfail(strict=True, reason="full coverage is the job of rebuild 2; "
-                   "this marker comes off at the end of Phase 6")
 def test_every_ipc_method_is_used_by_a_command():
     used = {m for c in registry.COMMANDS for m in c.ipc}
     missing = sorted(set(IPC_METHODS) - used)

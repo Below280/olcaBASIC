@@ -198,8 +198,8 @@ class FieldsMixin:
             return found[0]
         if not found:
             raise _Refused(f"No {what} is called '{name}'.",
-                           hint=f"{make} FIND {what.upper()} \"{name}\" "
-                                f"searches by part of a name.")
+                           hint=(f"{make} FIND {what.upper()} \"{name}\" "
+                                 f"searches by part of a name.").strip())
         listing = "\n".join(
             f"    {getattr(d, 'category', '') or '(no folder)':<40} {d.id}"
             for d in found[:12])

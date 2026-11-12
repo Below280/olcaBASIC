@@ -729,3 +729,128 @@ class ExitStmt(Statement):
 class ConfirmDeleteStmt(Statement):
     """CONFIRM DELETE ON/OFF"""
     enabled: bool = True
+
+
+# ── Every entity type (olcaBASIC 0.4.0) ──────────────────
+
+@dataclass
+class EntityFindStmt(Statement):
+    """FIND <type> ["term"] [IN "folder"] for the types FIND did not
+    cover before 0.4.0."""
+    entity_type: str = ""
+    term: Expr = None
+    folder: Expr = None
+
+
+@dataclass
+class EntityShowStmt(Statement):
+    """SHOW <type> "name" [JSON | USAGE]"""
+    entity_type: str = ""
+    ref: Expr = None
+    mode: str = ""              # "", "JSON", "USAGE"
+
+
+@dataclass
+class EntityDeleteStmt(Statement):
+    """DELETE <type> "name" [CONFIRM]"""
+    entity_type: str = ""
+    ref: Expr = None
+    confirm: bool = False
+
+
+@dataclass
+class EntityMoveStmt(Statement):
+    """MOVE <type> "name" TO "folder" """
+    entity_type: str = ""
+    ref: Expr = None
+    destination: Expr = None
+
+
+@dataclass
+class EntityExportStmt(Statement):
+    """EXPORT <type> "name" TO "file.zip" (JSON-LD, written by
+    openLCA)."""
+    entity_type: str = ""
+    ref: Expr = None
+    filename: Expr = None
+
+
+@dataclass
+class MakeEntityStmt(Statement):
+    """MAKE or EDIT ACTOR | SOURCE | CURRENCY | LOCATION | UNITS |
+    PROPERTY | SOCIAL INDICATOR | DQ SYSTEM "name" ... END.
+
+    fields: [(key, expr-or-value, line)]; items: the units of a unit
+    group ({"name", "factor", "reference", "synonyms", "line"}) or the
+    indicators of a data quality system ({"name", "line", "scores":
+    [{"position", "label", "description", "uncertainty"}]}); None when
+    the block has none."""
+    entity_type: str = ""
+    name: Expr = None
+    folder: Expr = None
+    fields: List = field(default_factory=list)
+    items: Optional[List] = None
+    editing: bool = False
+
+
+@dataclass
+class MethodStmt(Statement):
+    """MAKE METHOD "name" ... END METHOD, EDIT METHOD "name" [CONFIRM]
+    ... END EDIT.
+
+    categories: [{"name", "unit", "direction", "code", "description",
+    "parameters": [{"name", "value", "formula"}], "factors": [{"flow",
+    "compartment", "value", "formula", "unit", "location",
+    "uncertainty", "line"}], "remove_factors": [...], "line"}]
+    nw_sets: [{"name", "unit", "factors": [{"category",
+    "normalisation", "weighting", "line"}], "line"}]"""
+    name: Expr = None
+    folder: Expr = None
+    description: Expr = None
+    source: Expr = None
+    code: Expr = None
+    categories: List[Dict] = field(default_factory=list)
+    nw_sets: List[Dict] = field(default_factory=list)
+    remove_categories: List = field(default_factory=list)
+    remove_nw_sets: List = field(default_factory=list)
+    editing: bool = False
+    confirm: bool = False
+
+
+@dataclass
+class ProjectStmt(Statement):
+    """MAKE PROJECT "name" ... END PROJECT.
+
+    variants: [{"name", "system", "amount", "unit", "allocation",
+    "disabled", "description", "values": [{"name", "value", "process",
+    "line"}], "line"}]"""
+    name: Expr = None
+    folder: Expr = None
+    method: Expr = None
+    nw_set: Expr = None
+    description: Expr = None
+    with_costs: bool = False
+    with_regionalisation: bool = False
+    variants: List[Dict] = field(default_factory=list)
+
+
+@dataclass
+class CalculateProjectStmt(Statement):
+    """CALCULATE PROJECT "name" """
+    name: Expr = None
+
+
+@dataclass
+class SaveResultAsStmt(Statement):
+    """SAVE RESULT AS "name" [FOLDER "path"] [REPLACE] [IN name]"""
+    name: Expr = None
+    folder: Expr = None
+    description: Expr = None
+    replace: bool = False
+    result_name: str = ""
+
+
+@dataclass
+class ShutdownStmt(Statement):
+    """SHUTDOWN SERVER CONFIRM"""
+    confirm: bool = False

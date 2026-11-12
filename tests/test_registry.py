@@ -191,12 +191,44 @@ def test_overview_is_under_2000_tokens():
     assert len(text.split()) < 1500
 
 
+def _named_in(text: str, name: str) -> bool:
+    """True if the overview names a command, plainly or folded as
+    FIRST A|B|C."""
+    first, _, rest = name.partition(" ")
+    for line in text.splitlines():
+        _, _, listed = line.partition(": ")
+        for part in listed.split("; "):
+            for piece in part.split(", "):
+                head, _, tail = piece.partition(" ")
+                if head != first:
+                    continue
+                if (not rest and not tail) or (rest and rest in
+                                               tail.split("|")):
+                    return True
+    return False
+
+
 def test_overview_covers_every_command_and_the_rules():
+    """0.4.0: with 127 commands the usage line of each no longer fits in
+    2,000 tokens, so the overview gives the usage of the commands most
+    programs need and names every other one; olcabasic_help with the
+    name gives the rest."""
     text = render_overview()
     for c in COMMANDS:
-        assert c.usage in text, c.name
+        assert _named_in(text, c.name), c.name
+    for name in registry.OVERVIEW_USAGE:
+        assert find(name).usage in text, name
     assert 'USING "method"' in text and "CONFIRM DELETE ON" in text
     assert "olcabasic_help" in text
+
+
+def test_help_for_any_type_gives_the_generic_entry(run):
+    assert "FIND <TYPE>" in run("HELP FIND ACTOR")
+    assert "SHOW <TYPE>" in run("HELP SHOW DQ SYSTEM")
+    assert "EXPORT <TYPE>" in run("HELP EXPORT PROCESS")
+    assert "DELETE" in run("HELP DELETE ACTOR")
+    assert "FIND PROCESS" in run("HELP FIND PROCESS")
+    assert "MAKE ACTOR" in run("HELP MAKE ACTOR")
 
 
 def test_registry_cli(tmp_path, capsys):

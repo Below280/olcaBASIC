@@ -302,7 +302,7 @@ class BuildMixin:
         self._ensure_unit_cache()
         fp_name = self.UNIT_FP_MAP.get(unit_name)
         if not fp_name:
-            return None
+            return self._fp_of_own_unit(unit_name)
         fp_ref = self._fp_lookup.get(fp_name)
         if not fp_ref:
             # Substring fallback
@@ -310,6 +310,26 @@ class BuildMixin:
                 if fp_name.lower() in name.lower():
                     return ref
         return fp_ref
+
+    def _fp_of_own_unit(self, unit_name: str):
+        """The flow property of a unit the built-in table does not
+        know (one made with MAKE UNITS): the unit must be in exactly
+        one unit group, and that group must have a default flow
+        property or be used by exactly one."""
+        groups = [g for g in self.client.get_all(o.UnitGroup)
+                  if any(u.name == unit_name for u in g.units or [])]
+        if len(groups) != 1:
+            return None
+        group = groups[0]
+        props = [p for p in self.client.get_all(o.FlowProperty)
+                 if p.unit_group is not None and p.unit_group.id == group.id]
+        if group.default_flow_property is not None:
+            props = [p for p in props
+                     if p.id == group.default_flow_property.id] or props
+        if len(props) != 1:
+            return None
+        return o.Ref(id=props[0].id, name=props[0].name,
+                     ref_type=o.RefType.FlowProperty)
 
     def parameterise_process(self, process_id: str,
                              dry_run: bool = False,

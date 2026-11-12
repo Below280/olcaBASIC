@@ -33,6 +33,8 @@ DEFAULTS: Dict[str, str] = {
     "TIER": "TIER 1 (structure only)",
     "TARGET": "TARGET 1 (one reference unit of the product)",
     "USAGE LIMIT": "LIMIT {value} (stop after that many uses are found)",
+    "FOLDER": "FOLDER \"{value}\" (the process folder, for entities made "
+              "without FOLDER)",
 }
 
 MAX_CANDIDATES = 12

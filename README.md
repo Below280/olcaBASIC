@@ -523,8 +523,8 @@ PRINT DQ SYSTEMS
 | `BRIDGE` / `MAKE BRIDGE` | olcaBASIC | Create a bridge process between your model and a background process |
 | `SYSTEM` / `MAKE SYSTEM` | olcaBASIC | Create the product system for a process |
 | `LINK` | olcaBASIC | Add the source's product as an input of the target |
-| `MOVE` | olcaBASIC | Move a process, flow or product system to another folder |
-| `DELETE` | olcaBASIC | Delete a process, a product system or an unused flow |
+| `MOVE` | olcaBASIC | Move an entity of any type to another folder |
+| `DELETE` | olcaBASIC | Delete an entity of any type that nothing else uses |
 | `CONFIRM DELETE` | olcaBASIC | Let a program delete without being asked each time |
 
 ```basic
@@ -592,8 +592,8 @@ SYSTEM "process name"
    END ANALYSIS GROUP]
 END SYSTEM
 LINK PROCESS "source" TO PROCESS "target" WITH amount, unit
-MOVE PROCESS|FLOW|SYSTEM "name" TO "folder"
-DELETE PROCESS|SYSTEM|FLOW "name or uuid"
+MOVE <type> "name" TO "folder"
+DELETE <type> "name or uuid" [CONFIRM]
 CONFIRM DELETE ON|OFF
 ```
 
@@ -649,6 +649,116 @@ EDIT SYSTEM "name"
   SET DESCRIPTION "text"
 END EDIT
 PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM
+```
+
+### Entities: actors, sources, units, locations, methods and every other type
+
+| Command | Dialect | What it does |
+|---|---|---|
+| `FIND <TYPE>` | olcaBASIC | List entities of any type, by part of a name |
+| `SHOW <TYPE>` | olcaBASIC | Show an entity of any type, as fields, as JSON-LD, or where it is used |
+| `MAKE ACTOR` | olcaBASIC | Make an actor: a person or an organisation |
+| `MAKE SOURCE` | olcaBASIC | Make a source: a report, standard or dataset reference |
+| `MAKE CURRENCY` | olcaBASIC | Make a currency, for costs on exchanges |
+| `MAKE LOCATION` | olcaBASIC | Make a location, with coordinates or a GeoJSON shape |
+| `MAKE UNITS` / `MAKE UNIT GROUP` | olcaBASIC | Make a unit group: units and their conversion factors |
+| `MAKE PROPERTY` / `MAKE FLOW PROPERTY` | olcaBASIC | Make a flow property: a quantity measured in a unit group |
+| `MAKE SOCIAL INDICATOR` | olcaBASIC | Make a social indicator, for SOCIAL lines on a process |
+| `MAKE DQ SYSTEM` | olcaBASIC | Make a data quality system: indicators and their scores |
+| `EDIT <TYPE>` | olcaBASIC | Change an actor, source, currency, location, unit group, flow property, social indicator or data quality system |
+| `MAKE METHOD` | olcaBASIC | Make an impact method: categories, factors, normalisation and weighting |
+| `EDIT METHOD` | olcaBASIC | Change the categories, factors and NW sets of an impact method |
+
+```basic
+FIND <type> ["text"] [IN "folder"]
+SHOW <type> "name or uuid" [JSON | USAGE]
+MAKE ACTOR "name" [FOLDER "path"]
+    ADDRESS "text"
+    CITY "text"
+    POSTCODE "text"
+    COUNTRY "text"
+    EMAIL "text"
+    PHONE "text"
+    FAX "text"
+    WEBSITE "text"
+    DESCRIPTION "text"
+END ACTOR
+MAKE SOURCE "name" [FOLDER "path"]
+    REFERENCE "full citation"
+    URL "address"
+    YEAR n
+    ATTACH "file"
+    DESCRIPTION "text"
+END SOURCE
+MAKE CURRENCY "name" [FOLDER "path"]
+    CODE "ISO code"
+    FACTOR n
+    REFERENCE "reference currency"
+    DESCRIPTION "text"
+END CURRENCY
+MAKE LOCATION "name" [FOLDER "path"]
+    CODE "code"
+    LATITUDE n
+    LONGITUDE n
+    GEOMETRY "file.geojson"
+    DESCRIPTION "text"
+END LOCATION
+MAKE UNITS "name" [FOLDER "path"]
+    UNIT "name", factor [REFERENCE] [SYNONYMS "a; b"]
+    ...
+    DESCRIPTION "text"
+END UNITS
+MAKE PROPERTY "name" [FOLDER "path"]
+    UNITS "unit group"
+    TYPE PHYSICAL|ECONOMIC
+    DESCRIPTION "text"
+END PROPERTY
+MAKE SOCIAL INDICATOR "name" [FOLDER "path"]
+    ACTIVITY VARIABLE "text"
+    ACTIVITY QUANTITY "flow property"
+    ACTIVITY UNIT "unit"
+    MEASURED IN "unit of measurement"
+    EVALUATION "evaluation scheme"
+    DESCRIPTION "text"
+END SOCIAL INDICATOR
+MAKE DQ SYSTEM "name" [FOLDER "path"]
+    SOURCE "source"
+    UNCERTAINTIES YES|NO
+    INDICATOR "name"
+    SCORE n "label" [DESCRIPTION "text"] [UNCERTAINTY n]
+    ...
+    DESCRIPTION "text"
+END DQ SYSTEM
+EDIT ACTOR|SOURCE|CURRENCY|LOCATION|UNITS|PROPERTY|SOCIAL INDICATOR|DQ SYSTEM "name" ... END EDIT
+MAKE METHOD "name" [FOLDER "path"]
+    DESCRIPTION "text"
+    SOURCE "source"
+    CODE "code"
+    CATEGORY "name" UNIT "reference unit" [INPUT|OUTPUT] [CODE "code"]
+        DESCRIPTION "text"
+        PARAM name = value | FORMULA "formula"
+        FACTOR "flow" [IN "compartment"], value [PER unit]
+               [FORMULA "formula"] [LOCATION "code"] [UNCERTAINTY ...]
+        ...
+    END CATEGORY
+    NW SET "name" [UNIT "weighted unit"]
+        "category", normalisation [, weighting]
+        ...
+    END NW SET
+END METHOD
+EDIT METHOD "name" [CONFIRM]
+    DESCRIPTION "text"
+    CATEGORY "name" [UNIT "reference unit"]
+        FACTOR "flow" [IN "compartment"], value ...
+        REMOVE FACTOR "flow" [IN "compartment"]
+        PARAM name = value
+    END CATEGORY
+    REMOVE CATEGORY "name"
+    NW SET "name" [UNIT "weighted unit"]
+        "category", normalisation [, weighting]
+    END NW SET
+    REMOVE NW SET "name"
+END EDIT
 ```
 
 ### Parameters: variables that become openlca parameters
@@ -712,6 +822,7 @@ MONTECARLO "system" USING "method" [RUNS n]
 | `RESULT NORMALISED` / `RESULT NORMALIZED` | olcaBASIC | Normalised results of a result calculated with an NW SET |
 | `RESULT WEIGHTED` | olcaBASIC | Normalised and weighted results of a result calculated with an NW SET |
 | `RESULT SANKEY` | olcaBASIC | Nodes and links for a Sankey diagram of a category or a flow |
+| `SAVE RESULT AS` | olcaBASIC | Store the open result in the database as an openLCA result |
 | `CLOSE RESULT` | olcaBASIC | Close the current result, a named one, or all of them |
 
 ```basic
@@ -744,6 +855,7 @@ RESULT COSTS TREE [LEVELS n] [TOP n]
 RESULT NORMALISED
 RESULT WEIGHTED
 RESULT SANKEY CATEGORY "x" | FLOW "y" [MIN SHARE n%] [MAX NODES n] [SAVE "file.json"]
+SAVE RESULT AS "name" [FOLDER "path"] [REPLACE] [IN name]
 CLOSE RESULT [name | ALL]
 ```
 
@@ -753,6 +865,8 @@ CLOSE RESULT [name | ALL]
 |---|---|---|
 | `SCENARIO` | olcaBASIC | Define a scenario as a set of parameter values |
 | `RUN SCENARIOS` | olcaBASIC | Calculate every scenario defined so far |
+| `MAKE PROJECT` | olcaBASIC | Make a project: variants of product systems to compare |
+| `CALCULATE PROJECT` | olcaBASIC | Calculate every enabled variant of a project and compare them |
 | `SENSITIVITY` | olcaBASIC | Vary parameters up and down by a percentage, one at a time |
 
 ```basic
@@ -764,6 +878,19 @@ RUN SCENARIOS ON "system" USING "method" [ALLOCATE method]
   [SAVE "results.csv"]
 END RUN
 RUN SCENARIOS ON "system" USING "method" FROM SYSTEM
+MAKE PROJECT "name" [FOLDER "path"]
+    METHOD "method"
+    NW SET "name"
+    WITH COSTS
+    WITH REGIONALISATION
+    DESCRIPTION "text"
+    VARIANT "name" SYSTEM "system" [AMOUNT n unit] [ALLOCATE method] [DISABLED]
+        name = value [IN PROCESS "process"]
+        DESCRIPTION "text"
+    END VARIANT
+    ...
+END PROJECT
+CALCULATE PROJECT "name"
 SENSITIVITY ON "system" USING "method" BY n% [ALLOCATE method]
   VARY parameter [, parameter]
   [FROM "parameters.csv"]
@@ -853,11 +980,13 @@ NEW FROM TEMPLATE "name" AS "file.baslca"
 |---|---|---|
 | `PRINT RESULTS` | olcaBASIC | Show the most recent results again |
 | `SAVE RESULTS` / `EXPORT RESULTS TO` | olcaBASIC | Write the most recent results to a CSV file |
+| `EXPORT <TYPE>` | olcaBASIC | Have openLCA write an entity and what it depends on as JSON-LD |
 | `SAVE PROGRAM` / `SAVE "file.baslca"` | olcaBASIC | Write the program in memory to a file |
 
 ```basic
 PRINT RESULTS
 SAVE RESULTS "file.csv"
+EXPORT <type> "name or uuid" TO "file.zip"
 SAVE PROGRAM "file.baslca"
 ```
 
@@ -910,12 +1039,14 @@ LIST
 | `HELP` | olcaBASIC | Show the command list, a topic, or one command |
 | `REFRESH` | olcaBASIC | Read the lists of processes and flows from openLCA again |
 | `CLEAR` | olcaBASIC | Clear the terminal screen |
+| `SHUTDOWN SERVER` | olcaBASIC | Stop openLCA's IPC server (terminal only) |
 | `EXIT` / `QUIT` | olcaBASIC | Leave olcaBASIC |
 
 ```basic
 HELP [topic or command]
 REFRESH
 CLEAR
+SHUTDOWN SERVER CONFIRM
 EXIT
 ```
 

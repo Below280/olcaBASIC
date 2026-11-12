@@ -22,10 +22,12 @@ ALLOCATIONS = {"AS_DEFINED", "PHYSICAL", "ECONOMIC", "CAUSAL", "NONE"}
 
 WRITES = (ast.FlowStmt, ast.BridgeStmt, ast.ProcessStmt, ast.SystemStmt,
           ast.EditProcessStmt, ast.EditFlowStmt, ast.UpdateParamStmt,
-          ast.DeleteStmt, ast.LinkStmt, ast.MoveStmt)
+          ast.DeleteStmt, ast.LinkStmt, ast.MoveStmt, ast.EntityDeleteStmt,
+          ast.EntityMoveStmt, ast.MakeEntityStmt, ast.MethodStmt,
+          ast.ProjectStmt, ast.SaveResultAsStmt)
 CALCULATIONS = (ast.CalculateStmt, ast.ContributionStmt, ast.InventoryStmt,
                 ast.MonteCarloStmt, ast.RunScenariosStmt, ast.SensitivityStmt,
-                ast.TreeStmt)
+                ast.TreeStmt, ast.CalculateProjectStmt)
 NO_CONNECTION_NEEDED = (
     ast.CommentStmt, ast.LetStmt, ast.PrintExprStmt, ast.PrintResultsStmt,
     ast.DataStmt, ast.InputStmt, ast.IfStmt, ast.ForStmt, ast.ForEachStmt,
@@ -256,6 +258,33 @@ def check(statements, runtime, connected: bool = True,
                     line, "DELETE would stop and ask for confirmation, and "
                           "nobody is there to answer.",
                     "Put CONFIRM DELETE ON before the DELETE line.")
+
+        elif isinstance(stmt, ast.EntityDeleteStmt):
+            ref = _literal(stmt.ref) or "?"
+            report.writes.append(f"DELETE {stmt.entity_type} \"{ref}\"")
+            if not confirm and not interactive:
+                report.error(
+                    line, "DELETE would stop and ask for confirmation, and "
+                          "nobody is there to answer.",
+                    "Put CONFIRM DELETE ON before the DELETE line.")
+
+        elif isinstance(stmt, ast.ShutdownStmt):
+            if not interactive:
+                report.error(
+                    line, "SHUTDOWN SERVER needs a person at the olcaBASIC "
+                          "terminal.",
+                    "It cannot be done through a Session or the MCP.")
+
+        elif isinstance(stmt, ast.SaveResultAsStmt):
+            report.writes.append(
+                f"SAVE RESULT AS \"{_literal(stmt.name) or '?'}\"")
+            if stmt.result_name not in open_results:
+                report.error(
+                    line, "No result is open."
+                    if not stmt.result_name else
+                    f"No open result is called '{stmt.result_name}'.",
+                    "CALCULATE \"system\" USING \"method\" first; SAVE "
+                    "RESULT AS stores the open result.")
 
         elif isinstance(stmt, ast.InputStmt) and not interactive:
             report.error(line, "INPUT waits for the keyboard, and nobody is "

@@ -1233,6 +1233,10 @@ class FakeClient:
         if since and (self._version_tuple(self.server_version)
                       < self._version_tuple(since)):
             return None, f"-32601: Does not understand: {method}"
+        if method == "data/put/source-file":
+            if not params:
+                return None, "-32602: Invalid parameters"
+            return "ok", None
         if method == "runtime/shutdown":
             self.shut_down = True
             return "ok", None
@@ -1287,6 +1291,15 @@ class FakeClient:
             for system in self.store["ProductSystem"].values():
                 if uid in self._system_process_ids(system):
                     out.append(self._descriptor(system))
+        else:
+            # every other type: whatever holds a reference to it
+            import json
+            for table in self.store.values():
+                for entity in table.values():
+                    if entity.id == uid:
+                        continue
+                    if f'"{uid}"' in json.dumps(entity.to_dict()):
+                        out.append(self._descriptor(entity))
         return out
 
     def put_source_file(self, source, file_data) -> bool:

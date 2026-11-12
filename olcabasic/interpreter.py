@@ -19,6 +19,7 @@ from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
 from .interp_results import ResultsInterpMixin
+from .interp_entities import EntitiesInterpMixin
 from .interp_fields import FieldsInterpMixin
 from .workflows.epd import (
     EpdWorkflow, TAG_PREFIX, LOCATION_SWITCH, provenance_tags,
@@ -85,16 +86,48 @@ class _QuietSink(OutputSink):
         return self.real.ask(prompt)
 
 
+_ENTITY_HANDLERS = {
+    "EntityFindStmt": "_exec_entity_find",
+    "EntityShowStmt": "_exec_entity_show",
+    "EntityDeleteStmt": "_exec_entity_delete",
+    "EntityMoveStmt": "_exec_entity_move",
+    "EntityExportStmt": "_exec_entity_export",
+    "MakeEntityStmt": "_exec_make_entity", "MethodStmt": "_exec_method",
+    "ProjectStmt": "_exec_project",
+    "CalculateProjectStmt": "_exec_calculate_project",
+    "SaveResultAsStmt": "_exec_save_result_as",
+    "ShutdownStmt": "_exec_shutdown",
+}
+
+_ENTITY_COMMANDS = {
+    "EntityFindStmt": "FIND", "EntityShowStmt": "SHOW",
+    "EntityDeleteStmt": "DELETE", "EntityMoveStmt": "MOVE",
+    "EntityExportStmt": "EXPORT", "MakeEntityStmt": "MAKE",
+    "MethodStmt": "MAKE METHOD", "ProjectStmt": "MAKE PROJECT",
+    "CalculateProjectStmt": "CALCULATE PROJECT",
+    "SaveResultAsStmt": "SAVE RESULT AS", "ShutdownStmt": "SHUTDOWN SERVER",
+}
+
+
 def _command_word(stmt) -> str:
     """CalculateStmt -> CALCULATE, RunScenariosStmt -> RUN SCENARIOS."""
     name = type(stmt).__name__
+    if name in _ENTITY_COMMANDS:
+        word = _ENTITY_COMMANDS[name]
+        if name == "MakeEntityStmt":
+            word = (f"{'EDIT' if stmt.editing else 'MAKE'} "
+                    f"{stmt.entity_type}")
+        elif name == "MethodStmt" and stmt.editing:
+            word = "EDIT METHOD"
+        return word
     for suffix in ("Stmt", "Def"):
         if name.endswith(suffix):
             name = name[:-len(suffix)]
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
 
 
-class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EnforcementMixin):
+class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
+                  EnforcementMixin):
     """Executes olcaBASIC AST nodes."""
 
     def __init__(self, bridge: Optional[LCABridge] = None,
@@ -288,6 +321,10 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EnforcementMixin):
     def _dispatch(self, stmt: Statement):
         if isinstance(stmt, CommentStmt):
             return
+
+        handler = _ENTITY_HANDLERS.get(type(stmt).__name__)
+        if handler:
+            return getattr(self, handler)(stmt)
 
         elif isinstance(stmt, LetStmt):
             self._exec_let(stmt)
@@ -2667,6 +2704,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EnforcementMixin):
             self._emit("get_global_parameters", result)
             self.out.write(format_params(result))
             return
+
+        if sub == "JSON":
+            return self._show_json(etype, ref, stmt.line)
+        if sub == "USAGE" and etype != "FLOW":
+            return self._show_usage(etype, ref, stmt.line)
 
         if etype == "SYSTEM":
             if sub == "LINKS":

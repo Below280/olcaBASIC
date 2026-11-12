@@ -28,6 +28,8 @@ TOPICS: Dict[str, str] = {
     "EXPLORE": "Finding and inspecting what is in the database",
     "BUILD": "Creating flows, processes, bridges and product systems",
     "EDIT": "Changing what already exists",
+    "ENTITIES": "Actors, sources, units, locations, methods and every "
+                "other type",
     "PARAMETERS": "Variables that become openLCA parameters",
     "CALCULATE": "Impact results and where they come from",
     "RESULT": "Reading more from a result that is open",
@@ -489,19 +491,22 @@ END SYSTEM''',
         statements=("LinkStmt",)),
     Command(
         name="MOVE", topic="BUILD",
-        usage='MOVE PROCESS|FLOW|SYSTEM "name" TO "folder"',
-        summary="Move a process, flow or product system to another folder",
+        usage='MOVE <type> "name" TO "folder"',
+        summary="Move an entity of any type to another folder",
         example='MOVE PROCESS "Concrete block" TO "00: My model/A3"\n'
                 'MOVE FLOW "Concrete block" TO "00: My model/Flows"',
         notes="MOVE ... TO FOLDER moves it to the current build folder. "
               "Only the folder changes: links are by UUID and are not "
               "affected. A name shared by several entries is refused: use "
-              "the UUID.",
-        statements=("MoveStmt",)),
+              "the UUID.\n"
+              "The type is any of: PROCESS, SYSTEM, FLOW, PROPERTY (flow property), UNITS (unit group), PARAMETER (global parameter), METHOD, CATEGORY (impact category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, SOCIAL INDICATOR, PROJECT, RESULT (stored result), EPD and FLOW MAP. Flow maps cannot be "
+              "reached through openLCA's IPC server, so MOVE FLOW MAP is "
+              "refused.",
+        statements=("MoveStmt", "EntityMoveStmt")),
     Command(
         name="DELETE", topic="BUILD",
-        usage='DELETE PROCESS|SYSTEM|FLOW "name or uuid"',
-        summary="Delete a process, a product system or an unused flow",
+        usage='DELETE <type> "name or uuid" [CONFIRM]',
+        summary="Delete an entity of any type that nothing else uses",
         example='CONFIRM DELETE ON\nDELETE SYSTEM "Concrete block"\nDELETE PROCESS "Concrete block"\nDELETE FLOW "Concrete block"',
         notes="Deleting cannot be undone. In the terminal olcaBASIC asks "
               "first; a program must say CONFIRM DELETE ON. A name that "
@@ -509,8 +514,21 @@ END SYSTEM''',
               "DELETE FLOW first reads every process to check that nothing "
               "uses the flow (slow on a large database) and refuses if "
               "anything does, naming it. Delete the system, then the "
-              "process, then its flows.",
-        statements=("DeleteStmt",)),
+              "process, then its flows.\n"
+              "The type is any of: PROCESS, SYSTEM, FLOW, PROPERTY (flow property), UNITS (unit group), PARAMETER (global parameter), METHOD, CATEGORY (impact category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, SOCIAL INDICATOR, PROJECT, RESULT (stored result), EPD and FLOW MAP. Every type is "
+              "checked the same way: an actor, source, currency, location, "
+              "data quality system, social indicator or global parameter "
+              "that a process still points at is not deleted (from openLCA "
+              "2.7 the server answers this; before that every process is "
+              "read). A unit group used by a flow property, or a flow "
+              "property used by a flow, is not deleted.\n"
+              "DELETE METHOD and DELETE CATEGORY on a method olcaBASIC did "
+              "not make are refused without CONFIRM, and with it need a "
+              "person at the terminal to answer YES: they cannot be done "
+              "through a Session or the MCP. Deleting a method olcaBASIC "
+              "made also deletes its categories. Flow maps cannot be "
+              "reached through IPC, so DELETE FLOW MAP is refused.",
+        statements=("DeleteStmt", "EntityDeleteStmt")),
     Command(
         name="CONFIRM DELETE", topic="BUILD",
         usage="CONFIRM DELETE ON|OFF",
@@ -610,6 +628,294 @@ END EDIT''',
               "it. SHOW SYSTEM \"name\" SETS and ... GROUPS read them "
               "back.",
         statements=("EditSystemStmt",)),
+
+    # ── ENTITIES ─────────────────────────────────────────────
+    Command(
+        name="FIND <TYPE>", topic="ENTITIES",
+        usage='FIND <type> ["text"] [IN "folder"]',
+        summary="List entities of any type, by part of a name",
+        example='FIND ACTOR "Example"\nFIND CURRENCY\nFIND LOCATION "United" '
+                'IN "Countries"\nFIND DQ SYSTEM',
+        notes="The type is any of: PROPERTY (flow property), UNITS (unit "
+              "group), PARAMETER (global parameter), CATEGORY (impact "
+              "category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, "
+              "SOCIAL INDICATOR, PROJECT, RESULT (stored result) and EPD. "
+              "FIND PROCESS, FIND FLOW, FIND SYSTEM, FIND METHOD and FIND "
+              "UNIT have their own entries. Without text every entity of "
+              "the type is listed. FLOW PROPERTY, UNIT GROUP, IMPACT "
+              "CATEGORY and STORED RESULT are accepted as longer forms.\n"
+              "Flow maps are the one type openLCA's IPC server cannot "
+              "reach: FIND FLOW MAP says so.",
+        statements=("EntityFindStmt",)),
+    Command(
+        name="SHOW <TYPE>", topic="ENTITIES",
+        usage='SHOW <type> "name or uuid" [JSON | USAGE]',
+        summary="Show an entity of any type, as fields, as JSON-LD, or where it is used",
+        example='SHOW ACTOR "Example Consulting"\nSHOW METHOD "My method"\n'
+                'SHOW LOCATION "United Kingdom" JSON\n'
+                'SHOW SOURCE "Synthetic report 2024" USAGE\nSHOW PROCESS "Concrete block" JSON',
+        notes="Works for every type: PROCESS, SYSTEM, FLOW, PROPERTY (flow property), UNITS (unit group), PARAMETER (global parameter), METHOD, CATEGORY (impact category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, SOCIAL INDICATOR, PROJECT, RESULT (stored result), EPD and FLOW MAP.\n"
+              "JSON prints the entity as openLCA stores it (JSON-LD). It "
+              "is read only: no command writes JSON into the database, "
+              "because that would let a program put anything in, past "
+              "every rule.\n"
+              "USAGE lists what points at the entity. From openLCA 2.7 "
+              "the server answers (data/get/usage). Before that, olcaBASIC "
+              "reads every entity that could point at it, which for "
+              "actors, sources, currencies, locations, data quality "
+              "systems, social indicators and global parameters means "
+              "every process: slow on a large database, but complete. "
+              "SHOW PROCESS ... USAGE and SHOW SYSTEM ... USAGE need "
+              "openLCA 2.7; SHOW FLOW ... USAGE has its own entry.",
+        statements=("EntityShowStmt", "ShowStmt")),
+    Command(
+        name="MAKE ACTOR", topic="ENTITIES",
+        usage='MAKE ACTOR "name" [FOLDER "path"] ... END ACTOR',
+        summary="Make an actor: a person or an organisation",
+        syntax='''MAKE ACTOR "name" [FOLDER "path"]
+    ADDRESS "text"
+    CITY "text"
+    POSTCODE "text"
+    COUNTRY "text"
+    EMAIL "text"
+    PHONE "text"
+    FAX "text"
+    WEBSITE "text"
+    DESCRIPTION "text"
+END ACTOR''',
+        example='MAKE ACTOR "Example Consulting"\n    CITY "Leeds"\n'
+                '    COUNTRY "United Kingdom"\n    EMAIL "lca@example.org"\n'
+                'END ACTOR',
+        notes="Every line is optional. Actors are what a process's DOCUMENT "
+              "block (GENERATOR, DOCUMENTOR, OWNER, REVIEW ... BY) and an "
+              "EPD (manufacturer, verifier, programme operator) point at. "
+              "Without FOLDER the actor goes into the process folder, and "
+              "the output says so once. Making an actor that exists changes "
+              "nothing: EDIT ACTOR \"name\" ... END EDIT changes one.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE SOURCE", topic="ENTITIES",
+        usage='MAKE SOURCE "name" [FOLDER "path"] ... END SOURCE',
+        summary="Make a source: a report, standard or dataset reference",
+        syntax='''MAKE SOURCE "name" [FOLDER "path"]
+    REFERENCE "full citation"
+    URL "address"
+    YEAR n
+    ATTACH "file"
+    DESCRIPTION "text"
+END SOURCE''',
+        example='MAKE SOURCE "Synthetic report 2024"\n'
+                '    REFERENCE "Author, A. (2024). A report."\n'
+                '    YEAR 2024\nEND SOURCE',
+        notes="ATTACH uploads a file (a PDF, say) into the database next "
+              "to the source; it needs openLCA 2.6.2 or later, and on an "
+              "older server the source is saved and the error says the "
+              "file was not attached. Sources are what DOCUMENT blocks "
+              "(SOURCE, PUBLICATION, REVIEW ... REPORT), data quality "
+              "systems and methods point at.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE CURRENCY", topic="ENTITIES",
+        usage='MAKE CURRENCY "name" [FOLDER "path"] ... END CURRENCY',
+        summary="Make a currency, for costs on exchanges",
+        syntax='''MAKE CURRENCY "name" [FOLDER "path"]
+    CODE "ISO code"
+    FACTOR n
+    REFERENCE "reference currency"
+    DESCRIPTION "text"
+END CURRENCY''',
+        example='MAKE CURRENCY "Test pound"\n    CODE "TGB"\n    FACTOR 1.17\n'
+                'END CURRENCY',
+        notes="FACTOR is how many units of the reference currency one "
+              "unit of this currency is worth. The first currency in a "
+              "database is its own reference, with factor 1. After that "
+              "FACTOR is required, and REFERENCE only when the database "
+              "has more than one reference currency.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE LOCATION", topic="ENTITIES",
+        usage='MAKE LOCATION "name" [FOLDER "path"] ... END LOCATION',
+        summary="Make a location, with coordinates or a GeoJSON shape",
+        syntax='''MAKE LOCATION "name" [FOLDER "path"]
+    CODE "code"
+    LATITUDE n
+    LONGITUDE n
+    GEOMETRY "file.geojson"
+    DESCRIPTION "text"
+END LOCATION''',
+        example='MAKE LOCATION "Example site"\n    CODE "EX-1"\n'
+                '    LATITUDE 53.8\n    LONGITUDE -1.55\nEND LOCATION',
+        notes="CODE is required: it is what LOCATION \"code\" on a process "
+              "or exchange refers to. GEOMETRY reads one geometry from a "
+              "GeoJSON file (a geometry, a feature, or a collection of "
+              "exactly one feature), used by regionalised calculation.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE UNITS", aliases=("MAKE UNIT GROUP",), topic="ENTITIES",
+        usage='MAKE UNITS "name" [FOLDER "path"] ... END UNITS',
+        summary="Make a unit group: units and their conversion factors",
+        syntax='''MAKE UNITS "name" [FOLDER "path"]
+    UNIT "name", factor [REFERENCE] [SYNONYMS "a; b"]
+    ...
+    DESCRIPTION "text"
+END UNITS''',
+        example='MAKE UNITS "Units of test"\n    UNIT "tu", 1 REFERENCE\n'
+                '    UNIT "ktu", 1000 SYNONYMS "kilotest"\nEND UNITS',
+        notes="Exactly one unit is the REFERENCE, with factor 1; every "
+              "other factor says how many reference units one of that "
+              "unit is. A unit group is used through a flow property: "
+              "MAKE PROPERTY. EDIT UNITS replaces the list of units and "
+              "keeps the identity of units whose names stay.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE PROPERTY", aliases=("MAKE FLOW PROPERTY",),
+        topic="ENTITIES",
+        usage='MAKE PROPERTY "name" [FOLDER "path"] ... END PROPERTY',
+        summary="Make a flow property: a quantity measured in a unit group",
+        syntax='''MAKE PROPERTY "name" [FOLDER "path"]
+    UNITS "unit group"
+    TYPE PHYSICAL|ECONOMIC
+    DESCRIPTION "text"
+END PROPERTY''',
+        example='MAKE PROPERTY "Test quantity"\n    UNITS "Units of mass"\n'
+                'END PROPERTY',
+        notes="UNITS is required. TYPE is PHYSICAL unless ECONOMIC is "
+              "given. A unit made with MAKE UNITS can be used in MAKE FLOW "
+              "once exactly one flow property uses its unit group.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE SOCIAL INDICATOR", topic="ENTITIES",
+        usage='MAKE SOCIAL INDICATOR "name" [FOLDER "path"] ... END SOCIAL INDICATOR',
+        summary="Make a social indicator, for SOCIAL lines on a process",
+        syntax='''MAKE SOCIAL INDICATOR "name" [FOLDER "path"]
+    ACTIVITY VARIABLE "text"
+    ACTIVITY QUANTITY "flow property"
+    ACTIVITY UNIT "unit"
+    MEASURED IN "unit of measurement"
+    EVALUATION "evaluation scheme"
+    DESCRIPTION "text"
+END SOCIAL INDICATOR''',
+        example='MAKE SOCIAL INDICATOR "Test working hours"\n'
+                '    ACTIVITY VARIABLE "Working hours"\n'
+                '    ACTIVITY UNIT "h"\n    MEASURED IN "h per week"\n'
+                'END SOCIAL INDICATOR',
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE DQ SYSTEM", topic="ENTITIES",
+        usage='MAKE DQ SYSTEM "name" [FOLDER "path"] ... END DQ SYSTEM',
+        summary="Make a data quality system: indicators and their scores",
+        syntax='''MAKE DQ SYSTEM "name" [FOLDER "path"]
+    SOURCE "source"
+    UNCERTAINTIES YES|NO
+    INDICATOR "name"
+    SCORE n "label" [DESCRIPTION "text"] [UNCERTAINTY n]
+    ...
+    DESCRIPTION "text"
+END DQ SYSTEM''',
+        example='MAKE DQ SYSTEM "Test quality"\n    INDICATOR "Reliability"\n'
+                '    SCORE 1 "Verified data"\n    SCORE 2 "Estimate"\n'
+                '    INDICATOR "Completeness"\n    SCORE 1 "All sites"\n'
+                '    SCORE 2 "Some sites"\nEND DQ SYSTEM',
+        notes="Each INDICATOR line is followed by its SCORE lines, "
+              "numbered from 1. Every indicator has the same number of "
+              "scores. UNCERTAINTY on a score is the factor openLCA uses "
+              "when the system has UNCERTAINTIES YES.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="EDIT <TYPE>", topic="ENTITIES",
+        usage='EDIT ACTOR|SOURCE|CURRENCY|LOCATION|UNITS|PROPERTY|SOCIAL INDICATOR|DQ SYSTEM "name" ... END EDIT',
+        summary="Change an actor, source, currency, location, unit group, flow property, social indicator or data quality system",
+        example='EDIT ACTOR "Example Consulting"\n    CITY "York"\nEND EDIT',
+        notes="The block takes the same lines as the MAKE block of the "
+              "type. Only the lines given change; the rest stays. UNIT "
+              "lines (unit groups) and INDICATOR and SCORE lines (data "
+              "quality systems) replace the whole list. To move an "
+              "entity use MOVE; to rename one, make a new one.",
+        statements=("MakeEntityStmt",)),
+    Command(
+        name="MAKE METHOD", topic="ENTITIES",
+        usage='MAKE METHOD "name" [FOLDER "path"] ... END METHOD',
+        summary="Make an impact method: categories, factors, normalisation and weighting",
+        syntax='''MAKE METHOD "name" [FOLDER "path"]
+    DESCRIPTION "text"
+    SOURCE "source"
+    CODE "code"
+    CATEGORY "name" UNIT "reference unit" [INPUT|OUTPUT] [CODE "code"]
+        DESCRIPTION "text"
+        PARAM name = value | FORMULA "formula"
+        FACTOR "flow" [IN "compartment"], value [PER unit]
+               [FORMULA "formula"] [LOCATION "code"] [UNCERTAINTY ...]
+        ...
+    END CATEGORY
+    NW SET "name" [UNIT "weighted unit"]
+        "category", normalisation [, weighting]
+        ...
+    END NW SET
+END METHOD''',
+        example='MAKE METHOD "Test method"\n'
+                '    CATEGORY "Test climate" UNIT "kg CO2 eq"\n'
+                '        FACTOR "Methane, fossil", 29.8\n'
+                '        FACTOR "Carbon dioxide, fossil" IN "unspecified", 1\n'
+                '    END CATEGORY\n'
+                '    NW SET "Test set" UNIT "pt"\n'
+                '        "Test climate", 8000, 0.2\n'
+                '    END NW SET\nEND METHOD',
+        notes="A FACTOR is for an elementary flow that exists. A name "
+              "shared by several flows needs IN \"compartment\" (part of "
+              "the flow's folder path) or the UUID. The value is per "
+              "reference unit of the flow unless PER unit says otherwise. "
+              "LOCATION makes a regionalised factor.\n"
+              "In an NW SET each line gives a category of this method, "
+              "its normalisation factor and, optionally, its weighting "
+              "factor; NONE leaves one out. A normalised result is the "
+              "total divided by the normalisation factor; a weighted "
+              "result is that times the weighting factor (CALCULATE ... "
+              "NW SET \"name\", then RESULT NORMALISED and RESULT "
+              "WEIGHTED).\n"
+              "Everything is checked before anything is written. Methods "
+              "and categories olcaBASIC makes are tagged olcaBASIC, which "
+              "is how EDIT METHOD and DELETE METHOD tell them from a "
+              "licensed method pack. Making a method that exists changes "
+              "nothing.",
+        statements=("MethodStmt",)),
+    Command(
+        name="EDIT METHOD", topic="ENTITIES",
+        usage='EDIT METHOD "name" [CONFIRM] ... END EDIT',
+        summary="Change the categories, factors and NW sets of an impact method",
+        syntax='''EDIT METHOD "name" [CONFIRM]
+    DESCRIPTION "text"
+    CATEGORY "name" [UNIT "reference unit"]
+        FACTOR "flow" [IN "compartment"], value ...
+        REMOVE FACTOR "flow" [IN "compartment"]
+        PARAM name = value
+    END CATEGORY
+    REMOVE CATEGORY "name"
+    NW SET "name" [UNIT "weighted unit"]
+        "category", normalisation [, weighting]
+    END NW SET
+    REMOVE NW SET "name"
+END EDIT''',
+        example='EDIT METHOD "Test method"\n'
+                '    CATEGORY "Test climate"\n'
+                '        FACTOR "Methane, fossil", 27.0\n'
+                '    END CATEGORY\nEND EDIT',
+        notes="In a category that exists, a FACTOR line adds a factor, or "
+              "replaces the one the flow (and location) already has; "
+              "REMOVE FACTOR takes one out. A category that does not exist "
+              "is added (it needs UNIT). An NW SET block replaces the set "
+              "of that name or adds it. Everything is checked before "
+              "anything is written.\n"
+              "A method olcaBASIC did not make (anything without the "
+              "olcaBASIC tag: the methods of ecoinvent, of openLCA Nexus "
+              "method packs, of the EN 15804 add-on) follows the "
+              "PARAMETERISE rule. Without CONFIRM the edit is refused, and "
+              "the error says how many factors would change and to back "
+              "the database up first. With CONFIRM a person at the "
+              "terminal has to answer YES; through a Session or the MCP "
+              "it is refused. Such methods are licensed and shared by "
+              "every model in the database: copy the method in openLCA, "
+              "or make your own with MAKE METHOD.",
+        statements=("MethodStmt",)),
     Command(
         name="PARAMETERISE PROCESS", aliases=("PARAMETERIZE PROCESS",),
         topic="EDIT",
@@ -911,6 +1217,21 @@ RESULT COSTS TREE [LEVELS n] [TOP n]''',
               "make one for costs.",
         statements=("ResultQueryStmt",)),
     Command(
+        name="SAVE RESULT AS", topic="RESULT",
+        usage='SAVE RESULT AS "name" [FOLDER "path"] [REPLACE] [IN name]',
+        summary="Store the open result in the database as an openLCA result",
+        example='CALCULATE "Concrete block" USING "EF v3.1"\n'
+                'SAVE RESULT AS "Concrete block, A1-A3"',
+        notes="Writes openLCA's own Result entity: the product system, the "
+              "method, the impact totals and the inventory with its "
+              "reference flow. Stored results are what an EPD's modules "
+              "point at (EPD SAVE makes them itself). A stored result of "
+              "that name is not written over unless REPLACE is given. "
+              "DESCRIPTION \"text\" adds a description. FIND RESULT, SHOW "
+              "RESULT, MOVE RESULT and DELETE RESULT work on stored "
+              "results. The open result stays open.",
+        statements=("SaveResultAsStmt",)),
+    Command(
         name="CLOSE RESULT", topic="RESULT",
         usage="CLOSE RESULT [name | ALL]",
         summary="Close the current result, a named one, or all of them",
@@ -951,6 +1272,51 @@ RUN SCENARIOS ON "system" USING "method" FROM SYSTEM''',
               "column is Parameter and whose other columns are scenarios. "
               "The scenarios are cleared after the run.",
         statements=("RunScenariosStmt",)),
+    Command(
+        name="MAKE PROJECT", topic="SCENARIOS",
+        usage='MAKE PROJECT "name" [FOLDER "path"] ... END PROJECT',
+        summary="Make a project: variants of product systems to compare",
+        syntax='''MAKE PROJECT "name" [FOLDER "path"]
+    METHOD "method"
+    NW SET "name"
+    WITH COSTS
+    WITH REGIONALISATION
+    DESCRIPTION "text"
+    VARIANT "name" SYSTEM "system" [AMOUNT n unit] [ALLOCATE method] [DISABLED]
+        name = value [IN PROCESS "process"]
+        DESCRIPTION "text"
+    END VARIANT
+    ...
+END PROJECT''',
+        example='MAKE PROJECT "Block options"\n'
+                '    METHOD "EF v3.1"\n'
+                '    VARIANT "Base" SYSTEM "Concrete block"\n'
+                '    END VARIANT\n'
+                '    VARIANT "Less cement" SYSTEM "Concrete block" AMOUNT 1 kg\n'
+                '        cement_mass = 0.10\n'
+                '    END VARIANT\nEND PROJECT',
+        notes="METHOD is required. A variant is a product system with an "
+              "amount (the system's own target when AMOUNT is left out), "
+              "an allocation method and parameter values. A parameter "
+              "value without IN PROCESS sets every copy of that parameter "
+              "in the system. The project is stored in openLCA, where its "
+              "own project report can be opened; CALCULATE PROJECT "
+              "compares the variants from olcaBASIC. Making a project "
+              "that exists changes nothing: delete it and make it again "
+              "to change it.",
+        statements=("ProjectStmt",)),
+    Command(
+        name="CALCULATE PROJECT", topic="SCENARIOS",
+        usage='CALCULATE PROJECT "name"',
+        summary="Calculate every enabled variant of a project and compare them",
+        example='CALCULATE PROJECT "Block options"',
+        notes="openLCA's IPC server has no project calculation, so each "
+              "enabled variant is one ordinary calculation with the "
+              "variant's system, amount, allocation and parameter values "
+              "and the project's method. With an NW SET the normalised "
+              "and weighted results are shown too. SAVE RESULTS writes "
+              "the comparison. Every result is disposed.",
+        statements=("CalculateProjectStmt",)),
     Command(
         name="SENSITIVITY", topic="SCENARIOS",
         usage='SENSITIVITY ON "system" USING "method" BY n% ... END SENSITIVITY',
@@ -1243,6 +1609,20 @@ END BRIDGE''',
         example='SAVE RESULTS "results.csv"',
         statements=("SaveResultsStmt", "ExportResultsStmt")),
     Command(
+        name="EXPORT <TYPE>", topic="OUTPUT",
+        usage='EXPORT <type> "name or uuid" TO "file.zip"',
+        summary="Have openLCA write an entity and what it depends on as JSON-LD",
+        example='EXPORT PROCESS "Concrete block" TO "concrete_block.zip"\n'
+                'EXPORT SYSTEM "Concrete block" TO "system.zip"',
+        notes="openLCA writes the zip file itself, on the machine openLCA "
+              "runs on, with everything the entity refers to (a system "
+              "brings its processes and flows). The file can be imported "
+              "into another openLCA database. Works for every type but "
+              "flow maps. Licensed background data is exported with the "
+              "model if the model uses it: check the licence before "
+              "passing a file on.",
+        statements=("EntityExportStmt",)),
+    Command(
         name="SAVE PROGRAM", aliases=('SAVE "file.baslca"',), topic="OUTPUT",
         usage='SAVE PROGRAM "file.baslca"',
         summary="Write the program in memory to a file",
@@ -1383,6 +1763,18 @@ IF condition THEN statement [ELSE statement]''',
         example="CLEAR",
         statements=("ClearStmt",)),
     Command(
+        name="SHUTDOWN SERVER", topic="SESSION",
+        usage="SHUTDOWN SERVER CONFIRM",
+        summary="Stop openLCA's IPC server (terminal only)",
+        example="SHUTDOWN SERVER CONFIRM",
+        notes="Closes every open result, then stops the IPC server and "
+              "closes its database. Nothing can reach openLCA afterwards "
+              "until the server is started again by hand. Refused without "
+              "CONFIRM, and with it a person at the terminal has to "
+              "answer YES: it cannot be done through a Session or the "
+              "MCP.",
+        statements=("ShutdownStmt",)),
+    Command(
         name="EXIT", aliases=("QUIT",), topic="SESSION",
         usage="EXIT",
         summary="Leave olcaBASIC",
@@ -1422,7 +1814,27 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "SYSTEM": _READ + ("data/create/system", "data/put"),
     "LINK": _READ + ("data/put",),
     "MOVE": _READ + ("data/put",),
-    "DELETE": _READ + ("data/delete",),
+    "DELETE": _READ + ("data/delete", "data/get/usage", "data/get/all"),
+    "FIND <TYPE>": ("data/get/descriptors",),
+    "SHOW <TYPE>": _READ + ("data/get/usage", "data/get/all"),
+    "MAKE ACTOR": _READ + ("data/put",),
+    "MAKE SOURCE": _READ + ("data/put", "data/put/source-file"),
+    "MAKE CURRENCY": _READ + ("data/put", "data/get/all"),
+    "MAKE LOCATION": _READ + ("data/put",),
+    "MAKE UNITS": _READ + ("data/put",),
+    "MAKE PROPERTY": _READ + ("data/put",),
+    "MAKE SOCIAL INDICATOR": _READ + ("data/put",),
+    "MAKE DQ SYSTEM": _READ + ("data/put",),
+    "EDIT <TYPE>": _READ + ("data/put",),
+    "MAKE METHOD": _READ + ("data/put",),
+    "EDIT METHOD": _READ + ("data/put", "data/delete", "data/get/all"),
+    "MAKE PROJECT": _READ + ("data/put", "data/get/parameters"),
+    "CALCULATE PROJECT": ("data/get", "result/calculate", "result/state",
+                          "result/total-impacts", "result/dispose"),
+    "SAVE RESULT AS": ("data/put", "result/total-impacts",
+                       "result/total-flows", "result/demand"),
+    "EXPORT <TYPE>": ("data/get/descriptors", "export/json-ld"),
+    "SHUTDOWN SERVER": ("result/dispose", "runtime/shutdown"),
     "EDIT PROCESS": _READ + ("data/put",),
     "EDIT FLOW": _READ + ("data/put",),
     "EDIT SYSTEM": _READ + ("data/get/parameters", "data/put"),
@@ -1498,6 +1910,14 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
 }
 
 
+_TYPE_WORDS = (
+    "PROPERTY", "FLOW PROPERTY", "UNITS", "UNIT GROUP", "PARAMETER",
+    "METHOD", "CATEGORY", "IMPACT CATEGORY", "LOCATION", "DQ SYSTEM",
+    "ACTOR", "SOURCE", "CURRENCY", "SOCIAL INDICATOR", "PROJECT", "RESULT",
+    "STORED RESULT", "EPD", "FLOW MAP", "PROCESS", "FLOW", "SYSTEM",
+    "TYPE", "<TYPE>")
+
+
 def _norm(text: str) -> str:
     return " ".join(text.upper().split())
 
@@ -1508,6 +1928,15 @@ def find(name: str) -> Optional[Command]:
     for c in COMMANDS:
         if _norm(c.name) == key or key in (_norm(a) for a in c.aliases):
             return c
+    # HELP FIND ACTOR, HELP SHOW DQ SYSTEM: the entry for any type
+    first, _, rest = key.partition(" ")
+    if rest in _TYPE_WORDS:
+        generic = f"{first} <TYPE>"
+        for c in COMMANDS:
+            if c.name == generic:
+                return c
+        if first in ("DELETE", "MOVE"):
+            return find(first)
     return None
 
 
@@ -1661,22 +2090,52 @@ line numbers. Comments start with REM or '.
 """
 
 
+# The commands whose one-line usage the overview spells out. Every
+# other command is named, and olcabasic_help gives its syntax.
+OVERVIEW_USAGE = (
+    "FIND PROCESS", "SHOW PROCESS", "MAKE FLOW", "BRIDGE", "MAKE PROCESS",
+    "SYSTEM", "VALIDATE", "CALCULATE", "RESULT CONTRIBUTION",
+    "RUN SCENARIOS", "EPD", "SAVE RESULTS",
+)
+
+
+def overview_names(commands: List[Command]) -> str:
+    """The names of some commands on one line. Commands that share a
+    first word are folded: FIND PROCESS|FLOW|SYSTEM."""
+    groups: Dict[str, List[str]] = {}
+    for c in commands:
+        first, _, rest = c.name.partition(" ")
+        groups.setdefault(first, []).append(rest)
+    parts = []
+    for first, rests in groups.items():
+        named = [r for r in rests if r]
+        text = first
+        if named:
+            text += " " + "|".join(named)
+            if len(named) < len(rests):       # the bare word is one too
+                text = first + ", " + text
+        parts.append(text)
+    return "; ".join(parts)
+
+
 def render_overview() -> str:
-    """A compact reference for an assistant: the rules of the language
-    and one line per command. Kept under 2,000 tokens (tested)."""
-    out = [RULES.rstrip(), ""]
+    """A compact reference for an assistant: the rules of the language,
+    the usage of the commands most programs need, and the name of every
+    command by topic. Kept under 2,000 tokens (tested)."""
+    out = [RULES.rstrip(), "", "The commands most programs use:"]
+    for name in OVERVIEW_USAGE:
+        out.append(f"  {find(name).usage}")
+    out.append("")
+    out.append("Every command, by topic (A B|C means A B and A C; <TYPE> "
+               "is any entity type):")
     for topic in TOPICS:
         commands = by_topic(topic)
-        if not commands:
-            continue
-        out.append(f"{topic}")
-        for c in commands:
-            alias = f"  (= {', '.join(c.aliases)})" if c.aliases else ""
-            out.append(f"  {c.usage}{alias}")
+        if commands:
+            out.append(f"{topic}: {overview_names(commands)}")
     out.append("")
     out.append("Detail: olcabasic_help with a topic ("
                + ", ".join(t.lower() for t in TOPICS)
-               + ") or a command name.")
+               + ") or a command name gives syntax, an example and notes.")
     return "\n".join(out)
 
 

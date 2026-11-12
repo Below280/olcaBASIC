@@ -145,8 +145,10 @@ def test_update_must_be_update_parameter():
 
 
 def test_make_needs_a_type():
-    assert "Expected PROCESS, FLOW, BRIDGE, or SYSTEM after MAKE" in str(
-        error('MAKE "x"'))
+    # 0.4.0: MAKE takes every type that can be made, and lists them
+    message = str(error('MAKE "x"'))
+    assert "MAKE cannot make 'x'" in message
+    assert "MAKE takes PROCESS, FLOW, BRIDGE, SYSTEM, ACTOR" in message
 
 
 def test_show_needs_a_type():

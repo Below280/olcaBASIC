@@ -902,3 +902,104 @@ def format_system_fields(fields: Dict, part: str = "") -> str:
             lines.extend(f"      \"{p}\"" for p in g["processes"])
             lines.append("    END ANALYSIS GROUP")
     return "\n".join(lines)
+
+
+# ── Every entity type ────────────────────────────────────
+
+def format_entities(result: Dict) -> str:
+    """FIND <type>: a table of names, folders and UUIDs."""
+    rows = result.get("entities") or []
+    label = result.get("label", "entity")
+    if not rows:
+        term = result.get("term")
+        return (f"  No {label} matches '{term}'." if term
+                else f"  This database has no {label}s.")
+    extra = next((k for k in ("location", "unit") if k in rows[0]), None)
+    headers = ["Name"] + ([extra.capitalize()] if extra else []) \
+        + ["Folder", "UUID"]
+    table = [[r["name"]] + ([r.get(extra, "")] if extra else [])
+             + [r.get("folder", ""), r["id"]] for r in rows]
+    widths = [50] + ([12] if extra else []) + [40, 36]
+    lines = [format_table(headers, table, max_widths=widths)]
+    if result.get("total", 0) > len(rows):
+        lines.append(f"\n  Showing {len(rows)} of {result['total']}: add "
+                     f"more of the name to narrow it down.")
+    return "\n".join(lines)
+
+
+def format_entity(result: Dict) -> str:
+    """SHOW <type>: the fields, then each list as a table."""
+    lines = [f"  {result.get('label', 'entity').capitalize()}: "
+             f"{result['name']}",
+             f"  UUID:   {result['id']}"]
+    if result.get("folder"):
+        lines.append(f"  Folder: {result['folder']}")
+    for label, value in result.get("fields") or []:
+        if isinstance(value, float):
+            value = format(value, ".10g")
+        text = str(value)
+        if "\n" in text:
+            lines.append(f"  {label}:")
+            lines.extend(f"    {part}" for part in text.splitlines())
+        else:
+            lines.append(f"  {label}: {text}")
+    for title, rows in (result.get("lists") or {}).items():
+        if not rows:
+            continue
+        lines.append("")
+        lines.append(f"  {title} ({len(rows)}):")
+        headers = list(rows[0].keys())
+        table = []
+        for row in rows:
+            cells = []
+            for h in headers:
+                v = row.get(h)
+                if isinstance(v, bool):
+                    v = "yes" if v else ""
+                elif isinstance(v, float):
+                    v = format(v, ".10g")
+                elif v is None:
+                    v = ""
+                cells.append(str(v))
+            table.append(cells)
+        lines.append(format_table(
+            [h.replace("_", " ").capitalize() for h in headers], table,
+            max_widths=[48] * len(headers)))
+    return "\n".join(lines)
+
+
+def format_project_results(result: Dict) -> str:
+    """CALCULATE PROJECT: what each variant was calculated for, then the
+    comparison."""
+    lines = [f"  Project: {result.get('project', '?')}"]
+    for name, info in (result.get("variants") or {}).items():
+        params = ", ".join(f"{k} = {format(v, '.10g')}"
+                           for k, v in (info.get("parameters") or {}).items())
+        amount = (f"{format(info['amount'], '.10g')} {info.get('unit', '')}"
+                  .strip() if info.get("amount") is not None else "")
+        lines.append(f"    {name}: {info.get('system', '')}"
+                     + (f", {amount}" if amount else "")
+                     + (f" ({params})" if params else ""))
+    if result.get("disabled"):
+        lines.append("  Disabled variants (not calculated): "
+                     + ", ".join(result["disabled"]))
+    lines.append("")
+    lines.append(format_scenarios(result))
+    names = list((result.get("results") or {}).keys())
+    for key, title in (("normalised", "Normalised"),
+                       ("weighted", "Normalised and weighted")):
+        block = result.get(key)
+        if not block:
+            continue
+        cats = list(next(iter(block.values())).keys())
+        rows = [[c] + [format_number(block[n].get(c)) for n in names]
+                for c in cats]
+        lines.append("")
+        lines.append(f"  {title} (NW set: {result.get('nw_set', '')}):")
+        lines.append(format_table(["Impact Category"] + names, rows,
+                                  max_widths=[40] + [18] * len(names)))
+    if result.get("costs"):
+        lines.append("")
+        lines.append("  Costs: " + ", ".join(
+            f"{n} = {format_number(v)}" for n, v in result["costs"].items()))
+    return "\n".join(lines)

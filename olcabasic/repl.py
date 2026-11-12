@@ -17,7 +17,13 @@ BLOCK_OPENERS = {
     "EDIT",
     # blocks inside a PROCESS, SYSTEM or EDIT block
     "ALLOCATION", "DOCUMENT", "ANALYSIS",
+    # blocks inside MAKE METHOD, EDIT METHOD and MAKE PROJECT
+    "CATEGORY", "VARIANT",
 }
+
+# MAKE <word> ... END <word> blocks (MAKE FLOW and MAKE SYSTEM are one line)
+MAKE_BLOCKS = {"PROCESS", "ACTOR", "SOURCE", "CURRENCY", "LOCATION", "UNITS",
+               "UNIT", "PROPERTY", "SOCIAL", "DQ", "METHOD", "PROJECT"}
 
 # Keywords that close a block
 BLOCK_CLOSERS = {"END", "NEXT", "WEND"}
@@ -32,6 +38,7 @@ class REPL:
         self._accumulating = False
         self._accumulated_lines: list = []
         self._block_depth = 0
+        self._in_project = False
         self._setup_completer()
 
     def _setup_completer(self):
@@ -69,8 +76,15 @@ class REPL:
             words = upper.split()
             first_word = words[0] if words else ""
             # MAKE opens a block only for MAKE PROCESS; MAKE FLOW is one line
-            if first_word == "MAKE" and len(words) > 1 and words[1] == "PROCESS":
+            if first_word == "MAKE" and len(words) > 1 and (
+                    words[1] in MAKE_BLOCKS
+                    or words[1:3] == ["FLOW", "PROPERTY"]):
                 first_word = "PROCESS"
+                self._in_project = words[1] == "PROJECT"
+            # NW SET "name" is a block in a method and one line in a project
+            if (first_word == "NW" and self._accumulating
+                    and not self._in_project):
+                first_word = "ALLOCATION"
             # PARAMETER SET "name" opens a block; DEFAULT ALLOCATION and
             # REMOVE ALLOCATION are single lines
             if first_word == "PARAMETER" and len(words) > 1 and words[1] == "SET":
@@ -91,6 +105,7 @@ class REPL:
                     self._accumulating = False
                     self._accumulated_lines = []
                     self._block_depth = 0
+                    self._in_project = False
                     self.history.append(full_text)
 
                     if not self._run(full_text):
