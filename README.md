@@ -58,9 +58,39 @@ Rules that used to be advice are enforced by the language: a name that
 could mean several processes is an error, impact methods are named in
 full, nothing is built until the database family is known, and a system
 that failed `VALIDATE` cannot be calculated. Every error gives its line
-and what to type instead. See
-[docs/CHANGELOG-0.4.0.md](docs/CHANGELOG-0.4.0.md) for the list and the
-fix for each.
+and what to type instead.
+
+It also reaches all of openLCA's IPC server: results that stay open
+and can be queried ([Reading more from a result](#reading-more-from-a-result)),
+uncertainty, costs, allocation factors and documentation on a process,
+and every other entity type, from actors to impact methods
+([Everything else in the database](#everything-else-in-the-database)).
+
+See [docs/CHANGELOG-0.4.0.md](docs/CHANGELOG-0.4.0.md) for the list and
+the fix for each change in behaviour.
+
+### What the language refuses
+
+A model that is built or calculated wrongly without an error is worse
+than one that does not build. Each of these stops the program with the
+line and what to type instead, and none has an override:
+
+- a background process used without a [bridge](#bridges);
+- a name that could mean several processes or flows, and a method name
+  that is not the full name;
+- a `MAKE PROCESS` block that is run again after it was changed (an
+  identical block is a quiet no-op, so a program can be run twice);
+- calculating a product system after one of its processes was edited,
+  linked, moved or parameterised, until it is built again and passes
+  `VALIDATE`; and calculating one that failed `VALIDATE`;
+- an `OUTPUT` or `INPUT` whose name matches nothing (write `MAKE FLOW`);
+- a new emission that the method has no characterisation factor for
+  (`CALCULATE ... IGNORE FACTORS "flow"` accepts it knowingly);
+- `MONTECARLO` when nothing is uncertain;
+- `ALLOCATE PHYSICAL` or `ECONOMIC` when a process with several
+  products has no factors for it;
+- in an EPD, a module that uses another module's process, and anything
+  that breaks a rule of the programme.
 
 ## Write programs
 
@@ -228,6 +258,36 @@ in the order `PRINT DQ SYSTEMS` lists them:
     5. Data Collection Methods
 ```
 
+### Uncertainty, costs and allocation
+
+```basic
+LET kiln_kwh = 55 UNCERTAINTY TRIANGLE 45, 55, 70
+
+MAKE PROCESS "Kilning"
+  OUTPUT MAKE FLOW "Kiln-dried timber", 1, m3, PRODUCT COST 320 CURRENCY "EUR"
+  OUTPUT MAKE FLOW "Sawdust", 40, kg
+  INPUT USE PROCESS "BRIDGE | Electricity | kWh", kiln_kwh, kWh _
+    COST 0.25 CURRENCY "EUR"
+  INPUT USE PROCESS "BRIDGE | Sawn timber | m3", 1.1, m3 _
+    UNCERTAINTY LOGNORMAL 1.1, 1.05
+  ALLOCATION ECONOMIC
+    "Kiln-dried timber", 0.97
+    "Sawdust", 0.03
+  END ALLOCATION
+  DEFAULT ALLOCATION ECONOMIC
+END PROCESS
+```
+
+`UNCERTAINTY` takes `LOGNORMAL gm, gsd`, `NORMAL mean, sd`, `TRIANGLE
+min, mode, max` or `UNIFORM min, max`, on an exchange or a `LET`, and
+is what `MONTECARLO` samples. `AVOIDED` marks a co-product as an avoided
+product. `COST` needs a currency that exists (`FIND CURRENCY`, `MAKE
+CURRENCY`); `CALCULATE ... WITH COSTS` then gives `RESULT COSTS`. The
+shares of an `ALLOCATION` block add up to 1. `DOCUMENT ... END
+DOCUMENT` holds openLCA's process documentation, `SOCIAL` lines the
+social aspects. `SHOW PROCESS "name" FIELDS` reads it all back, and
+`HELP MAKE PROCESS` lists every line.
+
 ## Changing a model
 
 `EDIT PROCESS` changes a process in place:
@@ -252,12 +312,27 @@ reference product can't be removed.
 process in another folder:
 
 ```basic
-LINK PROCESS "Construction sand and gravel; at mine" TO PROCESS "Concrete block; at plant" WITH 25, kg
+LINK PROCESS "BRIDGE | Sand | kg" TO PROCESS "Concrete block; at plant" WITH 25, kg
 MOVE PROCESS "Concrete block; at plant" TO "00: My Project/Archive"
 ```
 
-Product systems keep the links they were built with, so after adding,
-removing or relinking inputs, delete the system and build it again.
+A product system keeps the links it was built with. After `EDIT
+PROCESS`, `LINK`, `MOVE` or `PARAMETERISE` on a process, every product
+system that holds it is out of date, and nothing can be calculated on
+it until it is built again and checked:
+
+```basic
+CONFIRM DELETE ON
+DELETE SYSTEM "Concrete block; at plant"
+SYSTEM "Concrete block; at plant"
+VALIDATE "Concrete block; at plant"
+```
+
+(An edit that only sets the description, documentation or data
+declarations changes no result and leaves the systems as they are.)
+Running a `MAKE PROCESS` block again does not change a process that
+exists: if the block now differs from the process, that is an error
+which lists the differences.
 
 ### Flow properties
 
@@ -400,6 +475,34 @@ contribution from weak background data shows up. `NOQUALITY` hides the
 scores, and where a background dataset is aggregated, its branch ends
 there.
 
+## Reading more from a result
+
+`CALCULATE` leaves its result open in openLCA, and `RESULT` reads from
+it without calculating again:
+
+```basic
+CALCULATE "Concrete block; at plant" USING "IPCC" WITH COSTS
+
+RESULT CONTRIBUTION BY PROCESS CATEGORY "AR6-100" TOP 10
+RESULT CONTRIBUTION BY FLOW CATEGORY "AR6-100"     ' which emissions drive it
+RESULT FLOW "Carbon dioxide" BY PROCESS            ' where one emission comes from
+RESULT FACTORS CATEGORY "AR6-100"                  ' the characterisation factors
+RESULT REQUIREMENTS TOP 20                         ' how much of each product
+RESULT TREE CATEGORY "AR6-100" LEVELS 3
+RESULT COSTS BY PROCESS
+RESULT SANKEY CATEGORY "AR6-100" SAVE "sankey.json"
+SAVE RESULT AS "Concrete block, baseline"          ' into the database
+CLOSE RESULT
+```
+
+`CALCULATE ... AS base` keeps a result open under a name, next to the
+current one, and `RESULT ... IN base` reads from it; a session holds
+five. Every query takes `TOP n` and `SAVE "file.csv"`. A query the
+result cannot answer says what to calculate instead: `RESULT COSTS`
+needs `WITH COSTS`, `RESULT NORMALISED` an `NW SET "name"`, `RESULT
+IMPACTS BY GROUP` analysis groups on the system. `HELP RESULT` lists
+them all.
+
 ## Inspecting
 
 ```basic
@@ -409,6 +512,38 @@ SHOW FLOW "Concrete block" UNITS
 SHOW PARAMETER "cement_mass"
 PRINT DQ SYSTEMS
 ```
+
+## Everything else in the database
+
+`FIND`, `SHOW`, `DELETE` and `MOVE` work on every type openLCA has:
+processes, systems, flows, flow properties (`PROPERTY`), unit groups
+(`UNITS`), parameters, impact methods and categories, locations, data
+quality systems, actors, sources, currencies, social indicators,
+projects, stored results and EPDs.
+
+```basic
+FIND ACTOR "Below"
+SHOW SOURCE "EN 15804" USAGE          ' what points at it
+SHOW METHOD "IPCC" JSON               ' openLCA's own JSON-LD, read-only
+
+MAKE ACTOR "Below280"
+  EMAIL "info@example.com"
+END ACTOR
+
+MAKE METHOD "Site water use"
+  CATEGORY "Water drawn" UNIT "m3"
+    FACTOR "Water, well, in ground", 1
+  END CATEGORY
+END METHOD
+```
+
+There are `MAKE` and `EDIT` blocks for actors, sources, currencies,
+locations, unit groups, flow properties, social indicators, data
+quality systems, impact methods and projects (`CALCULATE PROJECT`
+compares the variants). A method that olcaBASIC did not make is licensed
+and shared by every model in the database: changing one is refused
+without `CONFIRM`, and then asks a person at the terminal. Nothing
+writes raw JSON into the database.
 
 ## Programming
 
@@ -1179,6 +1314,7 @@ EPD CHECK                    ' validate each; list missing pedigree and descript
 EPD CALCULATE                ' every module with the EPD method
 EPD DATA QUALITY             ' the programme's data quality arithmetic
 EPD REPORT "results.csv"     ' indicators by module, with the header block
+EPD SAVE                     ' the EPD and a result per module, into openLCA
 ```
 
 What is enforced:
@@ -1210,13 +1346,42 @@ What is enforced:
   `olcabasic/workflows/programmes/ies.py`; another operator is another
   profile.
 
+- **Data quality.** `EPD DATA QUALITY` works over the impact
+  indicators only, checks that the parts add up to each module's total,
+  and refuses while a dataset that matters has no ratings. The ratings
+  are yours to give, on the bridge or the process:
+
+  ```basic
+  BRIDGE "Sawn timber", m3
+    PROVIDER "uuid of the background process"
+    DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+    RATING GEOGRAPHY "Fair" REASON "Rest-of-World forestry applied to UK supply"
+    RATING TECHNOLOGY "Good" REASON "Mechanised harvesting, as in UK practice"
+    RATING TIME "Good" REASON "Valid 2010 to 2023"
+  END BRIDGE
+  ```
+
+  `EPD DQ SHEET "register.csv"` lists every dataset that needs them,
+  and `EPD DQ TABLE "assessment.md"` writes the table for the report.
+- **Biogenic carbon.** With `BIOGENIC CARBON YES` the block declares
+  the carbon in the product (`BIOGENIC CONTENT PRODUCT n kg C`, or
+  `FROM MASS n kg DRY`), and `EPD CALCULATE` checks that the uptake in
+  A1 to A3 matches it, that GWP-biogenic sums to zero over A to C, and
+  that it is zero in D. A balance that does not close is an error.
+
+`EPD SENSITIVITY BY 20% ... GROUP "Electricity" VARY a, b ... END EPD
+SENSITIVITY` varies groups of parameters together and sums the modules.
+`EPD EXPORT MODEL "model.json"` writes the whole model out for a
+verifier.
+
 `NEW FROM TEMPLATE "epd_skeleton" AS "my_epd.baslca"` writes a starting
 point with a comment at every decision. `bridges_common` and
 `sensitivity_epd` are the other two templates. `HELP EPD` has the full
 syntax.
 
 Still for the practitioner: which inventory item belongs in which
-module, pedigree scores on every exchange, and process documentation.
+module, the ratings and their reasons, pedigree scores on every
+exchange, and process documentation.
 `EPD CHECK` lists what is missing; it does not invent it. The standards
 and programme instructions are referred to by clause number only: you
 need your own copies.

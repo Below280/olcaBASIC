@@ -4,6 +4,8 @@ olcaBASIC no longer needs `b280-olca-mcp`. The engine that talks to openLCA now 
 
 Requires Python 3.11 or later (`olca-ipc` 2.4 does).
 
+0.4.0 does three things. The engine moved into olcaBASIC. The language now reaches every method of openLCA's IPC server (68 of 68), 17 of openLCA's 18 entity types and every field a process, flow or product system can hold. And the places where a model could be built or calculated wrongly without an error are errors.
+
 ## Behaviour changes
 
 Programs written for 0.3.0 keep working, except in the cases below. Each one used to pass quietly and now stops with an error that says what to type.
@@ -99,9 +101,51 @@ Variables, folders, scenarios and the latest results persist between `run` calls
 
 Clause numbers are given throughout; none of the text of EN 15804, the programme instructions or a PCR is in the package.
 
+**Results stay open.** `CALCULATE` keeps its result open in openLCA as the current result, and `RESULT` reads from it without calculating again:
+
+- `CALCULATE "system" USING "method" [ALLOCATE ...] [AMOUNT n unit [PROPERTY "x"]] [WITH COSTS] [WITH REGIONALISATION] [NW SET "name"] [PARAMETER SET "name"] [IGNORE FACTORS "flow"] [AS name]`. `AS name` keeps a named result open alongside the current one; a session holds 5 at most. `CLOSE RESULT [name | ALL]` disposes them, as do the next `CALCULATE`, `RESET`, the end of a program run from a file and the end of the session, an error included.
+- `RESULT IMPACTS`, `RESULT CATEGORIES`, `RESULT PROCESSES`, `RESULT DEMAND`, `RESULT FLOWS`, `RESULT FLOW "x" BY PROCESS`, `RESULT CONTRIBUTION BY PROCESS | BY FLOW | OF PROCESS "x"`, `RESULT FACTORS`, `RESULT INTENSITY`, `RESULT SCALING`, `RESULT TOTALITY`, `RESULT REQUIREMENTS`, `RESULT TREE`, `RESULT COSTS`, `RESULT NORMALISED`, `RESULT WEIGHTED`, `RESULT SANKEY`, and `RESULT IMPACTS | FLOWS | COSTS BY GROUP` for the analysis groups of the system. Each takes `IN name`, `TOP n` and `SAVE "file.csv"`. A query the result cannot answer says what to calculate instead (`RESULT COSTS` needs `WITH COSTS`, `RESULT NORMALISED` an `NW SET`).
+- `CONTRIBUTION`, `INVENTORY` and `TREE` read the current result when it is the same system, method and allocation.
+- `SAVE RESULT AS "name"` stores the open result in the database as an openLCA result.
+- `MONTECARLO` is a real simulation now. It used to ask an ordinary result for another run, which openLCA refuses and the client hides, so every run was the same.
+
+**Every field of a process, a flow and a product system.** New lines in `MAKE PROCESS`, `EDIT PROCESS` and on `LET`, each read back by `SHOW PROCESS "x" FIELDS | DOCUMENT | ALLOCATION | SOCIAL`:
+
+- `UNCERTAINTY LOGNORMAL gm, gsd | NORMAL mean, sd | TRIANGLE min, mode, max | UNIFORM min, max` and `BASE UNCERTAINTY n` on an exchange or a parameter. The numbers are checked.
+- `AVOIDED` on an output (never the reference product); `COST value [FORMULA "x"] CURRENCY "code"`; `SITE "location"` for regionalised calculation; `PROPERTY "flow property"`.
+- `ALLOCATION PHYSICAL|ECONOMIC|CAUSAL ... END ALLOCATION` (shares that add up to 1) and `DEFAULT ALLOCATION`.
+- `DOCUMENT ... END DOCUMENT`: all 26 fields of openLCA's process documentation, sources and reviewers by name.
+- `SOCIAL "indicator", "raw value", risk level ...`; `TYPE UNIT | LCI RESULT`; `INFRASTRUCTURE`; `PROCESS PEDIGREE`.
+- `SYSTEM "x" ... END SYSTEM` and `EDIT SYSTEM` take `PARAMETER SET "name" ... END PARAMETER SET` (openLCA's stored scenarios; `RUN SCENARIOS ... FROM SYSTEM` runs them) and `ANALYSIS GROUP "name" ... END ANALYSIS GROUP`. `SYSTEM` linking gains `IGNORE_DEFAULTS`, `PREFER UNIT|SYSTEM PROCESSES` and `CUTOFF`.
+- `MAKE FLOW` and `EDIT FLOW` take `CAS`, `FORMULA`, `SYNONYMS`, `DESCRIPTION`, `LOCATION` and `INFRASTRUCTURE`.
+
+**Every entity type.** `FIND`, `SHOW [JSON | USAGE]`, `DELETE`, `MOVE` and `EXPORT ... TO "file.zip"` work on every type: `PROCESS`, `SYSTEM`, `FLOW`, `PROPERTY`, `UNITS`, `PARAMETER`, `METHOD`, `CATEGORY`, `LOCATION`, `DQ SYSTEM`, `ACTOR`, `SOURCE`, `CURRENCY`, `SOCIAL INDICATOR`, `PROJECT`, `RESULT` and `EPD`. `SHOW ... JSON` prints openLCA's own JSON-LD; nothing writes raw JSON.
+
+- `MAKE` and `EDIT` blocks for `ACTOR`, `SOURCE` (with `ATTACH "file"`), `CURRENCY`, `LOCATION` (with `GEOMETRY "file.geojson"`), `UNITS`, `PROPERTY`, `SOCIAL INDICATOR` and `DQ SYSTEM`.
+- `MAKE METHOD ... END METHOD` and `EDIT METHOD`: categories, characterisation factors and normalisation and weighting sets. A method or category olcaBASIC did not make is refused without `CONFIRM`, and with it a person at the terminal has to answer: such methods are licensed and shared by every model.
+- `MAKE PROJECT ... END PROJECT` and `CALCULATE PROJECT "name"`: variants compared, one calculation each.
+- Deleting is refused while anything still points at the entity.
+- `FLOW MAP` is in openLCA's data format but not in its IPC server, so the commands for it parse and say so.
+
+**EPD toolkit.** Below280's EPD scripts as commands:
+
+- `EPD SAVE` writes the finished EPD into openLCA as its own EPD entity, with a stored result per module. `EPD SYSTEMS` sets an analysis group per module.
+- `EPD DATA QUALITY` counts the impact indicators only (the 13 core and 6 additional indicators of EN 15804+A2, Tables 3 and 4, and GWP-GHG, found by the code in brackets at the end of each category name), not all 38 categories. A residual check makes sure the parts add up to each module's total. `PARAMETER SET "name"` and `FROM "scenarios.csv"` run it per scenario.
+- `RATING GEOGRAPHY|TECHNOLOGY|TIME "level" REASON "why"` on a bridge or a process records how well a dataset represents what it stands for (the five levels of EN 15804+A2, Annex E). The ratings are kept in the process description, where openLCA shows them. `EPD DATA QUALITY` refuses while a dataset in the 80% coverage of any impact indicator is unrated. `EPD DQ SHEET "file.csv"` writes the register; `EPD DQ TABLE "file.md"` the assessment table.
+- Under `BIOGENIC CARBON YES`: `BIOGENIC CONTENT PRODUCT n kg C [PACKAGING n kg C]` (or `FROM MASS n kg DRY`) is required, and `EPD CALCULATE` checks that the uptake in A1 to A3 matches the content, that GWP-biogenic sums to zero over A to C and that it is zero in D. `BIOGENIC EXPORT A3 "co-product", n kg C` declares carbon that leaves with a co-product. The renewable primary energy used as material (PERM) is not checked: PCR 2019:14 allows three ways of declaring it.
+- `EPD SENSITIVITY BY n% ... GROUP "name" VARY a, b ... END EPD SENSITIVITY` moves groups of parameters together, recalculates only the modules that hold them, and reports A to C and D separately. A parameter no module holds is an error.
+- `EPD EXPORT MODEL "file.json"` writes the whole model for a verifier.
+- Several products in one program: one `SUB` per product, shared bridges built once, `EPD CLOSE` between them.
+
 **Engine.** `olcabasic.engine.Engine` is the class that was `b280_olca_mcp.functions.LCAFunctions`, with the same methods and return shapes (`LCAFunctions` is kept as an alias). Additions: `find_process`, `find_system`, `find_method`, `get_descriptors`, `clear_caches`, `move_entity`, `process_candidates`, `describe_process`, `find_method_strict`, `processes_in_folder`, `get_process_tags`, `set_process_tags`, `get_method_categories`, `process_structure`, `process_contributions`, `set_switched_provider`, `parameterise_process`. The class is now put together from six modules (`core`, `explore`, `build`, `audit`, `calculate`, `analysis`); `olcabasic.engine.Engine` is the one name to import.
 
 ## Fixed
+
+- A save that openLCA refuses is an error. `olca-ipc` logs a refused save and carries on, so a program could believe it had written what it had not. openLCA keeps 255 characters of tags per process and refuses a save that overruns them: three `RATING` reasons used to lose the whole data declaration that way.
+- `SENSITIVITY` and scenarios no longer take a parameter of another process for a global parameter. openLCA lists process parameters among the parameter descriptors, and one that was not in the system was "varied" without changing anything.
+- `RESULT ... BY GROUP` says why it is empty when openLCA returns nothing. In a large system openLCA only follows a group through processes that are in a group themselves, so a group has to hold the process the reference process uses directly (the bridge, not the background process behind it).
+- A SUB's local variable used as an amount is written as its value, not as a formula naming a parameter openLCA does not have.
+- EPD module systems are found by their reference process, so a second product in the same program no longer reuses the first product's systems.
 
 - A failed product system creation that left a system behind now says so and names the commands to inspect or remove it.
 - The `DATA` example in `HELP` quoted the name but not the unit, which parsed and then failed when run. Units in `DATA` go in quotes: `DATA "BRIDGE | Cement | kg", 300, "kg"`.
