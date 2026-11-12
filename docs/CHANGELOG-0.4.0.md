@@ -73,7 +73,24 @@ Variables, folders, scenarios and the latest results persist between `run` calls
 - `SAVE PROGRAM "file.baslca"`: writes out every program that has run without error in the session, as the record of the work.
 - `MAX(a, b)` works (it was a reserved word and could not be called).
 
+**EPDs to EN 15804+A2.** New commands that enforce the rules as the model is built:
+
+- `EPD "name" ... END EPD` defines the EPD: declared unit, method, folder, modules, biogenic carbon, and optionally the programme, PCR, database and declared cut-offs. It is checked as it is read. A1 to A3 are always declared; C1 to C4 and D together, or not at all with an `EXEMPT C AND D` block (EN 15804+A2, clause 5.2). The method must be an EN 15804+A2 method with the full indicator set.
+- `MODULE A1 ... TOTAL "name" ... END MODULE` builds the processes of one module and the process that adds them up. Names get their prefixes. An input must come from a bridge or from a process of the EPD.
+- `EPD SYSTEMS`, `EPD CHECK`, `EPD CALCULATE`, `EPD REPORT "file.csv"`, in that order: each refuses to run until the one before has passed. `EPD CHECK SKIP "reason"` goes on without the check and writes the reason into the report. `EPD STATUS` shows how far the work has got; `EPD CLOSE` ends EPD mode.
+- The report has the indicators in the method's order, a column per module, A1-A3 as the only total and module D on its own, under a header with the product, EPD type, unit, method, database family, olcaBASIC version and date.
+- `PROGRAMME "IES"` adds the International EPD System's rules (General Programme Instructions 5.1.0, Annex A) as errors with no override, and `EPD DATA QUALITY`, which works out the share of primary data, the proxy share of each indicator, data age and the list the data quality assessment has to cover. The profile is `olcabasic/workflows/programmes/ies.py`; every threshold in it is a named value.
+- New lines inside `MAKE PROCESS`, `EDIT PROCESS` and `BRIDGE`: `DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n`, `CONTROL DIRECT|NONE`, and for bridges `ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION`, `COUNTRY`, `REGION`, `ENERGY SOURCE`, `LOCATION BASED PROVIDER`. They are stored on the process as tags (`epd:data=PRIMARY` and so on), the year also as the validity dates of the process documentation. They work outside an EPD too.
+- `NEW FROM TEMPLATE "name" AS "file"` copies one of three templates: `epd_skeleton`, `bridges_common`, `sensitivity_epd`.
+
+`EPD` and `MODULE` are not reserved words: programs that use them as variable names still run.
+
+Clause numbers are given throughout; none of the text of EN 15804, the programme instructions or a PCR is in the package.
+
+**Engine.** `olcabasic.engine.Engine` is the class that was `b280_olca_mcp.functions.LCAFunctions`, with the same methods and return shapes (`LCAFunctions` is kept as an alias). Additions: `find_process`, `find_system`, `find_method`, `get_descriptors`, `clear_caches`, `move_entity`, `process_candidates`, `describe_process`, `find_method_strict`, `processes_in_folder`, `get_process_tags`, `set_process_tags`, `get_method_categories`, `process_structure`, `process_contributions`, `set_switched_provider`.
+
 ## Fixed
 
 - A note is printed when a `PROCESS` block uses a background process directly instead of through a bridge.
 - A failed product system creation that left a system behind now says so and names the commands to inspect or remove it.
+- The `DATA` example in `HELP` quoted the name but not the unit, which parsed and then failed when run. Units in `DATA` go in quotes: `DATA "BRIDGE | Cement | kg", 300, "kg"`.

@@ -238,6 +238,8 @@ class Engine(ResolveMixin):
     # ── listing / search ─────────────────────────────────────
 
     def list_product_systems(self, search_term: str = "") -> Dict:
+        """List product systems, optionally those whose name contains
+        search_term."""
         systems = self._get_descriptors(o.ProductSystem)
         if search_term:
             term = search_term.lower()
@@ -248,6 +250,8 @@ class Engine(ResolveMixin):
         }
 
     def list_impact_methods(self, search_term: str = "") -> Dict:
+        """List impact methods, optionally those whose name contains
+        search_term."""
         methods = self._get_descriptors(o.ImpactMethod)
         if search_term:
             term = search_term.lower()
@@ -3769,8 +3773,8 @@ class Engine(ResolveMixin):
                               categories: Optional[List[str]] = None,
                               allocation: Optional[str] = None) -> Dict:
         """
-        Process-level contribution analysis using the verified pattern
-        from gurit_dq_analysis.py:
+        Process-level contribution analysis: which processes give the
+        most to each impact category. It uses this pattern:
 
             result.get_tech_flows()
             result.get_total_impacts_of(tech_flow)

@@ -33,22 +33,34 @@ python -m olcabasic
 ```
 
 ```
-olcaBASIC v0.3.0
+olcaBASIC v0.4.0
 Connected to openLCA on port 8080
 Database: 2586 processes, 8 methods
 Family:   flcac (auto-detected)
 Ready.
 
 > FIND PROCESS "Portland cement"
-  1 results (of 1 total)
-  Name                       Category                                                              UUID
-  -------------------------  --------------------------------------------------------------------  ------------------------------------
-  Portland cement; at plant  31-33: Manufacturing/3273: Cement and Concrete Product Manufacturing  62993671-574c-3fc5-b66a-6be3bb21ad3d
 ```
+
+`FIND PROCESS` lists the name, location, folder and UUID of each match.
+`HELP` lists every command; `HELP <topic>` and `HELP <command>` give
+the syntax and an example.
 
 If openLCA isn't running, olcaBASIC starts in offline mode and tells
 you how to start the IPC server. Press Tab to complete commands and
 names (on Windows, install `pip install olcabasic[completion]` first).
+
+## What 0.4 changed
+
+olcaBASIC now holds the engine that talks to openLCA, and no longer
+needs `b280-olca-mcp` (the MCP server depends on olcaBASIC instead).
+Rules that used to be advice are enforced by the language: a name that
+could mean several processes is an error, impact methods are named in
+full, nothing is built until the database family is known, and a system
+that failed `VALIDATE` cannot be calculated. Every error gives its line
+and what to type instead. See
+[docs/CHANGELOG-0.4.0.md](docs/CHANGELOG-0.4.0.md) for the list and the
+fix for each.
 
 ## Write programs
 
@@ -761,22 +773,138 @@ EXIT
 
 <!-- END COMMAND REFERENCE -->
 
+## From Python: Session
+
+`Session` runs olcaBASIC from Python and gives structured results back.
+It is what the MCP server uses.
+
+```python
+from olcabasic import Session
+
+s = Session(port=8080)            # Session(offline=True) needs no openLCA
+r = s.run('''
+    LET cement_mass = 300
+    CALCULATE "Concrete block" USING "EF v3.1"
+''')
+
+r.ok          # True, or False if the program stopped at an error
+r.text        # what the terminal would have shown
+r.data        # results as dictionaries: [{"command", "line", "call", "result"}]
+r.errors      # [{"line": 3, "message": "...", "hint": "what to type instead"}]
+r.warnings    # [{"line": 2, "message": "...", "level": "warning" or "note"}]
+```
+
+- Variables, the current folder, scenarios, the latest results and the
+  active EPD persist between `run` calls. `s.reset()` clears them.
+- `run` holds a lock from start to finish, so two programs can never
+  write to openLCA at once and product systems are never created in
+  parallel.
+- `s.run(code, dry_run=True)` parses the program and checks what can be
+  checked without openLCA: undefined variables, missing files, the
+  structure of `PROCESS` and `EPD` blocks, commands that would wait for
+  the keyboard.
+- `s.engine` is the engine itself (`olcabasic.engine.Engine`), for the
+  calls a program cannot make.
+
+## EPDs (EN 15804+A2)
+
+An EPD is built with commands that enforce the rules as they go. The
+steps are fixed, and each refuses to run until the one before it has
+passed.
+
+```basic
+EPD "Concrete block"
+  PROGRAMME "IES" GPI "5.1.0"
+  PCR "PCR 2019:14 Construction products" VERSION "1.3.1"
+  DATABASE "ecoinvent" VERSION "3.11"
+  DECLARED UNIT 1, m3
+  METHOD "EN15804+A2 (EF 3.1)"
+  FOLDER "00: Concrete block EPD"
+  MODULES A1, A2, A3, C1, C2, C3, C4, D
+  BIOGENIC CARBON NO
+  CUTOFF A3 "Lubricants", 0.2%
+END EPD
+
+BRIDGE "Cement", kg
+  PROVIDER "uuid of the background process"
+  DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+END BRIDGE
+
+MODULE A1
+  MAKE PROCESS "Cement supply"           ' becomes "A1 | Cement supply"
+    DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+    OUTPUT MAKE FLOW "Cement, supplied", 300, kg, PRODUCT
+    INPUT USE PROCESS "BRIDGE | Cement | kg", 300, kg
+  END PROCESS
+  TOTAL "Raw material supply"            ' builds "A1: Raw material supply"
+END MODULE
+
+' ... one MODULE block per declared module ...
+
+EPD SYSTEMS                  ' one product system per module, one at a time
+EPD CHECK                    ' validate each; list missing pedigree and descriptions
+EPD CALCULATE                ' every module with the EPD method
+EPD DATA QUALITY             ' the programme's data quality arithmetic
+EPD REPORT "results.csv"     ' indicators by module, with the header block
+```
+
+What is enforced:
+
+- **Modules** (EN 15804+A2, clause 5.2). A1 to A3 are always declared.
+  C1 to C4 and D are declared together, or left out together with an
+  `EXEMPT C AND D` block that justifies it; the exemption is refused
+  for a product with biogenic carbon. `FUNCTIONAL UNIT` is refused for
+  the cradle to gate types. The EPD type follows from the modules and
+  goes in the report.
+- **Method.** It must be an EN 15804+A2 method with the full indicator
+  set: 38 categories for `EN15804+A2 (EF 3.1)`. The 20-category method
+  with the similar name is refused.
+- **Inside a module**, an input comes from a bridge or from a process
+  of the EPD. A background process used directly is an error. Names get
+  their prefixes (`A1 | name`, `A1: name`) without your typing them.
+- **Totals.** A1-A3 is the only total. Module D is its own column and
+  is never added to anything.
+- **Programme rules.** `PROGRAMME "IES"` applies the International EPD
+  System's rules (General Programme Instructions 5.1.0, Annex A) as
+  errors, with no override: `DATA` on every process and bridge, primary
+  data for processes under direct control, no consumption-mix
+  electricity in A1 to A3 processes under direct control, the grid
+  region for countries with sub-national grids, cut-offs within the
+  limit, proxy data within the limit, data within its age limit.
+  `EPD DATA QUALITY` works out the share of primary data and the rest
+  of what the programme asks for. Every threshold is a named value in
+  `olcabasic/workflows/programmes/ies.py`; another operator is another
+  profile.
+
+`NEW FROM TEMPLATE "epd_skeleton" AS "my_epd.baslca"` writes a starting
+point with a comment at every decision. `bridges_common` and
+`sensitivity_epd` are the other two templates. `HELP EPD` has the full
+syntax.
+
+Still for the practitioner: which inventory item belongs in which
+module, pedigree scores on every exchange, and process documentation.
+`EPD CHECK` lists what is missing; it does not invent it. The standards
+and programme instructions are referred to by clause number only: you
+need your own copies.
+
 ## Help us improve it
 
-This is version 0.3. The known rough edges:
+This is version 0.4. The known rough edges:
 
 - `DELETE PROCESS` and `DELETE SYSTEM` don't check whether other
   processes or systems refer to what you're deleting, because IPC can't
   tell olcaBASIC that either. Use them on your own models.
-- `MOVE` handles processes only.
-- `EDIT PROCESS` can't remove one exchange of a flow that appears more
-  than once in the same process.
+- `DELETE FLOW` does check, by reading every process, which takes a
+  long time on a large database.
 - Functions in exchange amounts (`SQR`, `MIN` and so on) are passed to
   openLCA as written, and openLCA's formula functions have their own
   names.
-- Errors inside a `PROCESS` block report the line the block starts on.
-- `LOCATION` has been tested against FLCAC, which has few duplicate
-  names. We'd like to hear how it behaves on ecoinvent.
+- A flow name that several flows share, used with `USE FLOW`, still
+  warns and takes the first.
+- The EPD workflow has been tested against a synthetic method, and its
+  storage and electricity switch against a live ecoinvent database. It
+  has not yet run end to end against the real `EN15804+A2 (EF 3.1)`
+  method pack.
 
 Try it on your own models and databases. When it breaks, or when you
 want something it doesn't do, open an issue at
@@ -792,11 +920,17 @@ commands, with the fiddly parts handled for you.
 
 There was probably no good reason for this, but we wanted to make it.
 
+The language is BASIC because BASIC was written so that people who were
+not programmers could use a computer: John Kemeny and Thomas Kurtz,
+Dartmouth College, 1964. The folder commands (`CAT`, `DIR`, `CDIR`)
+come from the Acorn machines many of us learned on, and each has its
+Linux form (`LS`, `CD`, `MKDIR`) beside it.
+
 ## Requirements
 
 - openLCA 2.x with IPC server running (port 8080)
-- Python 3.10+
-- `b280-olca-mcp` 1.16.0 or later (installed automatically)
+- Python 3.11 or later
+- `olca-ipc` (installed automatically). Nothing else.
 - For tab completion on Windows: `pip install olcabasic[completion]`
 
 ## Licence
