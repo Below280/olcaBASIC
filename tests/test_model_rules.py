@@ -634,3 +634,114 @@ def test_a_changed_block_does_not_leave_a_new_flow_behind(session, client):
     assert 'EDIT PROCESS "Widget"' in e["hint"]
     assert client.by_name(o.Flow, "Offcut") == []
     assert snapshot(client) == before
+
+
+# ── rule 3 beyond the session: the structure check ────────────
+# (12/11/2026) Stale marks live in the session, so RESET or a new
+# session forgot them. The structure check reads the database: does the
+# system still link what its foreground processes ask for? openLCA reads
+# amounts and formulas from the processes when it calculates, so only
+# structure can make a system out of date.
+
+ADD_WATER = (f'EDIT PROCESS "Widget"\n'
+             f'  ADD INPUT USE PROCESS "{B_WATER}", 3, kg\nEND EDIT')
+
+
+def test_an_added_input_is_caught_after_reset(session, client):
+    assert session.run(BUILT).ok
+    assert session.run(ADD_WATER).ok
+    session.reset()
+    stale(session)
+    # and with the session's marks gone too, the structure check holds
+    session.runtime.stale_systems.clear()
+    session.runtime.revalidate.clear()
+    e = stale(session)
+    assert "water" in e["message"]
+    assert "the system has no link for it" in e["message"]
+
+
+def test_an_added_input_is_caught_in_a_new_session(client):
+    a = Session(client=client)
+    assert a.run(BUILT).ok
+    assert a.run(ADD_WATER).ok
+    calls = len(client.results)
+    e = stale(Session(client=client))
+    assert "has no link" in e["message"]
+    assert len(client.results) == calls
+
+
+def test_a_removed_input_is_caught_in_a_new_session(client):
+    a = Session(client=client)
+    assert a.run(BUILT).ok
+    assert a.run(f'EDIT PROCESS "Widget"\n  REMOVE INPUT "{B_STEEL}"\n'
+                 f'END EDIT').ok
+    e = stale(Session(client=client))
+    assert "no longer has" in e["message"]
+
+
+def test_a_new_provider_is_caught_in_a_new_session(client):
+    a = Session(client=client)
+    assert a.run(BUILT).ok
+    assert a.run(f'EDIT PROCESS "Widget"\n'
+                 f'  REMOVE INPUT "{B_ELEC}"\n'
+                 f'  ADD INPUT USE PROCESS "{B_ELEC_DE}", elec, kWh\n'
+                 f'END EDIT').ok
+    e = stale(Session(client=client))
+    assert "has no link" in e["message"] or "another provider" in e["message"]
+
+
+def test_an_edit_made_outside_olcabasic_is_caught(session, client):
+    """An input added in the openLCA app (here: straight into the
+    store) is caught the same way."""
+    assert session.run(BUILT).ok
+    proc = client.by_name(o.Process, "Widget")[0]
+    steel = next(ex for ex in proc.exchanges
+                 if ex.is_input and ex.default_provider is not None)
+    extra = o.Exchange.from_dict(steel.to_dict())
+    extra.internal_id = max(ex.internal_id for ex in proc.exchanges) + 1
+    proc.exchanges.append(extra)
+    client.put(proc)
+    session.reset()
+    assert "has no link" in stale(session)["message"]
+
+
+def test_an_amount_change_does_not_outlast_the_session(client):
+    """In the session that made it, any edit marks the system stale (the
+    stricter rule). In a new session only structure counts: openLCA
+    uses the new amount, so the result is right."""
+    a = Session(client=client)
+    assert a.run(BUILT).ok
+    assert a.run(f'EDIT PROCESS "Widget"\n'
+                 f'  UPDATE INPUT "{B_STEEL}", 1.5, kg\nEND EDIT').ok
+    stale(a)
+    r = Session(client=client).run(CALC)
+    assert r.ok, r.errors
+    fossil = next(i["amount"] for i in r.data[-1]["result"]["impacts"]
+                  if "fossil" in i["category"])
+    assert fossil == pytest.approx(2.5 * 0.25 + 1.5 * 2.0 + 0.5)
+
+
+def test_a_rebuilt_system_passes_the_structure_check(session, client):
+    assert session.run(BUILT).ok
+    assert session.run(ADD_WATER).ok
+    session.reset()
+    stale(session)
+    r = session.run(REBUILD + 'VALIDATE "Widget"\n' + CALC)
+    assert r.ok, r.errors
+
+
+def test_a_system_built_by_olcabasic_records_its_linking(session, client):
+    assert session.run(BUILT).ok
+    system = client.by_name(o.ProductSystem, "Widget")[0]
+    assert "olcabasic:linking=prefer_defaults" in (system.tags or [])
+
+
+def test_ignore_defaults_is_not_taken_for_a_new_provider(session, client):
+    r = session.run(widget() + 'SYSTEM "Widget"\n  LINKING IGNORE_DEFAULTS\n'
+                    'END SYSTEM\nVALIDATE "Widget"\n')
+    assert r.ok, r.errors
+    system = client.by_name(o.ProductSystem, "Widget")[0]
+    assert "olcabasic:linking=ignore_defaults" in (system.tags or [])
+    session.reset()
+    r = session.run(CALC)
+    assert r.ok, r.errors

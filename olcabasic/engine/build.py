@@ -2012,6 +2012,13 @@ class BuildMixin:
                 if category:
                     system.category = category
 
+                # Say how the system was linked, so that later checks
+                # know which providers it was meant to pick
+                from .soundness import LINKING_TAG
+                system.tags = [t for t in (system.tags or [])
+                               if not t.startswith(LINKING_TAG)] + [
+                    f"{LINKING_TAG}{(linking or 'prefer_defaults').lower()}"]
+
                 if target_flow_property:
                     self._ensure_unit_cache()
                     fp = self._fp_lookup.get(target_flow_property)

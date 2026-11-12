@@ -209,16 +209,36 @@ def test_rebuilding_the_system_clears_the_failed_validation(session, client):
     assert r.ok, r.errors
 
 
-def test_validation_record_belongs_to_the_session(client):
+def test_a_failed_validate_holds_in_a_new_session(client):
+    """Changed on purpose (12/11/2026): a new session used to start with
+    no record, so a system that failed VALIDATE could be calculated
+    there. A session with no record now runs VALIDATE itself first."""
     a, b = Session(client=client), Session(client=client)
     a.run(WIDGET)
     break_system(client)
     a.run('VALIDATE "Widget"')
     assert not a.run('CALCULATE "Widget" USING "EF v3.1"').ok
-    # another session did not see the failure; the calculation itself
-    # still fails or passes on its own merits
+    calls = len(client.results)
     r = b.run('CALCULATE "Widget" USING "EF v3.1"')
-    assert not any("failed VALIDATE" in e["message"] for e in r.errors)
+    e = err(r)
+    assert "failed VALIDATE just now" in e["message"]
+    assert len(client.results) == calls
+
+
+def test_a_failed_validate_holds_after_reset(session, client):
+    session.run(WIDGET)
+    break_system(client)
+    session.run('VALIDATE "Widget"')
+    session.reset()
+    e = err(session.run('CALCULATE "Widget" USING "EF v3.1"'))
+    assert "failed VALIDATE just now" in e["message"]
+
+
+def test_a_session_with_no_record_validates_first_and_says_so(client):
+    Session(client=client).run(WIDGET)
+    r = Session(client=client).run('CALCULATE "Widget" USING "EF v3.1"')
+    assert r.ok, r.errors
+    assert "VALIDATE ran first: passed" in r.text
 
 
 # ── method names ─────────────────────────────────────────────

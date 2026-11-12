@@ -6,6 +6,10 @@ model wrongly into errors (olcaBASIC 0.4.0):
 
     systems_containing       which product systems hold a process, so
                              that they can be marked stale when it changes
+    system_drift             does a product system still link what its
+                             foreground processes ask for (survives a
+                             RESET and a new session, and sees edits made
+                             in the openLCA app)
     uncharacterised_flows    elementary flows a method has no factor for
     foreground_uncertainty   is there any uncertainty in the foreground
     allocation_gaps          multi-output processes with no factors for
@@ -29,6 +33,27 @@ from .fields import ALLOCATION_NAMES, ALLOCATION_WORDS
 #: (impact methods and categories carry it too).
 OWN_TAG = "olcaBASIC"
 
+#: The tag on a product system olcaBASIC built, saying how it was linked
+#: (prefer_defaults, only_defaults, ignore_defaults, only_link_providers).
+LINKING_TAG = "olcabasic:linking="
+
+
+def _linkable(ex) -> bool:
+    """Can openLCA link this exchange to a provider? Product inputs,
+    waste outputs, and avoided products and wastes (which link the
+    other way round)."""
+    if getattr(ex, "is_quantitative_reference", False):
+        return False
+    flow = getattr(ex, "flow", None)
+    ft = getattr(flow, "flow_type", None) if flow is not None else None
+    is_input = bool(getattr(ex, "is_input", False))
+    avoided = bool(getattr(ex, "is_avoided_product", False))
+    if ft == o.FlowType.PRODUCT_FLOW:
+        return is_input != avoided
+    if ft == o.FlowType.WASTE_FLOW:
+        return is_input == avoided
+    return False
+
 
 class SoundnessMixin:
 
@@ -39,17 +64,36 @@ class SoundnessMixin:
         product system. Read once per system and kept until
         clear_caches() or the system is built again (a rebuilt system
         has a new id)."""
+        return self._system_info(system_id)[:2]
+
+    def _system_info(self, system_id: str):
+        """(reference process id, member ids, links, tags) of a product
+        system, read once and kept like _system_read. links maps
+        (process id, exchange internal id) to (provider id, flow id)."""
         cache = self.__dict__.setdefault("_members_cache", {})
-        if system_id not in cache:
+        if system_id not in cache or len(cache[system_id]) < 4:
             system = self.client.get(o.ProductSystem, system_id)
             ids: Set[str] = set()
             ref = None
+            links: Dict = {}
+            tags: List[str] = []
             if system is not None:
                 if system.ref_process is not None:
                     ref = system.ref_process.id
                     ids.add(ref)
                 ids.update(r.id for r in system.processes or [])
-            cache[system_id] = (ref, ids)
+                for link in system.process_links or []:
+                    proc = getattr(link, "process", None)
+                    exch = getattr(link, "exchange", None)
+                    if proc is None or exch is None:
+                        continue
+                    prov = getattr(link, "provider", None)
+                    flow = getattr(link, "flow", None)
+                    links[(proc.id, exch.internal_id)] = (
+                        prov.id if prov is not None else None,
+                        flow.id if flow is not None else None)
+                tags = list(system.tags or [])
+            cache[system_id] = (ref, ids, links, tags)
         return cache[system_id]
 
     def _system_members(self, system_id: str) -> Set[str]:
@@ -88,6 +132,85 @@ class SoundnessMixin:
                     found.append({"id": d.id, "name": d.name})
             return {"process_id": process_id, "systems": found,
                     "how": "read every product system"}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    # ── does the system still match its foreground ───────────
+
+    def system_drift(self, system_ref: str,
+                     folders: Optional[List[str]] = None) -> Dict:
+        """How a product system no longer matches its foreground
+        processes: {"system_id", "system_name", "linking", "drift":
+        [messages]}. An empty list means the system links what the
+        processes ask for now.
+
+        openLCA reads amounts, formulas and parameters from the
+        processes when it calculates, so a changed amount never makes a
+        system out of date. What does is structure the system froze when
+        it was built: an input added, removed or given another provider.
+        Only the foreground (the part the program built) is checked;
+        background datasets are never edited. The system is read once a
+        session; its processes are read every time."""
+        try:
+            desc = self.find_system(system_ref)
+            if desc is None:
+                return {"error": f"Product system '{system_ref}' not found"}
+            _, _, links, tags = self._system_info(desc.id)
+            linking = next((t[len(LINKING_TAG):] for t in tags
+                            if t.startswith(LINKING_TAG)), "")
+            drift: List[str] = []
+            linked_by_process: Dict[str, Set[int]] = {}
+            for (pid, iid) in links:
+                linked_by_process.setdefault(pid, set()).add(iid)
+            for d in self._foreground(desc, folders):
+                proc = self.client.get(o.Process, d.id)
+                if proc is None:
+                    drift.append(f"'{d.name}' is in the system but no "
+                                 f"longer in the database")
+                    continue
+                by_iid = {ex.internal_id: ex for ex in proc.exchanges or []}
+                for ex in proc.exchanges or []:
+                    if not _linkable(ex):
+                        continue
+                    flow = ex.flow.name if ex.flow is not None else "?"
+                    got = links.get((proc.id, ex.internal_id))
+                    default = getattr(ex, "default_provider", None)
+                    if got is None:
+                        if default is not None:
+                            drift.append(
+                                f"'{proc.name}' asks for '{flow}' from "
+                                f"'{default.name}', and the system has no "
+                                f"link for it")
+                        elif linking in ("prefer_defaults",
+                                         "ignore_defaults",
+                                         "only_link_providers") \
+                                and ex.flow is not None \
+                                and self.client.get_providers(ex.flow):
+                            drift.append(
+                                f"'{proc.name}' has an input '{flow}' that "
+                                f"the system does not link")
+                        continue
+                    provider_id, flow_id = got
+                    if ex.flow is not None and flow_id \
+                            and flow_id != ex.flow.id:
+                        drift.append(
+                            f"the system links exchange {ex.internal_id} of "
+                            f"'{proc.name}' as another flow than '{flow}'")
+                    elif default is not None and provider_id \
+                            and provider_id != default.id \
+                            and linking in ("prefer_defaults",
+                                            "only_defaults"):
+                        drift.append(
+                            f"'{proc.name}' now takes '{flow}' from "
+                            f"'{default.name}', and the system still "
+                            f"links another provider")
+                for iid in sorted(linked_by_process.get(proc.id, ())):
+                    if iid not in by_iid:
+                        drift.append(
+                            f"the system links an input of '{proc.name}' "
+                            f"that the process no longer has")
+            return {"system_id": desc.id, "system_name": desc.name,
+                    "linking": linking, "drift": drift}
         except Exception as ex:
             return {"error": str(ex)}
 

@@ -73,6 +73,25 @@ class ModelRulesMixin:
                      f"DELETE ON, DELETE SYSTEM \"{desc.name}\", SYSTEM "
                      f"\"{desc.name}\" (or EPD SYSTEMS for an EPD), then "
                      f"VALIDATE \"{desc.name}\".")
+        # The structure check: does the system still link what its
+        # foreground processes ask for? It reads the database, so it
+        # holds after RESET, in a new session, and after edits made in
+        # the openLCA app.
+        drift = self.bridge.system_drift(desc.id, self._build_folders())
+        if "error" not in drift and drift.get("drift"):
+            shown = drift["drift"][:5]
+            more = len(drift["drift"]) - len(shown)
+            listing = "\n".join(f"    {d}" for d in shown)
+            if more > 0:
+                listing += f"\n    ... and {more} more"
+            raise BasicError(
+                f"{command} refused: '{desc.name}' is out of date. Its "
+                f"processes have changed since the system was built:\n"
+                f"{listing}", line,
+                hint=f"Build the system again, then check it: CONFIRM "
+                     f"DELETE ON, DELETE SYSTEM \"{desc.name}\", SYSTEM "
+                     f"\"{desc.name}\" (or EPD SYSTEMS for an EPD), then "
+                     f"VALIDATE \"{desc.name}\".")
         if desc.name in self.runtime.revalidate:
             last = self.runtime.validation.get(desc.id)
             if not last or not last.get("valid", False):

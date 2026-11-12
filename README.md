@@ -319,7 +319,15 @@ MOVE PROCESS "Concrete block; at plant" TO "00: My Project/Archive"
 A product system keeps the links it was built with. After `EDIT
 PROCESS`, `LINK`, `MOVE` or `PARAMETERISE` on a process, every product
 system that holds it is out of date, and nothing can be calculated on
-it until it is built again and checked:
+it until it is built again and checked. This does not end with the
+session: every calculation also compares the system's links with what
+its processes ask for now, so an input added, removed or given another
+provider is caught after `RESET`, in a new session, and when the change
+was made in the openLCA app. (A changed amount on its own is only held
+against the session that made it: openLCA reads amounts from the
+processes when it calculates, so the result is right.) A system that
+has not passed `VALIDATE` in the session is checked with `VALIDATE`
+before its first calculation, so a failure is never forgotten either.
 
 ```basic
 CONFIRM DELETE ON

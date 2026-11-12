@@ -148,14 +148,34 @@ class EnforcementMixin:
 
     def _require_validated(self, desc, line: int, command: str):
         last = self.runtime.validation.get(desc.id)
-        if not last or last.get("valid", True):
+        when = "earlier in this session"
+        if last is None and desc.name in self.runtime.revalidate:
+            return      # rebuilt after a change: _require_fresh asks for VALIDATE
+        if last is None:
+            when = "just now"
+            # Not validated in this session (a new session, or after
+            # RESET): VALIDATE now, so a failure is never forgotten.
+            result = self.bridge.validate_system(desc.id, False)
+            if "error" in result:
+                raise BasicError(
+                    f"{command} refused: '{desc.name}' could not be "
+                    f"checked with VALIDATE ({result['error']}).", line,
+                    hint=f"VALIDATE \"{desc.name}\" and fix what it "
+                         f"reports.")
+            self._record_validation(result)
+            last = self.runtime.validation.get(desc.id) or result
+            self.out.write(
+                f"  NOTE: '{desc.name}' had not been checked in this "
+                f"session, so VALIDATE ran first: "
+                f"{'passed' if last.get('valid', True) else 'failed'}.")
+        if last.get("valid", True):
             return
         problems = "; ".join(
             f["message"] for f in last.get("findings", [])
             if f.get("severity") == "error") or "it has errors"
         raise BasicError(
-            f"{command} refused: '{desc.name}' failed VALIDATE earlier in "
-            f"this session ({problems}).", line,
+            f"{command} refused: '{desc.name}' failed VALIDATE {when} "
+            f"({problems}).", line,
             hint=f"Fix the links, or DELETE SYSTEM \"{desc.name}\" and "
                  f"SYSTEM \"{desc.name}\" again. Then VALIDATE "
                  f"\"{desc.name}\" before calculating.")
