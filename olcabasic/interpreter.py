@@ -1188,10 +1188,15 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 self.runtime.set_var(let_stmt.name,
                                      self._eval(let_stmt.expr))
             plan = {}
+
+            def before_writing(checked):
+                plan.update(self._make_process_fields(stmt, ex_list,
+                                                      checked))
+                self._no_new_flows_for_an_existing_process(
+                    stmt, name, folder, ex_list, checked)
+
             exchanges = self._build_exchanges(
-                stmt, folder, ex_list,
-                fields_check=lambda checked: plan.update(
-                    self._make_process_fields(stmt, ex_list, checked)))
+                stmt, folder, ex_list, fields_check=before_writing)
             local_values = {n: self.runtime.get_var(n) for n in
                             (l.name for l in stmt.local_params)}
         finally:
@@ -1240,6 +1245,48 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 plan, stmt)
         return done
 
+    def _no_new_flows_for_an_existing_process(self, stmt, name, folder,
+                                              ex_list, checked):
+        """Called after the look-up pass and before anything is
+        written. If the process exists and the block would create a
+        flow that is not in the database, the block has changed: say
+        so now, before the flow is made."""
+        same = [c for c in self.bridge.process_candidates(name)
+                if not folder or folder.lower() in c["category"].lower()]
+        if not same:
+            return
+        new = []
+        for ex, ex_dict in zip(ex_list, checked):
+            if ex_dict.get("flow_id") != "(to be created)":
+                continue
+            flow_name = ex_dict.get("flow_name", "")
+            if self.bridge.flow_candidates(
+                    flow_name, ex_dict.get("new_flow_folder", "")):
+                continue                      # MAKE FLOW will reuse it
+            word = "INPUT" if ex_dict.get("is_input") else "OUTPUT"
+            new.append(f'{word} MAKE FLOW "{flow_name}" would create a flow '
+                       f'that is not in the database, so it is not in the '
+                       f'process either.')
+        if new:
+            self._block_differs(name, folder, new, stmt.line)
+
+    def _block_differs(self, name, folder, differences, line,
+                       what="MAKE PROCESS"):
+        shown = differences[:MAX_DIFFERENCES]
+        listing = "\n".join(f"    - {d}" for d in shown)
+        if len(differences) > len(shown):
+            listing += (f"\n    ... and {len(differences) - len(shown)} "
+                        f"more")
+        n = len(differences)
+        raise BasicError(
+            f"{what} \"{name}\": a process of that name exists in "
+            f"{folder or '(root)'} and differs from this block in "
+            f"{n} place{'s' if n != 1 else ''}:\n{listing}", line,
+            hint=f"The process was not changed. To change it, use EDIT "
+                 f"PROCESS \"{name}\" ... END EDIT. To build it again from "
+                 f"this block, CONFIRM DELETE ON and DELETE PROCESS "
+                 f"\"{name}\" first, then build its product systems again.")
+
     def _block_must_match(self, process_id, name, folder, exchanges,
                           parameters, description, location, flow_schema,
                           process_schema, fields, stmt, what="MAKE PROCESS",
@@ -1267,20 +1314,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             self.out.write(f"  Process exists and matches this block: "
                            f"{name} (nothing changed)")
             return
-        shown = differences[:MAX_DIFFERENCES]
-        listing = "\n".join(f"    - {d}" for d in shown)
-        if len(differences) > len(shown):
-            listing += (f"\n    ... and {len(differences) - len(shown)} "
-                        f"more")
-        n = len(differences)
-        raise BasicError(
-            f"{what} \"{name}\": a process of that name exists in "
-            f"{folder or '(root)'} and differs from this block in "
-            f"{n} place{'s' if n != 1 else ''}:\n{listing}", line,
-            hint=f"The process was not changed. To change it, use EDIT "
-                 f"PROCESS \"{name}\" ... END EDIT. To build it again from "
-                 f"this block, CONFIRM DELETE ON and DELETE PROCESS "
-                 f"\"{name}\" first, then build its product systems again.")
+        self._block_differs(name, folder, differences, line, what)
 
     def _declared_differences(self, process_id: str, stmt) -> list:
         """The DATA, CONTROL and RATING lines of a block against what
@@ -1610,6 +1644,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 "is_qref": ex.is_product,
             }
             if check_only:
+                # where a MAKE FLOW line would put its flow
+                ex_dict["new_flow_folder"] = category
                 # the kind of flow, for the checks on the block's
                 # other lines: a flow that exists says so itself
                 known = (self.bridge.flow_info(flow_id)

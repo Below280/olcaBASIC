@@ -155,10 +155,10 @@ class ModelRulesMixin:
                      f"in a method of your own (EDIT METHOD). To accept it "
                      f"knowingly: CALCULATE \"system\" USING \"{method}\" "
                      f"IGNORE FACTORS \"{first}\".")
-        ignored = [own for (m, fid), own in (
-            ((m, fid), self.runtime.own_elementary.get(fid, fid))
-            for (m, fid) in sorted(self.runtime.accepted_no_factors))
-            if m == method]
+        ignored = [self.runtime.own_elementary.get(flow_id, flow_id)
+                   for accepted_for, flow_id
+                   in sorted(self.runtime.accepted_no_factors)
+                   if accepted_for == method]
         if ignored:
             names = ", ".join(f"'{n}'" for n in ignored)
             self.out.write(

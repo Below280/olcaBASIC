@@ -619,3 +619,18 @@ def test_a_new_emission_is_made_once_whatever_the_case_of_its_folder(client):
     flows = client.by_name(o.Flow, "Mystery gas")
     assert len(flows) == 1
     assert flows[0].category.startswith("Elementary flows/Emission to air")
+
+
+def test_a_changed_block_does_not_leave_a_new_flow_behind(session, client):
+    """The block now makes a flow the process never had. That is known
+    before anything is written, so the refusal leaves no flow behind."""
+    assert session.run(widget()).ok
+    before = snapshot(client)
+    code = widget(extra='  OUTPUT MAKE FLOW "Offcut", 0.2, kg')
+    e = err(session.run(code))
+    assert e["line"] == line_of(code, 'MAKE PROCESS "Widget"')
+    assert 'OUTPUT MAKE FLOW "Offcut" would create a flow that is not in ' \
+           'the database' in e["message"]
+    assert 'EDIT PROCESS "Widget"' in e["hint"]
+    assert client.by_name(o.Flow, "Offcut") == []
+    assert snapshot(client) == before
