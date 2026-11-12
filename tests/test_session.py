@@ -86,10 +86,12 @@ def test_warnings_and_notes_are_structured(session):
     session.run(WIDGET)
     r = session.run(WIDGET)
     warning = next(w for w in r.warnings if w["level"] == "warning")
-    assert "process 'Widget' already exists" in warning["message"]
-    assert warning["line"] == line_of(WIDGET, 'MAKE PROCESS "Widget"')
+    # (an identical PROCESS block no longer warns; the reused product
+    # system still does)
+    assert "product system 'Widget' already exists" in warning["message"]
+    assert warning["line"] == line_of(WIDGET, 'SYSTEM "Widget"')
     assert any(w["level"] == "note" for w in r.warnings)
-    assert "WARNING: process 'Widget' already exists" in r.text
+    assert "WARNING: product system 'Widget' already exists" in r.text
 
 
 # ── state persists across run calls ──────────────────────────

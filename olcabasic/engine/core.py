@@ -97,6 +97,9 @@ class CoreMixin:
         from openLCA again."""
         self._cache.clear()
         self._cache_ts.clear()
+        # what soundness.py remembers about methods (which processes a
+        # system holds is kept: a rebuilt system has a new id)
+        self.__dict__.pop("_characterised_cache", None)
 
     def cache_size(self) -> int:
         """Number of cached entries (descriptor lists and unit lookups)."""

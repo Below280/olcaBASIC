@@ -119,6 +119,12 @@ def test_results_are_unchanged_until_a_parameter_is_varied(session, client):
     before = gwp(session)
     assert before > 0
     assert session.run(f'PARAMETERISE PROCESS "{MIX}" CONFIRM').ok
+    # A system that holds a process that was parameterised is out of
+    # date until it is built again and validated (0.4.0, rule 3).
+    stale = session.run(f'CALCULATE "{MIX}" USING "{METHOD}"')
+    assert not stale.ok and "out of date" in stale.errors[0]["message"]
+    assert session.run(f'CONFIRM DELETE ON\nDELETE SYSTEM "{MIX}"\n'
+                       f'SYSTEM "{MIX}"\nVALIDATE "{MIX}"').ok
     assert gwp(session) == pytest.approx(before)
     gb = next(p.name for p in mix(client).parameters if p.value == 0.6)
     r = session.run(f'''SENSITIVITY ON "{MIX}" USING "{METHOD}" BY 50%

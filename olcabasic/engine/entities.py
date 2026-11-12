@@ -1182,6 +1182,7 @@ class EntitiesMixin:
             for cat in made:
                 self.client.put(cat)
             self.client.put(method)
+            self.__dict__.pop("_characterised_cache", None)
             self._cache.pop("ImpactMethod", None)
             self._cache.pop("ImpactCategory", None)
             result = {"id": method.id, "name": name, "created": True,
@@ -1352,6 +1353,7 @@ class EntitiesMixin:
             for cat in to_put:
                 self.client.put(cat)
             self.client.put(method)
+            self.__dict__.pop("_characterised_cache", None)
             if to_delete:
                 others = set()
                 for m in self.client.get_all(o.ImpactMethod):
@@ -1492,6 +1494,33 @@ class EntitiesMixin:
                         context=c["context"]))
         variant.parameter_redefs = redefs
         return variant
+
+    def project_systems(self, ref: str) -> Dict:
+        """What CALCULATE PROJECT will calculate: {"method", "variants":
+        [{"name", "system_id", "system", "allocation"}]} (enabled
+        variants only; allocation is PHYSICAL, ECONOMIC, CAUSAL, NONE,
+        AS_DEFINED or ""). Nothing is calculated."""
+        try:
+            project, err = self._get_one("PROJECT", ref)
+            if err:
+                return err
+            from .fields import ALLOCATION_NAMES
+            method = project.impact_method
+            variants = []
+            for v in project.variants or []:
+                if v.is_disabled or v.product_system is None:
+                    continue
+                variants.append({
+                    "name": v.name, "system_id": v.product_system.id,
+                    "system": v.product_system.name or "",
+                    "allocation": ALLOCATION_NAMES.get(
+                        v.allocation_method, "")
+                    if v.allocation_method is not None else ""})
+            return {"project": project.name,
+                    "method": method.name if method is not None else "",
+                    "variants": variants}
+        except Exception as ex:
+            return {"error": str(ex)}
 
     def calculate_project(self, ref: str) -> Dict:
         """

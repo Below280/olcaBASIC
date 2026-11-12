@@ -899,20 +899,22 @@ class EpdWorkflow(EpdToolkitMixin):
             exchanges.append(ex)
             used.append(st["name"])
 
-        result = self.bridge.create_process(
-            name, folder, exchanges, None,
+        description = (
             f"Total of module {code} of the EPD '{self.name}': adds up the "
             f"processes of the module. Built by olcaBASIC.")
+        result = self.bridge.create_process(
+            name, folder, exchanges, None, description)
         self.i._emit("create_process", result)
         if "error" in result:
             raise BasicError(result["error"], line)
         state["total"] = {"id": result["process_id"], "name": name,
                           "amount": amount, "unit": unit}
         if result.get("already_existed"):
-            self.out.write(
-                f"  WARNING: process '{name}' already exists in {folder}. "
-                f"It was NOT changed. DELETE PROCESS \"{name}\" first to "
-                f"rebuild it.")
+            # the total must still add up what the module holds now
+            self.i._block_must_match(
+                result["process_id"], name, folder, exchanges, None,
+                description, None, None, None, None, None,
+                what="TOTAL", line=line)
         else:
             tags = {"module": code, "role": "total"}
             for n, net in enumerate(state.get("net_flows", []), 1):
@@ -1036,6 +1038,7 @@ class EpdWorkflow(EpdToolkitMixin):
                     f"SYSTEM \"{name}\" first, then EPD SYSTEMS again.")
             else:
                 self.i._forget_validation(result.get("system_id", ""))
+                self.i._system_rebuilt(result.get("system_id", ""))
             for w in result.get("warnings") or []:
                 self.out.write(f"  WARNING: {w}")
             self._group_module(code, line)
@@ -1244,7 +1247,8 @@ class EpdWorkflow(EpdToolkitMixin):
         results = {}
         bio_split = {}
         for code, system in systems.items():
-            self.i._require_valid(system["id"], line, "EPD CALCULATE")
+            self.i._require_valid(system["id"], line, "EPD CALCULATE",
+                                  method=self.d["method"])
             self.out.write(f"  Calculating {code}: {system['name']}...")
             if biogenic_category:
                 split = self.bridge.flow_split(
@@ -1650,7 +1654,8 @@ class EpdWorkflow(EpdToolkitMixin):
         folder = f"{self.folder}/{self.RESULTS_FOLDER}"
         modules = []
         for code, system in systems.items():
-            self.i._require_valid(system["id"], line, "EPD SAVE")
+            self.i._require_valid(system["id"], line, "EPD SAVE",
+                                  method=self.d["method"])
             self.out.write(f"  Storing the result of {code}: "
                            f"{system['name']}...")
             opened = self.bridge.open_result(system["id"], d["method"],

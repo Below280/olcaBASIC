@@ -122,10 +122,12 @@ class LCABridge:
             allocation=allocation or None, result_handle=result_handle)
 
     def monte_carlo(self, system_ref: str, method_ref: str,
-                    iterations: int = 1000, allocation: str = "") -> Dict:
+                    iterations: int = 1000, allocation: str = "",
+                    trial: bool = False) -> Dict:
         self._require_connection()
         return self.engine.monte_carlo(
-            system_ref, method_ref, iterations, allocation or None)
+            system_ref, method_ref, iterations, allocation or None,
+            trial=trial)
 
     def run_scenarios(self, system_ref: str, method_ref: str,
                       scenarios: Dict, allocation: str = "") -> Dict:

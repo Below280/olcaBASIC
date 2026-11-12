@@ -18,6 +18,7 @@ from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
+from .enforce_model import ModelRulesMixin
 from .interp_results import ResultsInterpMixin
 from .interp_entities import EntitiesInterpMixin
 from .interp_fields import FieldsInterpMixin
@@ -27,6 +28,7 @@ from .workflows.epd import (
 )
 from .workflows import en15804
 from .workflows.epd_toolkit import rating_tags
+from .engine.compare import MAX_DIFFERENCES
 from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
@@ -131,7 +133,7 @@ def _command_word(stmt) -> str:
 
 
 class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
-                  EnforcementMixin):
+                  ModelRulesMixin, EnforcementMixin):
     """Executes olcaBASIC AST nodes."""
 
     def __init__(self, bridge: Optional[LCABridge] = None,
@@ -891,6 +893,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             existed = result.get("already_existed", False)
             status = "exists" if existed else "created"
             self.out.write(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
+            if ft == "elementary":
+                if existed:
+                    self._note_elementary(result.get("flow_id"), name)
+                else:
+                    self._own_emission(result.get("flow_id"), name)
             self._flow_fields(stmt, result.get("flow_id"), existed)
         else:
             # Default: find existing
@@ -906,6 +913,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 if "error" in result:
                     raise BasicError(result["error"], stmt.line)
                 self.out.write(f"  Flow created: {name} ({stmt.unit}, {ft})")
+                if ft == "elementary":
+                    self._own_emission(result.get("flow_id"), name)
                 self._flow_fields(stmt, result.get("flow_id"), False)
 
     def _flow_fields(self, stmt, flow_id, existed: bool):
@@ -1182,7 +1191,86 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if plan and created and not created.get("already_existed"):
             self._write_process_fields(created["process_id"], plan,
                                        stmt.line)
+        if created and created.get("already_existed"):
+            # The block must still say what the database holds
+            self._block_must_match(
+                created["process_id"], name, folder, exchanges, parameters,
+                description, location, flow_schema, process_schema,
+                plan, stmt)
         return done
+
+    def _block_must_match(self, process_id, name, folder, exchanges,
+                          parameters, description, location, flow_schema,
+                          process_schema, fields, stmt, what="MAKE PROCESS",
+                          line=None):
+        """A block run again for a process that exists is a quiet no-op
+        when nothing in it has changed, and an error that lists the
+        differences when something has. (It used to warn and leave the
+        old process, so the results came from a model the program no
+        longer described.)"""
+        line = line or stmt.line
+        documentation = (provenance_documentation(stmt.provenance)
+                         if stmt is not None else None)
+        result = self.bridge.process_block_differences(
+            process_id, name, folder, exchanges, parameters or None,
+            description, location, flow_schema, process_schema,
+            fields or None, documentation)
+        if "error" in result:
+            raise BasicError(
+                f"{what} \"{name}\": the process exists, and the block "
+                f"could not be compared with it: {result['error']}", line)
+        differences = list(result["differences"])
+        if stmt is not None:
+            differences += self._declared_differences(process_id, stmt)
+        if not differences:
+            self.out.write(f"  Process exists and matches this block: "
+                           f"{name} (nothing changed)")
+            return
+        shown = differences[:MAX_DIFFERENCES]
+        listing = "\n".join(f"    - {d}" for d in shown)
+        if len(differences) > len(shown):
+            listing += (f"\n    ... and {len(differences) - len(shown)} "
+                        f"more")
+        n = len(differences)
+        raise BasicError(
+            f"{what} \"{name}\": a process of that name exists in "
+            f"{folder or '(root)'} and differs from this block in "
+            f"{n} place{'s' if n != 1 else ''}:\n{listing}", line,
+            hint=f"The process was not changed. To change it, use EDIT "
+                 f"PROCESS \"{name}\" ... END EDIT. To build it again from "
+                 f"this block, CONFIRM DELETE ON and DELETE PROCESS "
+                 f"\"{name}\" first, then build its product systems again.")
+
+    def _declared_differences(self, process_id: str, stmt) -> list:
+        """The DATA, CONTROL and RATING lines of a block against what
+        the stored process declares."""
+        tags = provenance_tags(stmt.provenance, self._eval_str)
+        tags.update(self._rating_tags(stmt.ratings))
+        if getattr(stmt, "control", None):
+            tags["control"] = stmt.control
+        if not tags:
+            return []
+        got = self.bridge.get_process_tags(process_id, TAG_PREFIX)
+        stored = got.get("tags", {}) if "error" not in got else {}
+        norm = lambda v: None if v in (None, "") else str(v).replace(",", ";")
+        words = {"data": "DATA", "source": "DATA ... SOURCE",
+                 "provider": "DATA ... PROVIDER", "year": "DATA ... YEAR",
+                 "reason": "DATA ... REASON", "share": "DATA ... SHARE",
+                 "control": "CONTROL"}
+        out = []
+        for key, value in tags.items():
+            if norm(value) == norm(stored.get(key)):
+                continue
+            if key.startswith("rating_"):
+                aspect = key[len("rating_"):]
+                label = ("RATING " + aspect.replace("_reason", "").upper()
+                         + (" ... REASON" if key.endswith("_reason") else ""))
+            else:
+                label = words.get(key, key)
+            out.append(f"{label}: {norm(stored.get(key)) or 'nothing'} in "
+                       f"the database and {norm(value) or 'nothing'} in the "
+                       f"block.")
+        return out
 
     def _referenced_globals(self, formula: str) -> list:
         """Top-level variables named in a formula (whole words only,
@@ -1336,6 +1424,10 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 flow_id = flow_result["flow_id"]
                 if not flow_result.get("already_existed"):
                     self._made_flow(flow_name)
+                    if flow_type == "elementary":
+                        self._own_emission(flow_id, flow_name)
+                elif flow_type == "elementary":
+                    self._note_elementary(flow_id, flow_name)
 
             elif ex.direction_compartment:
                 # Elementary flow (TO AIR, TO WATER, etc.)
@@ -1344,6 +1436,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                     flow_name, unit, search_cats, strict=True)
                 if flow_match:
                     flow_id = flow_match["flow_id"]
+                    if not check_only:
+                        self._note_elementary(flow_id, flow_name)
                     if flow_match.get("ambiguous"):
                         self.out.write(f"  NOTE: '{flow_name}' exists in "
                               f"{flow_match['ambiguous']} sub-compartments; "
@@ -1631,10 +1725,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if result.get("process_id"):
             self.runtime.built_processes.add(result["process_id"])
         if result.get("already_existed", False):
-            where = folder or "(root)"
-            self.out.write(f"  WARNING: process '{name}' already exists in {where}. "
-                  f"It was NOT changed, so the exchanges above were not "
-                  f"applied. DELETE PROCESS \"{name}\" first to rebuild it.")
+            # _block_must_match says what happens next
             return
         ex_count = result.get("exchange_count", 0)
         p_count = result.get("parameter_count", 0)
@@ -1835,6 +1926,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.out.write(f"  Parameterised: {name}")
+        self._mark_stale(process_id, name, "PARAMETERISE")
         self.out.write(f"  {amounts} replaced with parameters. Each "
                        f"parameter holds the amount it replaced, so results "
                        f"are unchanged until one is varied.")
@@ -1932,6 +2024,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         else:
             self.out.write(f"  System created: {sys_name}")
             self._forget_validation(result.get("system_id", ""))
+            self._system_rebuilt(result.get("system_id", ""))
         if result.get("warnings"):
             for w in result["warnings"]:
                 self.out.write(f"  WARNING: {w}")
@@ -1954,7 +2047,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "CONTRIBUTION")
+        self._require_valid(system, stmt.line, "CONTRIBUTION",
+                            method=method, allocation=stmt.allocation)
         self._defaults(stmt, TOP=stmt.top)
         cats = [self._eval_str(c) for c in stmt.categories] or None
         self.out.write(f"  Contribution analysis: {system}...")
@@ -1971,7 +2065,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "INVENTORY")
+        self._require_valid(system, stmt.line, "INVENTORY",
+                            method=method, allocation=stmt.allocation)
         self._defaults(stmt, MAX=stmt.max_flows)
         self.out.write(f"  Inventory: {system}...")
         result = self.bridge.inventory(
@@ -1987,12 +2082,30 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "MONTECARLO")
+        self._require_valid(system, stmt.line, "MONTECARLO",
+                            method=method, allocation=stmt.allocation)
         self._defaults(stmt, RUNS=stmt.runs)
+        # With nothing uncertain in the foreground, two trial runs that
+        # agree mean every run would: that is refused before the runs.
+        has = self._foreground_uncertainty(system, stmt.line)
         self.out.write(f"  Monte Carlo ({stmt.runs} runs): {system}...")
         result = self.bridge.monte_carlo(
-            system, method, stmt.runs, stmt.allocation)
+            system, method, stmt.runs, stmt.allocation,
+            trial=not has["has_uncertainty"])
         self._emit("monte_carlo", result)
+        if result.get("no_uncertainty"):
+            raise BasicError(
+                f"MONTECARLO refused: nothing in '{system}' is uncertain. "
+                f"No exchange or parameter of its {has['processes']} "
+                f"foreground process{'es' if has['processes'] != 1 else ''} "
+                f"has an uncertainty distribution, and two trial runs gave "
+                f"the same results, so every run would be the same.",
+                stmt.line,
+                hint="Give the uncertain amounts a distribution: add "
+                     "UNCERTAINTY LOGNORMAL gm, gsd (or NORMAL mean, sd; "
+                     "TRIANGLE min, mode, max; UNIFORM min, max) to an "
+                     "INPUT or OUTPUT line, or to a LET. HELP UNCERTAINTY "
+                     "has the details.")
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "montecarlo")
@@ -2017,7 +2130,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "RUN SCENARIOS")
+        self._require_valid(system, stmt.line, "RUN SCENARIOS",
+                            method=method, allocation=stmt.allocation)
         self._defaults(stmt)
 
         if stmt.from_system:
@@ -2057,7 +2171,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "SENSITIVITY")
+        self._require_valid(system, stmt.line, "SENSITIVITY",
+                            method=method, allocation=stmt.allocation)
         self._defaults(stmt)
 
         if stmt.from_csv:
@@ -2261,6 +2376,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self.out.write(f"  Deleted: {result.get('name', ref)}")
         if etype == "product_system":
             self._forget_validation(target["id"])
+            self._system_rebuilt(target["id"])     # gone: no longer stale
         self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
@@ -2818,11 +2934,12 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 not any("location set" in str(c) for c in changes)):
             self.out.write(f"  WARNING: location '{kwargs['location']}' wasn't found, "
                   f"so the location is unchanged.")
-        if added or remove_ids or any("provider_id" in u for u in updates):
-            self.out.write("  NOTE: product systems that already use this process "
-                  "keep their old links. DELETE SYSTEM and SYSTEM again "
-                  "to include these changes.")
         self.bridge.refresh_caches()
+        # Anything but a new description or documentation changes what
+        # a product system holding this process would calculate.
+        if (set(kwargs) - {"description"}
+                or set(fields or {}) - {"document", "document_where"}):
+            self._mark_stale(proc_id, proc.name, "EDIT PROCESS")
 
     def _exec_show(self, stmt: ShowStmt):
         """SHOW PROCESS/FLOW/PARAMETER with optional sub-command."""
@@ -3111,6 +3228,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         self.out.write(f"  Linked: {source_name} -> {target_name} "
               f"({amount} {unit})")
+        self._mark_stale(tgt["process_id"], target_name, "LINK")
 
     def _active_folder(self) -> str:
         """Get the folder for the active navigation tree."""
@@ -3362,7 +3480,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "TREE")
+        self._require_valid(system, stmt.line, "TREE",
+                            method=method, allocation=stmt.allocation)
         if stmt.category is None:
             calc = self.bridge.calculate(system, method, stmt.allocation)
             if "error" in calc:
@@ -3438,6 +3557,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         self.out.write(f"  Moved {etype.lower()} '{ref}' to '{dest}'")
         self.bridge.refresh_caches()
+        if etype == "PROCESS":
+            self._mark_stale(found["id"], ref, "MOVE")
 
     def _exec_help(self, stmt):
         """HELP, HELP <topic>, HELP <command>: all from the registry."""

@@ -369,6 +369,17 @@ END PROCESS''',
   OUTPUT "Carbon dioxide, fossil", 5, kg TO AIR
 END PROCESS''',
         notes="Exactly one line is marked PRODUCT: the reference product.\n"
+              "Run again for a process that exists, the block changes "
+              "nothing, as long as it still says what the database holds. "
+              "If it does not (an amount, a formula, a provider, a "
+              "parameter or any other line differs), it is an error that "
+              "lists the differences: change the process with EDIT "
+              "PROCESS, or DELETE PROCESS and run the block again.\n"
+              "An OUTPUT whose name matches no flow is an error: OUTPUT "
+              "MAKE FLOW creates one. A new elementary flow (MAKE FLOW ... "
+              "TO AIR) has no characterisation factor in any method, and "
+              "calculating is refused until it has one or is accepted "
+              "with IGNORE FACTORS (HELP CALCULATE).\n"
               "USE PROCESS finds an existing process and links it as the "
               "provider; USE FLOW links a flow with no provider; MAKE FLOW "
               "creates the flow, or reuses one with the same name.\n"
@@ -494,6 +505,9 @@ END SYSTEM''',
         usage='LINK PROCESS "source" TO PROCESS "target" WITH amount, unit',
         summary="Add the source's product as an input of the target",
         example='LINK PROCESS "Cement supply" TO PROCESS "Concrete block" WITH 300, kg',
+        notes="The source has to be a bridge or a process of the program's "
+              "own folders. Product systems that hold the target are out "
+              "of date afterwards: DELETE SYSTEM, SYSTEM, VALIDATE.",
         statements=("LinkStmt",)),
     Command(
         name="MOVE", topic="BUILD",
@@ -504,7 +518,10 @@ END SYSTEM''',
         notes="MOVE ... TO FOLDER moves it to the current build folder. "
               "Only the folder changes: links are by UUID and are not "
               "affected. A name shared by several entries is refused: use "
-              "the UUID.\n"
+              "the UUID. Moving a process marks the product systems that "
+              "hold it as out of date (which folder a process is in "
+              "decides whether it is the program's own): build them again "
+              "and VALIDATE before calculating.\n"
               "The type is any of: PROCESS, SYSTEM, FLOW, PROPERTY (flow property), UNITS (unit group), PARAMETER (global parameter), METHOD, CATEGORY (impact category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, SOCIAL INDICATOR, PROJECT, RESULT (stored result), EPD and FLOW MAP. Flow maps cannot be "
               "reached through openLCA's IPC server, so MOVE FLOW MAP is "
               "refused.",
@@ -574,9 +591,12 @@ END EDIT''',
   UPDATE INPUT "BRIDGE | Cement | kg", 320, kg
   SET DESCRIPTION "Mix revised"
 END EDIT''',
-        notes="Product systems that already use the process keep their "
-              "old links: DELETE SYSTEM and SYSTEM again after adding or "
-              "removing exchanges.\n"
+        notes="Every product system that holds the process is out of "
+              "date after the edit, and nothing can be calculated on it "
+              "until it is built again and passes VALIDATE: DELETE SYSTEM, "
+              "SYSTEM, VALIDATE. (An edit that only sets the description, "
+              "DOCUMENT fields, DATA, CONTROL or RATING lines changes no "
+              "result and leaves the systems as they are.)\n"
               "If a flow appears more than once in the process, say which "
               "exchange you mean: INDEX n (the error lists them with their "
               "index), or for REMOVE also PROVIDER, LOCATION or AMOUNT.",
@@ -947,7 +967,10 @@ END EDIT''',
               "database up in openLCA first. Without CONFIRM the command is "
               "refused and says how many amounts it would change.\n"
               "A name that several processes share needs LOCATION \"code\" "
-              "or the UUID.",
+              "or the UUID.\n"
+              "Product systems that hold the process are out of date "
+              "afterwards: DELETE SYSTEM, SYSTEM, VALIDATE before "
+              "calculating.",
         statements=("ParameteriseStmt",)),
 
     # ── PARAMETERS ───────────────────────────────────────────
@@ -1007,7 +1030,17 @@ END EDIT''',
               "NORMALISED, RESULT WEIGHTED). PARAMETER SET uses a "
               "parameter set stored on the system. WITH REGIONALIZATION is "
               "accepted as a spelling. The words can come in any order "
-              "after the method.",
+              "after the method.\n"
+              "Refused, like every command that calculates: a system that "
+              "failed VALIDATE; a system that is out of date because one "
+              "of its processes was edited, linked, moved or parameterised "
+              "(build it again, then VALIDATE); ALLOCATE PHYSICAL or "
+              "ECONOMIC when a process with several products has no "
+              "factors for that method; and a method with no "
+              "characterisation factor for an elementary flow the program "
+              "created. IGNORE FACTORS \"flow\" accepts the last one "
+              "knowingly, for that flow and method, for the rest of the "
+              "session, and the output says so.",
         statements=("CalculateStmt",)),
     Command(
         name="CONTRIBUTION", topic="CALCULATE",
@@ -1041,8 +1074,12 @@ END CONTRIBUTION''',
         example='MONTECARLO "Concrete block" USING "EF v3.1" RUNS 500',
         notes="RUNS defaults to 1000. Reports mean, standard deviation, "
               "coefficient of variation, minimum, maximum, median and the "
-              "5th and 95th percentiles. If the processes carry no "
-              "uncertainty data every run is the same, and it says so.",
+              "5th and 95th percentiles.\n"
+              "Refused before the runs start when nothing is uncertain: "
+              "no exchange or parameter of the foreground has an "
+              "UNCERTAINTY and two trial runs give the same results. Put "
+              "UNCERTAINTY on the INPUT, OUTPUT or LET lines that are "
+              "uncertain.",
         statements=("MonteCarloStmt",)),
 
     # ── RESULT ───────────────────────────────────────────────
@@ -1478,7 +1515,8 @@ END MODULE''',
               "is counted through that one.\n"
               "An input has to come from a bridge or from a process in "
               "the EPD folder. A background process used directly is an "
-              "error.\n"
+              "error, and so is a process that belongs to another module: "
+              "its impacts would be counted in both.\n"
               "A module with nothing in it still needs its TOTAL line; "
               "its results are zero.\n"
               "NET FLOW, in MODULE D, declares what leaves the product "

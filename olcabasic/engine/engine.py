@@ -28,6 +28,9 @@ The class is put together from one module per kind of work:
                   sources, currencies, locations, unit groups, flow
                   properties, social indicators, data quality systems,
                   impact methods, projects, stored results
+    compare.py    a PROCESS block against the stored process
+    soundness.py  stale systems, flows without factors, uncertainty
+                  and allocation factors in the foreground
     model.py      whole-model reads for the EPD toolkit: parameters in
                   use, an indicator split by flow, the model written out
 """
@@ -38,6 +41,7 @@ from .analysis import AnalysisMixin
 from .audit import AuditMixin
 from .build import BuildMixin
 from .calculate import CalculateMixin
+from .compare import CompareMixin
 from .core import CoreMixin
 from .entities import EntitiesMixin
 from .explore import ExploreMixin
@@ -45,13 +49,14 @@ from .fields import FieldsMixin
 from .model import ModelMixin
 from .resolve import ResolveMixin
 from .results import ResultsMixin
+from .soundness import SoundnessMixin
 
 logger = logging.getLogger(__name__)
 
 
 class Engine(CoreMixin, ExploreMixin, BuildMixin, AuditMixin, CalculateMixin,
              AnalysisMixin, ResolveMixin, ResultsMixin, FieldsMixin,
-             EntitiesMixin, ModelMixin):
+             EntitiesMixin, ModelMixin, CompareMixin, SoundnessMixin):
     """One connection's worth of openLCA operations.
 
     Methods return plain dictionaries. A failure is reported as

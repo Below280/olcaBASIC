@@ -502,6 +502,15 @@ class EntitiesInterpMixin:
     def _exec_calculate_project(self, stmt):
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
+        # every variant goes through the same gate as CALCULATE
+        plan = self.bridge.project_systems(name)
+        if "error" not in plan:
+            for v in plan["variants"]:
+                self._require_valid(
+                    v["system_id"], stmt.line, "CALCULATE PROJECT",
+                    method=plan["method"],
+                    allocation=("" if v["allocation"] in ("", "AS_DEFINED")
+                                else v["allocation"]))
         self.out.write(f"  Calculating project: {name}...")
         result = self.bridge.calculate_project(name)
         if "error" in result:

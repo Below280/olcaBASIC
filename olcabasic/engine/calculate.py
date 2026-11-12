@@ -409,13 +409,19 @@ class CalculateMixin:
 
     def monte_carlo(self, system_ref: str, method_ref: str,
                     iterations: int = 1000,
-                    allocation: Optional[str] = None) -> Dict:
+                    allocation: Optional[str] = None,
+                    trial: bool = False) -> Dict:
         """
         Run Monte Carlo uncertainty simulation.
 
         Starts a simulation in openLCA (result/simulate), asks for one
         run after another (result/simulate/next), collects the impact
         totals of each and computes statistics.
+
+        trial: stop after two runs if they give the same total for
+        every category, and return {"error", "no_uncertainty": True}.
+        (The caller asks for this when nothing in the foreground has an
+        uncertainty distribution: every run would then be the same.)
         """
         # V07: Reject non-positive iterations
         if iterations <= 0:
@@ -448,7 +454,8 @@ class CalculateMixin:
             distributions: Dict[str, List[float]] = {}
             cat_units = {}
 
-            for i in range(iterations):
+            runs = max(iterations, 2) if trial else iterations
+            for i in range(runs):
                 state = result.simulate_next()
                 err = getattr(state, "error", None)
                 if not err:
@@ -466,8 +473,19 @@ class CalculateMixin:
                             imp.impact_category, "ref_unit", "")
                     distributions[name].append(imp.amount)
 
+                if trial and i == 1 and all(
+                        v[0] == v[1] for v in distributions.values()):
+                    return {"error": "Two trial runs gave the same result "
+                                     "for every category: nothing in this "
+                                     "system is uncertain.",
+                            "no_uncertainty": True}
+
                 if (i + 1) % 100 == 0:
                     logger.info(f"Monte Carlo: {i + 1}/{iterations}")
+
+            if runs > iterations:
+                distributions = {name: values[:iterations]
+                                 for name, values in distributions.items()}
 
             stats = {}
             for name, values in distributions.items():

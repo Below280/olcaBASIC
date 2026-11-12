@@ -40,7 +40,7 @@ END BRIDGE
 '''
 
 WIDGET = SETUP + BRIDGES + f'''
-LET elec = 2.5
+LET elec = 2.5 UNCERTAINTY UNIFORM 2, 3
 MAKE PROCESS "Widget"
   OUTPUT MAKE FLOW "Widget", 1, kg, PRODUCT
   INPUT USE PROCESS "{B_ELEC}", elec, kWh
@@ -165,10 +165,14 @@ END PROCESS''')
     assert client.by_name(o.Parameter, "mass") == []
 
 
-def test_making_a_process_twice_warns_and_does_not_duplicate(run, client):
+def test_making_a_process_twice_is_quiet_and_does_not_duplicate(run, client):
+    """An identical block run again changes nothing and says so. (It
+    used to warn; a block that differs is now an error: see
+    test_model_rules.py.)"""
     run(WIDGET)
     out = run(WIDGET)
-    assert "WARNING: process 'Widget' already exists in 00: Test" in out
+    assert "Process exists and matches this block: Widget" in out
+    assert "WARNING: process" not in out
     assert len(client.by_name(o.Process, "Widget")) == 1
     assert len(client.by_name(o.Flow, "Widget")) == 1
 
@@ -287,7 +291,9 @@ EDIT PROCESS "Widget"
   SET DESCRIPTION "Edited"
 END EDIT''')
     assert "Edited process: Widget" in out
-    assert "keep their old links" in out
+    # the system that holds the process is out of date and says so
+    assert 'product system "Widget" contains \'Widget\' and is now out '\
+        'of date' in out
     proc = process(client, "Widget")
     steel = next(e for e in proc.exchanges
                  if client._flow_name(e.flow.id) == B_STEEL)
@@ -504,7 +510,10 @@ def test_montecarlo_statistics_shape(run, interp):
     stats = next(iter(res["statistics"].values()))
     assert set(stats) == {"unit", "iterations", "mean", "std_dev", "cv_pct",
                           "min", "max", "median", "p5", "p95"}
-    assert "zero variance" in res["warning"]
+    # The model has an uncertain parameter (elec), so the runs differ.
+    # (With nothing uncertain MONTECARLO is refused: test_model_rules.py.
+    # It used to run and warn that every run was the same.)
+    assert any(s["std_dev"] > 0 for s in res["statistics"].values())
 
 
 def test_inventory(run, interp):

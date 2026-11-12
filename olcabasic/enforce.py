@@ -127,12 +127,26 @@ class EnforcementMixin:
     def _forget_validation(self, system_id: str):
         self.runtime.validation.pop(system_id, None)
 
-    def _require_valid(self, system: str, line: int, command: str):
-        """No calculating a system whose last VALIDATE in this session
-        failed."""
+    def _require_valid(self, system: str, line: int, command: str,
+                       method: str = "", allocation: str = "",
+                       check_allocation: bool = True):
+        """The gate every calculating command goes through. Refused:
+        a system whose last VALIDATE in this session failed; a system
+        that is out of date; a method with no factor for a flow the
+        program created; allocation without factors (see
+        enforce_model.py for the last three)."""
         desc = self.bridge.find_system(system)
         if desc is None:
             return                      # the engine reports the missing system
+        self._require_validated(desc, line, command)
+        self._require_fresh(desc, line, command)
+        if method:
+            self._require_factors(method, line, command)
+        if check_allocation:
+            self._require_allocation_factors(desc.id, allocation, line,
+                                             command)
+
+    def _require_validated(self, desc, line: int, command: str):
         last = self.runtime.validation.get(desc.id)
         if not last or last.get("valid", True):
             return

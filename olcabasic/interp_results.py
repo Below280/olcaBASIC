@@ -42,6 +42,22 @@ class ResultsInterpMixin:
             self._close_result(name)
         return len(names)
 
+    def _system_changed(self, system_id: str):
+        """A stored product system, or a process in it, was changed: a
+        result of it that is still open shows the model as it was, so
+        it is closed."""
+        if not system_id or self.bridge is None:
+            return
+        desc = self.bridge.find_system(system_id)
+        if desc is None:
+            return
+        for name, info in list(self.runtime.open_results.items()):
+            if info.get("system") == desc.name:
+                self._close_result(name)
+                self.out.write(
+                    f"  Closed {self._result_label(name)}: it was "
+                    f"calculated before '{desc.name}' changed.")
+
     def _open_result_info(self, name: str, line: int) -> Dict:
         info = self.runtime.open_results.get(name)
         if info is not None:
@@ -71,7 +87,12 @@ class ResultsInterpMixin:
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
         method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "CALCULATE")
+        if stmt.ignore_factors:
+            self._accept_no_factors(
+                [self._eval_str(e) for e in stmt.ignore_factors], method,
+                stmt.line)
+        self._require_valid(system, stmt.line, "CALCULATE", method=method,
+                            allocation=stmt.allocation)
         self._defaults(stmt)
         name = stmt.result_name
         if name.upper() == "ALL":

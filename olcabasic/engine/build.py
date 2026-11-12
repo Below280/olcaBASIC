@@ -486,6 +486,11 @@ class BuildMixin:
             f.name = name
             f.category = category
             f.flow_type = ft
+            if ft == o.FlowType.ELEMENTARY_FLOW:
+                # A new elementary flow has no characterisation factor
+                # in any method. The tag lets a later session find it
+                # and check that before calculating (soundness.py).
+                f.tags = ["olcaBASIC"]
             f.flow_properties = [o.FlowPropertyFactor(
                 flow_property=fp_ref,
                 conversion_factor=1.0,
@@ -692,13 +697,18 @@ class BuildMixin:
                        description: str = "",
                        location: Optional[str] = None,
                        flow_schema: Optional[str] = None,
-                       process_schema: Optional[str] = None) -> Dict:
+                       process_schema: Optional[str] = None,
+                       _build_only: bool = False) -> Dict:
         """
         Create a process, or return the existing one if a process
         with the same name and category already exists.
 
         If the process exists, returns its ID with already_existed=True
         so the assistant can use edit_process to modify it.
+
+        _build_only is for the engine itself (process_block_differences):
+        the process is put together and returned as {"process": ...}
+        without looking for an existing one and without saving it.
         """
         try:
             # B01: Reject empty or whitespace-only process names
@@ -774,7 +784,7 @@ class BuildMixin:
                         pass  # caught later in B06
 
             # Pre-flight: check if this process already exists
-            existing = self._get_descriptors(o.Process)
+            existing = [] if _build_only else self._get_descriptors(o.Process)
             for p in existing:
                 p_cat = getattr(p, "category", "") or ""
                 if p.name == name and (not category or category in p_cat):
@@ -1008,6 +1018,8 @@ class BuildMixin:
                         f"DQ system '{process_schema}' not found, skipped."
                     )
 
+            if _build_only:
+                return {"process": p}
             ref = self.client.put(p)
 
             # Clear process cache so create_system can find it

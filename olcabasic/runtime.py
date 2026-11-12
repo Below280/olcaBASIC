@@ -103,6 +103,19 @@ class Runtime:
         # Last VALIDATE result per product system id (this session)
         self.validation: Dict[str, Dict] = {}
 
+        # Product systems that are out of date because a process in
+        # them changed: id -> {"name", "process", "why"}; and the names
+        # of systems that must pass VALIDATE again once rebuilt
+        self.stale_systems: Dict[str, Dict] = {}
+        self.revalidate: set = set()
+
+        # Elementary flows olcaBASIC created (id -> name), the flows
+        # already looked at, and the (method, flow id) pairs accepted
+        # with IGNORE FACTORS
+        self.own_elementary: Dict[str, str] = {}
+        self.checked_elementary: set = set()
+        self.accepted_no_factors: set = set()
+
         # Defaults already stated this session
         self.defaults_shown: set = set()
 

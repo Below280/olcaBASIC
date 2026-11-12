@@ -319,8 +319,6 @@ class FieldsInterpMixin:
             self._system_changed(result.get("system_id", ""))
         return result
 
-    def _system_changed(self, system_id: str):
-        """Hook: a stored product system was changed."""
 
     def _exec_edit_system(self, stmt: EditSystemStmt):
         self._require_bridge(stmt.line)
