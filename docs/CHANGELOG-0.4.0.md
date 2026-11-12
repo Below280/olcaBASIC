@@ -72,7 +72,7 @@ Variables, folders, scenarios and the latest results persist between `run` calls
 - `EDIT PROCESS`: when a flow appears more than once in a process, `REMOVE INPUT "name" INDEX 2` (or `PROVIDER`, `LOCATION`, `AMOUNT`) removes one of them, and `UPDATE INPUT "name" INDEX 2, ...` updates one.
 - `SAVE PROGRAM "file.baslca"`: writes out every program that has run without error in the session, as the record of the work.
 - `MAX(a, b)` works (it was a reserved word and could not be called).
-- `PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM`: replaces the fixed amounts of the product and waste exchanges of a process with parameters, so a background process (the shares of a market mix, say) can be varied by scenarios and sensitivity. It changes the process for good, so it is refused without `CONFIRM`, says how many amounts it would change, and tells you to back up the database first.
+- `PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM`: replaces the fixed amounts of the product and waste exchanges of a process with parameters, so a background process (the shares of a market mix, say) can be varied by scenarios and sensitivity. It changes the process for good, so it is refused without `CONFIRM`, says how many amounts it would change, and tells you to back up the database first. `ALL` takes the elementary flows too; it asks twice before writing (type `YES`, then `PARAMETERISE`), and only runs in the olcaBASIC terminal, never through a Session or the MCP.
 
 **EPDs to EN 15804+A2.** New commands that enforce the rules as the model is built:
 

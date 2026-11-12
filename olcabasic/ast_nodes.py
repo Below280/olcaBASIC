@@ -630,9 +630,10 @@ class NewFromTemplateStmt(Statement):
 
 @dataclass
 class ParameteriseStmt(Statement):
-    """PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM"""
+    """PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM"""
     target: Expr = None
     location: Expr = None
+    all_flows: bool = False    # ALL: elementary flows too
     confirm: bool = False
 
 

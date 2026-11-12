@@ -1529,6 +1529,36 @@ class Interpreter(EnforcementMixin):
         "This changes the process in the database for good. It cannot be "
         "undone without restoring a backup of the database.")
 
+    ALL_NEEDS_A_PERSON = (
+        "PARAMETERISE ... ALL asks twice before it writes anything, so it "
+        "only runs in the olcaBASIC terminal with a person there to "
+        "answer. Without ALL, elementary flows are left alone and CONFIRM "
+        "is enough.")
+
+    def _confirm_parameterise_all(self, name: str, n: int, elementary: int,
+                                  line: int):
+        """ALL rewrites every fixed amount, emissions and resources
+        included. It asks twice, and only a person can answer: in a
+        Session (and so through the MCP) it is refused."""
+        self.out.write(
+            f"  PARAMETERISE ... ALL will replace {n} fixed amounts in "
+            f"'{name}' with parameters, {elementary} of them elementary "
+            f"flows (emissions and resources).")
+        self.out.write(f"  {self.BACKUP_WARNING}")
+        first = self._ask("  Are you sure? Type YES to go on: ", line,
+                          self.ALL_NEEDS_A_PERSON)
+        if first.strip().upper() != "YES":
+            raise BasicError("PARAMETERISE ... ALL cancelled. Nothing was "
+                             "changed.", line)
+        self.out.write(
+            f"  All {n} amounts will be rewritten in the database, and "
+            f"there is no going back without a backup.")
+        second = self._ask("  Are you really sure? Type PARAMETERISE to go "
+                           "ahead: ", line, self.ALL_NEEDS_A_PERSON)
+        if second.strip().upper() not in ("PARAMETERISE", "PARAMETERIZE"):
+            raise BasicError("PARAMETERISE ... ALL cancelled. Nothing was "
+                             "changed.", line)
+
     def _exec_parameterise(self, stmt):
         """PARAMETERISE PROCESS "name" CONFIRM: turn the fixed amounts
         of a process into parameters. Refused without CONFIRM."""
@@ -1550,25 +1580,35 @@ class Interpreter(EnforcementMixin):
                          f"\"{ref}\" lists what matches.")
             process_id, name = found["id"], found["name"]
 
-        plan = self.bridge.parameterise_process(process_id, True)
+        plan = self.bridge.parameterise_process(process_id, True,
+                                                stmt.all_flows)
         if "error" in plan:
             raise BasicError(plan["error"], stmt.line)
         n = plan["parameterised"]
         if n == 0:
+            kinds = ("exchange" if stmt.all_flows
+                     else "product or waste exchange")
             self.out.write(f"  Nothing to parameterise in '{name}': it has no "
-                           f"product or waste exchange with a fixed amount.")
+                           f"{kinds} with a fixed amount.")
             return
         amounts = f"{n} fixed amount{'s' if n != 1 else ''}"
         if not stmt.confirm:
             location_part = f' LOCATION "{location}"' if location else ""
+            all_part = " ALL" if stmt.all_flows else ""
             raise BasicError(
                 f"PARAMETERISE PROCESS refused without CONFIRM. It would "
                 f"replace {amounts} in '{name}' with parameters. "
                 f"{self.BACKUP_WARNING}", stmt.line,
                 hint=f"Back up the database in openLCA first. Then: "
-                     f"PARAMETERISE PROCESS \"{ref}\"{location_part} CONFIRM")
+                     f"PARAMETERISE PROCESS \"{ref}\"{location_part}"
+                     f"{all_part} CONFIRM")
+        if stmt.all_flows:
+            elementary = sum(1 for p in plan["parameters"]
+                             if p.get("elementary"))
+            self._confirm_parameterise_all(name, n, elementary, stmt.line)
         self.out.write(f"  WARNING: {self.BACKUP_WARNING}")
-        result = self.bridge.parameterise_process(process_id, False)
+        result = self.bridge.parameterise_process(process_id, False,
+                                                  stmt.all_flows)
         self._emit("parameterise_process", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)

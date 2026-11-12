@@ -476,7 +476,7 @@ END EDIT''',
     Command(
         name="PARAMETERISE PROCESS", aliases=("PARAMETERIZE PROCESS",),
         topic="EDIT",
-        usage='PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM',
+        usage='PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM',
         summary="Replace the fixed amounts of a process with parameters",
         example='PARAMETERISE PROCESS "Grid mix, test" CONFIRM',
         notes="For a process of the background database whose amounts you "
@@ -487,6 +487,12 @@ END EDIT''',
               "scenario or a sensitivity analysis varies a parameter. "
               "Elementary flows and exchanges that already have a formula "
               "are left alone.\n"
+              "ALL takes the elementary flows (emissions and resources) "
+              "too. Because it rewrites every amount, it asks twice before "
+              "it writes anything: type YES, then PARAMETERISE. Any other "
+              "answer cancels it with nothing changed. Only a person at "
+              "the olcaBASIC terminal can answer, so ALL cannot run through "
+              "a Session or the MCP.\n"
               "This changes the process for good. It cannot be undone "
               "without restoring a backup of the database, so back the "
               "database up in openLCA first. Without CONFIRM the command is "

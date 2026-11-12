@@ -192,3 +192,82 @@ def test_the_engine_reports_without_writing(client):
     assert plan["parameterised"] == 2 and plan["written"] is False
     assert [p["value"] for p in plan["parameters"]] == [0.6, 0.4]
     assert not mix(client).parameters
+
+
+# ── ALL: elementary flows too, and two questions before anything is written ──
+
+from olcabasic.errors import BasicError  # noqa: E402
+
+
+def _answers(monkeypatch, *replies):
+    """Scripted keyboard answers; records the questions asked."""
+    asked, it = [], iter(replies)
+
+    def fake_input(prompt=""):
+        asked.append(prompt)
+        return next(it)
+    monkeypatch.setattr("builtins.input", fake_input)
+    return asked
+
+
+def _untouched(client):
+    proc = mix(client)
+    return not proc.parameters and all(not ex.amount_formula
+                                       for ex in proc.exchanges)
+
+
+def test_all_is_refused_without_confirm(session, client):
+    r = session.run(f'PARAMETERISE PROCESS "{MIX}" ALL')
+    assert not r.ok
+    assert "3 fixed amounts" in r.errors[0]["message"]
+    assert f'PARAMETERISE PROCESS "{MIX}" ALL CONFIRM' in r.errors[0]["hint"]
+    assert _untouched(client)
+
+
+def test_all_cannot_run_through_a_session(session, client):
+    """Nobody is there to answer, so the MCP can never run it."""
+    r = session.run(f'PARAMETERISE PROCESS "{MIX}" ALL CONFIRM')
+    assert not r.ok
+    assert "asks twice" in r.errors[0]["hint"]
+    assert "olcaBASIC terminal" in r.errors[0]["hint"]
+    assert _untouched(client)
+
+
+def test_all_asks_twice_then_includes_elementary_flows(interp, client,
+                                                       monkeypatch, capsys):
+    asked = _answers(monkeypatch, "YES", "PARAMETERISE")
+    interp.run_program(f'PARAMETERISE PROCESS "{MIX}" ALL CONFIRM')
+    out = capsys.readouterr().out
+    assert len(asked) == 2
+    assert "Are you sure?" in asked[0] and "YES" in asked[0]
+    assert "Are you really sure?" in asked[1]
+    assert "3 fixed amounts" in out and "1 of them elementary" in out
+    assert "no going back" in out
+    proc = mix(client)
+    emission = next(ex for ex in proc.exchanges if ex.internal_id == 4)
+    assert emission.amount_formula
+    assert sorted(p.value for p in proc.parameters) == [0.001, 0.4, 0.6]
+    qref = next(ex for ex in proc.exchanges if ex.is_quantitative_reference)
+    assert not qref.amount_formula
+
+
+@pytest.mark.parametrize("replies", [("no",), ("", ), ("YES", "yes"),
+                                     ("YES", "")])
+def test_all_is_cancelled_by_any_other_answer(interp, client, monkeypatch,
+                                              replies):
+    _answers(monkeypatch, *replies)
+    with pytest.raises(BasicError, match="cancelled. Nothing was changed"):
+        interp.run_program(f'PARAMETERISE PROCESS "{MIX}" ALL CONFIRM')
+    assert _untouched(client)
+
+
+def test_without_all_elementary_flows_are_still_left_alone(session, client):
+    r = session.run(f'PARAMETERISE PROCESS "{MIX}" CONFIRM')
+    assert r.ok, r.errors
+    emission = next(ex for ex in mix(client).exchanges if ex.internal_id == 4)
+    assert not emission.amount_formula
+
+
+def test_all_parses():
+    stmt = parse(f'PARAMETERISE PROCESS "{MIX}" LOCATION "GB" ALL CONFIRM')[0]
+    assert stmt.all_flows and stmt.confirm

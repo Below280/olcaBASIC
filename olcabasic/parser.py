@@ -2683,7 +2683,7 @@ class Parser:
         return stmt
 
     def parse_parameterise(self, line: int) -> ParameteriseStmt:
-        """PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM"""
+        """PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM"""
         self.advance()                                    # PARAMETERISE
         self.advance()                                    # PROCESS
         if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
@@ -2694,6 +2694,8 @@ class Parser:
         stmt = ParameteriseStmt(line=line, target=self.parse_string_or_expr())
         if self.match_keyword("LOCATION"):
             stmt.location = self.parse_string_or_expr()
+        if self.match_word("ALL"):
+            stmt.all_flows = True
         if self.match_word("CONFIRM"):
             stmt.confirm = True
         self.expect_newline()

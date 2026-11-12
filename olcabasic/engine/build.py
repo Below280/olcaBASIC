@@ -312,7 +312,8 @@ class BuildMixin:
         return fp_ref
 
     def parameterise_process(self, process_id: str,
-                             dry_run: bool = False) -> Dict:
+                             dry_run: bool = False,
+                             include_elementary: bool = False) -> Dict:
         """Replace the fixed amounts of a process with parameters.
 
         Each product or waste exchange that has a fixed amount (no
@@ -320,7 +321,8 @@ class BuildMixin:
         parameter holding that amount, and the exchange gets the
         parameter's name as its formula. Results do not change; the
         amounts can then be varied by scenarios and sensitivity.
-        Elementary flows are left as they are.
+        Elementary flows are left as they are unless
+        include_elementary is True (PARAMETERISE ... ALL).
 
         This changes the process for good: there is no undo short of
         restoring a backup of the database. dry_run=True reports what
@@ -349,7 +351,8 @@ class BuildMixin:
                         flow = self.client.get(o.Flow, ex.flow.id)
                         flow_types[ex.flow.id] = getattr(flow, "flow_type", None)
                     flow_type = flow_types[ex.flow.id]
-                if flow_type == o.FlowType.ELEMENTARY_FLOW:
+                is_elementary = flow_type == o.FlowType.ELEMENTARY_FLOW
+                if is_elementary and not include_elementary:
                     elementary += 1
                     continue
                 unit = ex.unit.name if ex.unit else ""
@@ -357,7 +360,8 @@ class BuildMixin:
                     index, process.name, ex.flow.name or "", unit, used)
                 made.append({"name": name, "value": ex.amount,
                              "flow": ex.flow.name or "", "unit": unit,
-                             "is_input": bool(ex.is_input)})
+                             "is_input": bool(ex.is_input),
+                             "elementary": is_elementary})
                 if dry_run:
                     continue
                 param = o.Parameter()

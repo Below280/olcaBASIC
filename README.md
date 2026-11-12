@@ -589,7 +589,7 @@ EDIT FLOW "name"
   UPDATE PROPERTY "Mass" AS 2350 kg PER m3
   SET REFERENCE "Mass"
 END EDIT
-PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM
+PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM
 ```
 
 ### Parameters: variables that become openlca parameters
