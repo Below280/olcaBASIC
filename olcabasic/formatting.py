@@ -424,6 +424,9 @@ def results_to_csv(results: Dict, results_type: str) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
 
+    if results_type == "query":
+        return query_to_csv(results)
+
     if results_type == "calculate":
         writer.writerow(["Impact Category", "Amount", "Unit"])
         for imp in results.get("impacts", []):
@@ -598,3 +601,89 @@ def format_tree(result: Dict, with_quality: bool = True) -> str:
     if unscored:
         lines.append(f"  No pedigree scores:  {unscored:5.1f}%")
     return "\n".join(lines)
+
+
+# ── result queries (RESULT ...) ──────────────────────────────
+
+_QUERY_HEADERS = {
+    "category": "Impact category", "amount": "Amount", "unit": "Unit",
+    "process": "Process", "location": "Location", "product": "Product",
+    "flow": "Flow", "compartment": "Compartment", "direction": "Direction",
+    "share_pct": "Share", "factor": "Factor", "factor_unit": "Unit",
+    "group": "Group", "tag": "Tag", "level": "Level", "direct": "Direct",
+    "system": "System", "currency": "Currency", "index": "No.",
+}
+_QUERY_WIDTHS = {"category": 50, "process": 60, "flow": 40,
+                 "compartment": 40, "product": 40, "unit": 24,
+                 "factor_unit": 30, "group": 30, "tag": 30}
+
+
+def format_number(value) -> str:
+    """A number the way impact tables show it."""
+    if value is None:
+        return ""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if value == 0:
+        return "0"
+    if abs(value) > 1e6 or abs(value) < 0.01:
+        return f"{value:.4e}"
+    return f"{value:.6f}"
+
+
+def _query_cell(column: str, row: Dict) -> str:
+    value = row.get(column)
+    if column == "share_pct":
+        return "" if value is None else f"{value:.2f}%"
+    if column == "level":
+        return str(value)
+    if column == "process" and "level" in row:
+        return "  " * int(row.get("level") or 0) + str(value or "")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return format_number(value)
+    return "" if value is None else str(value)
+
+
+def format_query(result: Dict) -> str:
+    """One RESULT query as a table with its heading."""
+    lines = [f"  {result.get('title', result.get('query', 'Result'))}"]
+    context = [f"System: {result.get('system', '?')}"]
+    if result.get("method"):
+        context.append(f"Method: {result['method']}")
+    lines.append("  " + "   ".join(context))
+    if result.get("total") is not None and result.get("query") != "costs":
+        unit = result.get("unit") or result.get("currency") or ""
+        lines.append(f"  Total: {format_number(result['total'])} {unit}".rstrip())
+    elif result.get("currency"):
+        lines.append(f"  Currency: {result['currency']}")
+    rows = result.get("rows", [])
+    columns = [c for c in result.get("columns", [])]
+    if not rows:
+        lines.append("  (nothing to show)")
+    else:
+        headers = [_QUERY_HEADERS.get(c, c.replace("_", " ").capitalize())
+                   for c in columns]
+        table = [[_query_cell(c, row) for c in columns] for row in rows]
+        lines.append("")
+        lines.append(format_table(
+            headers, table,
+            max_widths=[_QUERY_WIDTHS.get(c, 18) for c in columns]))
+    shown, total = len(rows), result.get("row_count", len(rows))
+    if result.get("top") and total > shown:
+        lines.append(f"  Showing {shown} of {total} rows (TOP "
+                     f"{result['top']}).")
+    if result.get("note"):
+        lines.append(f"  {result['note']}")
+    return "\n".join(lines)
+
+
+def query_to_csv(result: Dict) -> str:
+    """One RESULT query as CSV: a header row, then the rows."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    columns = list(result.get("columns", []))
+    writer.writerow(columns)
+    for row in result.get("rows", []):
+        writer.writerow(["" if row.get(c) is None else row.get(c)
+                         for c in columns])
+    return output.getvalue()

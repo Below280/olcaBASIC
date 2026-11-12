@@ -88,11 +88,13 @@ class LCABridge:
 
     def upstream_tree(self, system_ref: str, method_ref: str,
                       category: str, levels: int = 3, top: int = 5,
-                      allocation: str = "", with_quality: bool = True) -> Dict:
+                      allocation: str = "", with_quality: bool = True,
+                      result_handle: Optional[str] = None) -> Dict:
         self._require_connection()
         return self.engine.upstream_tree(
             system_ref, method_ref, category, levels, top,
-            allocation=allocation or None, with_quality=with_quality)
+            allocation=allocation or None, with_quality=with_quality,
+            result_handle=result_handle)
 
     def calculate(self, system_ref: str, method_ref: str,
                   allocation: str = "") -> Dict:
@@ -103,18 +105,21 @@ class LCABridge:
     def contribution(self, system_ref: str, method_ref: str,
                      top: int = 10,
                      categories: Optional[List[str]] = None,
-                     allocation: str = "") -> Dict:
+                     allocation: str = "",
+                     result_handle: Optional[str] = None) -> Dict:
         self._require_connection()
         return self.engine.contribution_analysis(
             system_ref, method_ref, categories=categories,
-            max_contributors=top, allocation=allocation or None)
+            max_contributors=top, allocation=allocation or None,
+            result_handle=result_handle)
 
     def inventory(self, system_ref: str, method_ref: str,
-                  max_flows: int = 50, allocation: str = "") -> Dict:
+                  max_flows: int = 50, allocation: str = "",
+                  result_handle: Optional[str] = None) -> Dict:
         self._require_connection()
         return self.engine.inventory_flows(
             system_ref, method_ref, max_flows=max_flows,
-            allocation=allocation or None)
+            allocation=allocation or None, result_handle=result_handle)
 
     def monte_carlo(self, system_ref: str, method_ref: str,
                     iterations: int = 1000, allocation: str = "") -> Dict:

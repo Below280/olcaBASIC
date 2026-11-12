@@ -211,6 +211,7 @@ def check(statements, runtime, connected: bool = True,
                 derived.discard(stmt.name)
 
     confirm = bool(runtime.confirm_delete)
+    open_results = set(getattr(runtime, "open_results", {}) or {})
     scenarios_defined = bool(runtime.scenarios)
     active = getattr(runtime, "epd", None)
     epd_defined = active is not None
@@ -411,7 +412,35 @@ def check(statements, runtime, connected: bool = True,
                     break
             report.writes.append(f"{word} \"{target}\"" if target else word)
 
+        elif isinstance(stmt, ast.ResultQueryStmt):
+            if stmt.result_name not in open_results:
+                if stmt.result_name:
+                    report.error(
+                        line, f"No open result is called "
+                              f"'{stmt.result_name}'.",
+                        f"Name it when it is calculated: CALCULATE "
+                        f"\"system\" USING \"method\" AS "
+                        f"{stmt.result_name}.")
+                else:
+                    report.error(
+                        line, "No result is open.",
+                        "CALCULATE \"system\" USING \"method\" first; "
+                        "its result stays open for RESULT queries.")
+
+        elif isinstance(stmt, ast.CloseResultStmt):
+            if stmt.all:
+                open_results.clear()
+            elif stmt.name and stmt.name not in open_results:
+                report.error(line, f"No open result is called "
+                                   f"'{stmt.name}'.",
+                             "CLOSE RESULT on its own closes the current "
+                             "result; CLOSE RESULT ALL closes every one.")
+            else:
+                open_results.discard(stmt.name)
+
         elif isinstance(stmt, CALCULATIONS):
+            if isinstance(stmt, ast.CalculateStmt):
+                open_results.add(stmt.result_name)
             report.calculations.append(word)
 
         if not connected and not isinstance(stmt, NO_CONNECTION_NEEDED):

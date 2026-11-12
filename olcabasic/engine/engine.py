@@ -4,7 +4,9 @@ The olcaBASIC engine: everything that talks to openLCA.
 Wraps olca_ipc calls using the same patterns as the tested
 Below280 scenario and sensitivity scripts. All calculations
 target ProductSystem objects (never bare Processes), and every
-result is disposed after use.
+result is disposed: straight away by the one-shot calculations, and by
+close_result() or close_all_results() for results opened with
+open_result().
 
 This was b280_olca_mcp.functions.LCAFunctions up to B280-olca-MCP
 v1.16.0. It moved here in olcaBASIC 0.4.0 so that olcaBASIC no longer
@@ -19,6 +21,7 @@ The class is put together from one module per kind of work:
     calculate.py  impacts, contributions, inventory, Monte Carlo, tree
     analysis.py   scenarios and sensitivity
     resolve.py    name resolution for the language (strict look-ups)
+    results.py    results that stay open, and every query on one
 """
 
 import logging
@@ -30,12 +33,13 @@ from .calculate import CalculateMixin
 from .core import CoreMixin
 from .explore import ExploreMixin
 from .resolve import ResolveMixin
+from .results import ResultsMixin
 
 logger = logging.getLogger(__name__)
 
 
 class Engine(CoreMixin, ExploreMixin, BuildMixin, AuditMixin, CalculateMixin,
-             AnalysisMixin, ResolveMixin):
+             AnalysisMixin, ResolveMixin, ResultsMixin):
     """One connection's worth of openLCA operations.
 
     Methods return plain dictionaries. A failure is reported as

@@ -106,7 +106,11 @@ def main():
     else:
         # Interactive REPL
         repl = REPL(interpreter)
-        repl.run()
+        try:
+            repl.run()
+        finally:
+            # leaving the interpreter: nothing stays open in openLCA
+            interpreter.close_results()
 
 
 if __name__ == "__main__":

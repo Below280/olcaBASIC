@@ -254,10 +254,40 @@ class SystemStmt(Statement):
 
 @dataclass
 class CalculateStmt(Statement):
-    """CALCULATE "system" USING "method" [ALLOCATE x]"""
+    """CALCULATE "system" USING "method" [ALLOCATE x] [AMOUNT n unit
+    [PROPERTY "x"]] [WITH COSTS] [WITH REGIONALISATION] [NW SET "name"]
+    [PARAMETER SET "name"] [IGNORE FACTORS "flow"] [AS name]"""
     system: Expr = None
     method: Expr = None
     allocation: str = ""
+    amount: Expr = None
+    unit: str = ""
+    flow_property: Expr = None
+    with_costs: bool = False
+    with_regionalisation: bool = False
+    nw_set: Expr = None
+    parameter_set: Expr = None
+    ignore_factors: List[Expr] = field(default_factory=list)
+    result_name: str = ""     # AS name: keep open under this name
+
+
+@dataclass
+class ResultQueryStmt(Statement):
+    """RESULT <query> ... [IN name] [TOP n] [SAVE "file"]: read one
+    thing from an open result."""
+    query: str = ""                      # engine query name
+    args: Dict[str, Any] = field(default_factory=dict)   # Expr or plain
+    result_name: str = ""                # IN name; "" is the current result
+    top: int = 0
+    save: Expr = None
+    words: str = ""                      # the command as typed, for messages
+
+
+@dataclass
+class CloseResultStmt(Statement):
+    """CLOSE RESULT [name | ALL]"""
+    name: str = ""
+    all: bool = False
 
 
 @dataclass

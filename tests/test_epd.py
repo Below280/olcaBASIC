@@ -31,7 +31,10 @@ FULL = "A1, A2, A3, C1, C2, C3, C4, D"
 
 @pytest.fixture
 def client():
-    return add_epd_methods(seed_ecoinvent_like())
+    from fake_client import nothing_left_open
+    c = add_epd_methods(seed_ecoinvent_like())
+    yield c
+    nothing_left_open(c)
 
 
 @pytest.fixture

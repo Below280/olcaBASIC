@@ -30,6 +30,7 @@ TOPICS: Dict[str, str] = {
     "EDIT": "Changing what already exists",
     "PARAMETERS": "Variables that become openLCA parameters",
     "CALCULATE": "Impact results and where they come from",
+    "RESULT": "Reading more from a result that is open",
     "SCENARIOS": "Scenarios and sensitivity analysis",
     "CHECK": "Checking a model before trusting its results",
     "EPD": "Environmental product declarations (EN 15804+A2)",
@@ -39,7 +40,7 @@ TOPICS: Dict[str, str] = {
 }
 
 # Old HELP topic names that still work.
-TOPIC_ALIASES = {"FOLDER": "NAVIGATION", "FOLDERS": "NAVIGATION",
+TOPIC_ALIASES = {"RESULTS": "RESULT", "FOLDER": "NAVIGATION", "FOLDERS": "NAVIGATION",
                  "BASIC": "PROGRAMMING", "AUDIT": "CHECK",
                  "SENSITIVITY ANALYSIS": "SCENARIOS"}
 
@@ -527,12 +528,37 @@ END EDIT''',
     # ── CALCULATE ────────────────────────────────────────────
     Command(
         name="CALCULATE", topic="CALCULATE",
-        usage='CALCULATE "system" USING "method" [ALLOCATE method]',
-        summary="Calculate the impacts of a product system",
-        example='CALCULATE "Concrete block" USING "EF v3.1"',
+        usage='CALCULATE "system" USING "method" [ALLOCATE method] [AS name]',
+        summary="Calculate the impacts of a product system and keep the result open",
+        syntax='''CALCULATE "system" USING "method"
+  [ALLOCATE AS_DEFINED|PHYSICAL|ECONOMIC|CAUSAL|NONE]
+  [AMOUNT n unit [PROPERTY "flow property"]]
+  [WITH COSTS] [WITH REGIONALISATION]
+  [NW SET "name"] [PARAMETER SET "name"]
+  [IGNORE FACTORS "flow"]
+  [AS name]''',
+        example='CALCULATE "Concrete block" USING "EF v3.1"\n'
+                'CALCULATE "Concrete block" USING "EF v3.1" AMOUNT 2 m3 '
+                'WITH COSTS AS doubled',
         notes="USING is required: there is no default method. ALLOCATE "
               "takes AS_DEFINED (the default), PHYSICAL, ECONOMIC, CAUSAL "
-              "or NONE.",
+              "or NONE.\n"
+              "The result stays open in openLCA as the current result, so "
+              "RESULT commands can read more from it without calculating "
+              "again. It is closed by the next CALCULATE, by CLOSE RESULT, "
+              "at the end of a program run from a file and when the "
+              "session ends. AS name keeps a result open under a name "
+              "alongside the current one (RESULT ... IN name). A session "
+              "holds at most 5 open results.\n"
+              "AMOUNT calculates for another amount of the product than "
+              "the system's own target. WITH COSTS adds the costs on the "
+              "exchanges (RESULT COSTS). WITH REGIONALISATION uses the "
+              "locations on exchanges and regional factors. NW SET names "
+              "a normalisation and weighting set of the method (RESULT "
+              "NORMALISED, RESULT WEIGHTED). PARAMETER SET uses a "
+              "parameter set stored on the system. WITH REGIONALIZATION is "
+              "accepted as a spelling. The words can come in any order "
+              "after the method.",
         statements=("CalculateStmt",)),
     Command(
         name="CONTRIBUTION", topic="CALCULATE",
@@ -569,6 +595,194 @@ END CONTRIBUTION''',
               "5th and 95th percentiles. If the processes carry no "
               "uncertainty data every run is the same, and it says so.",
         statements=("MonteCarloStmt",)),
+
+    # ── RESULT ───────────────────────────────────────────────
+    Command(
+        name="RESULT IMPACTS", topic="RESULT",
+        usage='RESULT IMPACTS [CATEGORY "x"] [BY GROUP | BY TAG]',
+        summary="Impact totals of the open result, whole or by analysis group or tag",
+        syntax='''RESULT IMPACTS [CATEGORY "category"]
+RESULT IMPACTS BY GROUP [CATEGORY "category"]
+RESULT IMPACTS BY TAG CATEGORY "category"''',
+        example='RESULT IMPACTS\nRESULT IMPACTS CATEGORY "Climate change"\n'
+                'RESULT IMPACTS BY GROUP',
+        notes="Every RESULT command reads the current result (the last "
+              "CALCULATE), or a named one with IN name. Each can end with "
+              "TOP n (the n largest rows) and SAVE \"file.csv\".\n"
+              "BY GROUP needs analysis groups on the product system (EDIT "
+              "SYSTEM ... ANALYSIS GROUP). A process that is in no group "
+              "counts towards the group of what it supplies. BY TAG sums "
+              "the direct results of the processes carrying each tag, and "
+              "needs openLCA 2.7.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT CATEGORIES", topic="RESULT",
+        usage="RESULT CATEGORIES",
+        summary="List the impact categories of the open result",
+        example="RESULT CATEGORIES",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT PROCESSES", topic="RESULT",
+        usage="RESULT PROCESSES",
+        summary="List the processes of the calculated system",
+        example="RESULT PROCESSES TOP 20",
+        notes="These are the names OF PROCESS accepts in the other RESULT "
+              "commands.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT DEMAND", topic="RESULT",
+        usage="RESULT DEMAND",
+        summary="Show the product and amount the result was calculated for",
+        example="RESULT DEMAND",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT FLOWS", topic="RESULT",
+        usage='RESULT FLOWS [OF PROCESS "x" [DIRECT]] [FLOW "y"] [LIST]',
+        summary="Inventory: elementary flows of the system or of one process",
+        syntax='''RESULT FLOWS [FLOW "flow" [IN "compartment"]]
+RESULT FLOWS LIST
+RESULT FLOWS OF PROCESS "process" [DIRECT] [FLOW "flow"]
+RESULT FLOWS BY GROUP FLOW "flow"
+RESULT FLOWS BY TAG FLOW "flow"''',
+        example='RESULT FLOWS TOP 20\n'
+                'RESULT FLOWS OF PROCESS "Kiln" DIRECT\n'
+                'RESULT FLOWS FLOW "Carbon dioxide, fossil" IN "air"',
+        notes="Without a process: the totals of the whole system. OF "
+              "PROCESS gives one process with everything that supplies "
+              "it, or with DIRECT only what its own exchanges emit and "
+              "take. LIST names the flows without amounts.\n"
+              "A flow name that exists in several compartments needs IN "
+              "\"compartment\" straight after it (part of the path is "
+              "enough). A process name shared by several processes needs "
+              "LOCATION \"code\" after it.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT FLOW", topic="RESULT",
+        usage='RESULT FLOW "y" BY PROCESS',
+        summary="Show which processes one elementary flow comes from",
+        example='RESULT FLOW "Carbon dioxide, fossil" IN "air" BY PROCESS TOP 10',
+        notes="Direct amounts: what each process itself emits or takes.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT CONTRIBUTION", topic="RESULT",
+        usage='RESULT CONTRIBUTION BY PROCESS|BY FLOW|OF PROCESS "x" [DIRECT] [CATEGORY "y"]',
+        summary="Contributions to the impacts, by process or by elementary flow",
+        syntax='''RESULT CONTRIBUTION BY PROCESS [DIRECT] [CATEGORY "category"]
+RESULT CONTRIBUTION OF PROCESS "process" [DIRECT] [CATEGORY "category"]
+RESULT CONTRIBUTION BY FLOW [CATEGORY "category" [FLOW "flow"]]''',
+        example='RESULT CONTRIBUTION BY PROCESS DIRECT CATEGORY "Climate change" TOP 10\n'
+                'RESULT CONTRIBUTION BY FLOW CATEGORY "Climate change" TOP 5\n'
+                'RESULT CONTRIBUTION OF PROCESS "Kiln"',
+        notes="BY PROCESS without DIRECT gives each process with its "
+              "whole supply chain, so the shares add up to more than "
+              "100%; with DIRECT each process counts only its own "
+              "exchanges and the shares add up to 100%. Without DIRECT "
+              "and on a large database it asks openLCA about every "
+              "process, which takes minutes: DIRECT with a CATEGORY is "
+              "one question.\n"
+              "BY FLOW shows which emissions and resources drive a "
+              "category.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT FACTORS", topic="RESULT",
+        usage='RESULT FACTORS CATEGORY "x" [FLOW "y"]',
+        summary="Characterisation factors of a category for the flows of the inventory",
+        example='RESULT FACTORS CATEGORY "Climate change" TOP 10',
+        notes="A flow with factor 0 is not characterised by that category.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT INTENSITY", topic="RESULT",
+        usage='RESULT INTENSITY OF PROCESS "x" [CATEGORY "y" | FLOWS | FLOW "y"]',
+        summary="Impacts or flows of one unit of a process's product, with its supply chain",
+        example='RESULT INTENSITY OF PROCESS "Kiln"\n'
+                'RESULT INTENSITY OF PROCESS "Kiln" FLOWS TOP 10',
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT SCALING", topic="RESULT",
+        usage='RESULT SCALING [OF PROCESS "x" [UNSCALED]]',
+        summary="Scaling factors, or the product and waste flows of one process",
+        example='RESULT SCALING TOP 20\nRESULT SCALING OF PROCESS "Kiln"',
+        notes="A scaling factor says how many times a process runs to "
+              "meet the demand. OF PROCESS lists the process's product "
+              "(positive) and its inputs (negative) at that scaling; "
+              "UNSCALED lists them as written in the process.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT TOTALITY", topic="RESULT",
+        usage='RESULT TOTALITY [OF PROCESS "x"]',
+        summary="Totality factors: total requirements corrected for loops",
+        example="RESULT TOTALITY TOP 20",
+        notes="The same as RESULT REQUIREMENTS unless the supply chain "
+              "has loops, in which case the factor stops a loop being "
+              "counted twice.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT REQUIREMENTS", topic="RESULT",
+        usage='RESULT REQUIREMENTS [OF PROCESS "x"]',
+        summary="How much of each product the system needs in total",
+        example='RESULT REQUIREMENTS TOP 20\n'
+                'RESULT REQUIREMENTS OF PROCESS "Kiln"',
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT TREE", topic="RESULT",
+        usage='RESULT TREE CATEGORY "x" | FLOW "y" | COSTS [LEVELS n] [TOP n]',
+        summary="Upstream tree of a category, an elementary flow or the costs",
+        example='RESULT TREE CATEGORY "Climate change" LEVELS 3 TOP 5\n'
+                'RESULT TREE FLOW "Carbon dioxide, fossil" IN "air"',
+        notes="LEVELS defaults to 3 and TOP to 5; TOP is the number of "
+              "branches kept at each level, the rest are summed. TREE "
+              "\"system\" USING \"method\" does the same for a "
+              "category and adds the pedigree scores.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT COSTS", topic="RESULT",
+        usage='RESULT COSTS [BY PROCESS | BY GROUP | OF PROCESS "x" [DIRECT] | TREE]',
+        summary="Life cycle costs of a result calculated WITH COSTS",
+        syntax='''RESULT COSTS
+RESULT COSTS BY PROCESS | BY GROUP | BY TAG
+RESULT COSTS OF PROCESS "process" [DIRECT]
+RESULT COSTS INTENSITY OF PROCESS "process"
+RESULT COSTS TREE [LEVELS n] [TOP n]''',
+        example='RESULT COSTS\nRESULT COSTS BY PROCESS TOP 10',
+        notes="Needs CALCULATE ... WITH COSTS, and costs on the exchanges "
+              "(COST in MAKE PROCESS). Costs are net: what a process pays "
+              "for its inputs less what it earns from its products.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT NORMALISED", aliases=("RESULT NORMALIZED",),
+        topic="RESULT",
+        usage="RESULT NORMALISED",
+        summary="Normalised results of a result calculated with an NW SET",
+        example="RESULT NORMALISED",
+        notes="Each total divided by the set's normalisation factor.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT WEIGHTED", topic="RESULT",
+        usage="RESULT WEIGHTED",
+        summary="Normalised and weighted results of a result calculated with an NW SET",
+        example="RESULT WEIGHTED",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="RESULT SANKEY", topic="RESULT",
+        usage='RESULT SANKEY CATEGORY "x" | FLOW "y" [MIN SHARE n%] [MAX NODES n] [SAVE "file.json"]',
+        summary="Nodes and links for a Sankey diagram of a category or a flow",
+        example='RESULT SANKEY CATEGORY "Climate change" MIN SHARE 1% '
+                'MAX NODES 30 SAVE "sankey.json"',
+        notes="MIN SHARE leaves out processes below that share of the "
+              "total; MAX NODES limits their number. The data is nodes "
+              "and links, so it saves as JSON, not CSV. openLCA cannot "
+              "make one for costs.",
+        statements=("ResultQueryStmt",)),
+    Command(
+        name="CLOSE RESULT", topic="RESULT",
+        usage="CLOSE RESULT [name | ALL]",
+        summary="Close the current result, a named one, or all of them",
+        example="CLOSE RESULT\nCLOSE RESULT base\nCLOSE RESULT ALL",
+        notes="A result uses memory in openLCA until it is closed. "
+              "olcaBASIC closes results itself at the next CALCULATE (the "
+              "current one), at the end of a program run from a file, on "
+              "reset and when the session ends.",
+        statements=("CloseResultStmt",)),
 
     # ── SCENARIOS ────────────────────────────────────────────
     Command(
@@ -1074,8 +1288,57 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "PARAMETERISE PROCESS": _READ + ("data/put",),
     "LET": ("data/put",),
     "UPDATE PARAMETER": ("data/get/all", "data/put"),
-    "CALCULATE": ("result/calculate", "result/state",
+    "CALCULATE": ("result/calculate", "result/state", "result/demand",
                   "result/total-impacts", "result/dispose"),
+    "CLOSE RESULT": ("result/dispose",),
+    "RESULT IMPACTS": ("result/total-impacts",
+                       "result/total-impact-value-of",
+                       "result/grouped-impact-results-of",
+                       "result/tag-results-of-impact"),
+    "RESULT CATEGORIES": ("result/impact-categories",),
+    "RESULT PROCESSES": ("result/tech-flows",),
+    "RESULT DEMAND": ("result/demand",),
+    "RESULT FLOWS": ("result/total-flows", "result/envi-flows",
+                     "result/total-flow-value-of",
+                     "result/total-interventions-of",
+                     "result/total-intervention-of",
+                     "result/direct-interventions-of",
+                     "result/direct-intervention-of",
+                     "result/grouped-flow-results-of",
+                     "result/tag-results-of-flow"),
+    "RESULT FLOW": ("result/flow-contributions-of",),
+    "RESULT CONTRIBUTION": ("result/impact-contributions-of",
+                            "result/total-impacts-of",
+                            "result/total-impact-of",
+                            "result/direct-impacts-of",
+                            "result/direct-impact-of",
+                            "result/flow-impacts-of",
+                            "result/flow-impact-of"),
+    "RESULT FACTORS": ("result/impact-factors-of",
+                       "result/impact-factor-of"),
+    "RESULT INTENSITY": ("result/impact-intensities-of",
+                         "result/impact-intensity-of",
+                         "result/flow-intensities-of",
+                         "result/flow-intensity-of"),
+    "RESULT SCALING": ("result/scaling-factors",
+                       "result/scaled-tech-flows-of",
+                       "result/unscaled-tech-flows-of"),
+    "RESULT TOTALITY": ("result/totality-factors",
+                        "result/totality-factor-of"),
+    "RESULT REQUIREMENTS": ("result/total-requirements",
+                            "result/total-requirements-of"),
+    "RESULT TREE": ("result/upstream-impacts-of",
+                    "result/upstream-interventions-of",
+                    "result/upstream-costs-of"),
+    "RESULT COSTS": ("result/total-costs", "result/total-costs-of",
+                     "result/direct-costs-of", "result/cost-intensities-of",
+                     "result/cost-contributions",
+                     "result/grouped-cost-results",
+                     "result/tag-results-of-costs",
+                     "result/upstream-costs-of"),
+    "RESULT NORMALISED": ("result/total-impacts/normalized",),
+    "RESULT WEIGHTED": ("result/total-impacts/weighted",),
+    "RESULT SANKEY": ("result/sankey",),
     "CONTRIBUTION": ("result/calculate", "result/tech-flows",
                      "result/total-impacts-of", "result/dispose"),
     "TREE": ("result/calculate", "result/demand",

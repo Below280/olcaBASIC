@@ -608,20 +608,82 @@ UPDATE PARAMETER name = expression
 
 | Command | Dialect | What it does |
 |---|---|---|
-| `CALCULATE` | olcaBASIC | Calculate the impacts of a product system |
+| `CALCULATE` | olcaBASIC | Calculate the impacts of a product system and keep the result open |
 | `CONTRIBUTION` | olcaBASIC | Show which processes contribute most to each impact category |
 | `TREE` | olcaBASIC | Show the contribution tree for one category, with pedigree scores |
 | `INVENTORY` | olcaBASIC | List the largest elementary flows of a product system |
 | `MONTECARLO` | olcaBASIC | Run a Monte Carlo simulation and report the spread per category |
 
 ```basic
-CALCULATE "system" USING "method" [ALLOCATE method]
+CALCULATE "system" USING "method"
+  [ALLOCATE AS_DEFINED|PHYSICAL|ECONOMIC|CAUSAL|NONE]
+  [AMOUNT n unit [PROPERTY "flow property"]]
+  [WITH COSTS] [WITH REGIONALISATION]
+  [NW SET "name"] [PARAMETER SET "name"]
+  [IGNORE FACTORS "flow"]
+  [AS name]
 CONTRIBUTION "system" USING "method" [TOP n] [ALLOCATE method]
   [CATEGORIES "category", "category"]
 END CONTRIBUTION
 TREE "system" USING "method" CATEGORY "category" [LEVELS n] [TOP n] [NOQUALITY]
 INVENTORY "system" USING "method" [MAX n]
 MONTECARLO "system" USING "method" [RUNS n]
+```
+
+### Result: reading more from a result that is open
+
+| Command | Dialect | What it does |
+|---|---|---|
+| `RESULT IMPACTS` | olcaBASIC | Impact totals of the open result, whole or by analysis group or tag |
+| `RESULT CATEGORIES` | olcaBASIC | List the impact categories of the open result |
+| `RESULT PROCESSES` | olcaBASIC | List the processes of the calculated system |
+| `RESULT DEMAND` | olcaBASIC | Show the product and amount the result was calculated for |
+| `RESULT FLOWS` | olcaBASIC | Inventory: elementary flows of the system or of one process |
+| `RESULT FLOW` | olcaBASIC | Show which processes one elementary flow comes from |
+| `RESULT CONTRIBUTION` | olcaBASIC | Contributions to the impacts, by process or by elementary flow |
+| `RESULT FACTORS` | olcaBASIC | Characterisation factors of a category for the flows of the inventory |
+| `RESULT INTENSITY` | olcaBASIC | Impacts or flows of one unit of a process's product, with its supply chain |
+| `RESULT SCALING` | olcaBASIC | Scaling factors, or the product and waste flows of one process |
+| `RESULT TOTALITY` | olcaBASIC | Totality factors: total requirements corrected for loops |
+| `RESULT REQUIREMENTS` | olcaBASIC | How much of each product the system needs in total |
+| `RESULT TREE` | olcaBASIC | Upstream tree of a category, an elementary flow or the costs |
+| `RESULT COSTS` | olcaBASIC | Life cycle costs of a result calculated WITH COSTS |
+| `RESULT NORMALISED` / `RESULT NORMALIZED` | olcaBASIC | Normalised results of a result calculated with an NW SET |
+| `RESULT WEIGHTED` | olcaBASIC | Normalised and weighted results of a result calculated with an NW SET |
+| `RESULT SANKEY` | olcaBASIC | Nodes and links for a Sankey diagram of a category or a flow |
+| `CLOSE RESULT` | olcaBASIC | Close the current result, a named one, or all of them |
+
+```basic
+RESULT IMPACTS [CATEGORY "category"]
+RESULT IMPACTS BY GROUP [CATEGORY "category"]
+RESULT IMPACTS BY TAG CATEGORY "category"
+RESULT CATEGORIES
+RESULT PROCESSES
+RESULT DEMAND
+RESULT FLOWS [FLOW "flow" [IN "compartment"]]
+RESULT FLOWS LIST
+RESULT FLOWS OF PROCESS "process" [DIRECT] [FLOW "flow"]
+RESULT FLOWS BY GROUP FLOW "flow"
+RESULT FLOWS BY TAG FLOW "flow"
+RESULT FLOW "y" BY PROCESS
+RESULT CONTRIBUTION BY PROCESS [DIRECT] [CATEGORY "category"]
+RESULT CONTRIBUTION OF PROCESS "process" [DIRECT] [CATEGORY "category"]
+RESULT CONTRIBUTION BY FLOW [CATEGORY "category" [FLOW "flow"]]
+RESULT FACTORS CATEGORY "x" [FLOW "y"]
+RESULT INTENSITY OF PROCESS "x" [CATEGORY "y" | FLOWS | FLOW "y"]
+RESULT SCALING [OF PROCESS "x" [UNSCALED]]
+RESULT TOTALITY [OF PROCESS "x"]
+RESULT REQUIREMENTS [OF PROCESS "x"]
+RESULT TREE CATEGORY "x" | FLOW "y" | COSTS [LEVELS n] [TOP n]
+RESULT COSTS
+RESULT COSTS BY PROCESS | BY GROUP | BY TAG
+RESULT COSTS OF PROCESS "process" [DIRECT]
+RESULT COSTS INTENSITY OF PROCESS "process"
+RESULT COSTS TREE [LEVELS n] [TOP n]
+RESULT NORMALISED
+RESULT WEIGHTED
+RESULT SANKEY CATEGORY "x" | FLOW "y" [MIN SHARE n%] [MAX NODES n] [SAVE "file.json"]
+CLOSE RESULT [name | ALL]
 ```
 
 ### Scenarios: scenarios and sensitivity analysis

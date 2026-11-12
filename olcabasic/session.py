@@ -13,12 +13,20 @@ olcaBASIC programs run on it.
     r.warnings    # [{line, message, level}]
 
 State persists between run() calls: variables, folders, scenarios, the
-last results and CONFIRM DELETE. run() holds a lock for its whole
-duration, so two programs can never write to openLCA at once (openLCA
-corrupts product systems that are created concurrently).
+last results, CONFIRM DELETE and the calculation results that are open
+in openLCA. run() holds a lock for its whole duration, so two programs
+can never write to openLCA at once (openLCA corrupts product systems
+that are created concurrently).
+
+A Session that has calculated holds results open in openLCA (CALCULATE
+keeps its result so that RESULT can read from it). close() disposes
+them; so do reset(), leaving a `with Session(...)` block, and the end of
+the Python process.
 """
 
+import atexit
 import threading
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -73,6 +81,7 @@ class Session:
                                        runtime=self.runtime)
         if not offline and self.bridge is None:
             self.connect()
+        atexit.register(_close_at_exit, weakref.ref(self))
 
     # ── connection ───────────────────────────────────────────
 
@@ -177,10 +186,29 @@ class Session:
 
     def reset(self) -> None:
         """Clear the session's state: variables, SUBs, folders,
-        scenarios, last results, CONFIRM DELETE. The database is not
-        touched and the connection stays open."""
+        scenarios, last results, CONFIRM DELETE. Results that were open
+        in openLCA are disposed. The database is not touched and the
+        connection stays open."""
         with self.lock:
+            self.interpreter.close_results()
             self.runtime.reset()
+
+    def close(self) -> int:
+        """Dispose every calculation result this session holds open in
+        openLCA. Returns how many there were. The session stays usable."""
+        with self.lock:
+            return self.interpreter.close_results()
+
+    def __enter__(self) -> "Session":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    @property
+    def open_results(self) -> List[str]:
+        """Names of the results that are open ("" is the current one)."""
+        return list(self.runtime.open_results)
 
     # ── state, for callers that want to look ─────────────────
 
@@ -191,3 +219,12 @@ class Session:
     @property
     def last_results(self):
         return self.runtime.last_results
+
+
+def _close_at_exit(ref) -> None:
+    session = ref()
+    if session is not None:
+        try:
+            session.interpreter.close_results()
+        except Exception:
+            pass

@@ -112,6 +112,11 @@ class Runtime:
         self.epd = None
         self.epd_module: str = ""
 
+        # Results held open in openLCA: name -> {handle, system, method,
+        # line}. "" is the current result (see interp_results.py). The
+        # interpreter disposes them; reset() only forgets the names.
+        self.open_results: Dict[str, Dict] = {}
+
     def push_scope(self) -> Scope:
         """Create a new local scope."""
         new_scope = Scope(parent=self.current_scope)
@@ -200,5 +205,4 @@ class Runtime:
         self.program_history.clear()
         self.epd = None
         self.epd_module = ""
-        self.epd = None
-        self.epd_module = ""
+        self.open_results.clear()

@@ -2,15 +2,17 @@
 Live tests: rebuild the reference model in openLCA and check that every
 result matches what the v1.16.0 engine produced before the rebuild.
 
-They need openLCA running with the IPC server on port 8080 and the same
-ecoinvent database the baseline was captured from, and they are run with
+They need openLCA running with the IPC server on port 8080 and a
+database a baseline was captured from, and they are run with
 
     pytest -m live
 
-The baseline holds results derived from licensed data, so it is not in
-this repository. It is found through the OLCA_LIVE_BASELINE environment
-variable, or by looking in the parent folders for
-REBUILD_PLAN/live_baseline.json.
+A baseline holds results derived from licensed data, so none is in this
+repository. Baselines are found through the OLCA_LIVE_BASELINE
+environment variable (one file), or by looking in the parent folders
+for REBUILD_PLAN/live_baseline.json and
+REBUILD_PLAN_2/live_baseline_*.json. The one captured from the database
+that is open is used; if none matches, the tests skip and say why.
 
 Everything the tests create goes in the folder "00: olcaBASIC live test"
 and the product system and the process are deleted at the end. The
@@ -19,78 +21,14 @@ the fixture). The global parameter the model uses stays: openLCA
 parameters have no folder and olcaBASIC has no command to delete one.
 """
 
-import json
 import os
-from pathlib import Path
 
 import pytest
 
-from runner import LiveRunner
-
 pytestmark = pytest.mark.live
 
-
-def _find_baseline():
-    env = os.getenv("OLCA_LIVE_BASELINE")
-    if env:
-        return Path(env)
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "REBUILD_PLAN" / "live_baseline.json"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-@pytest.fixture(scope="module")
-def baseline():
-    path = _find_baseline()
-    if path is None or not path.exists():
-        pytest.skip("no live baseline: set OLCA_LIVE_BASELINE to the path of "
-                    "live_baseline.json")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="module")
-def names(baseline):
-    return baseline["live_test_names"]
-
-
-@pytest.fixture(scope="module")
-def tol(baseline):
-    return baseline["meta"].get("tolerance_rel", 1e-6)
-
-
-@pytest.fixture(scope="module")
-def live(baseline, names):
-    """Build the reference model once, hand over the runner, clean up."""
-    runner = LiveRunner()
-    info = runner.engine.get_database_info()
-    expected = baseline["database_info"]
-    # A different database gives different numbers, so say so instead of
-    # failing. A few extra entities are fine (these tests leave a flow
-    # behind, and the reference model may or may not be present).
-    for kind in ("processes", "flows"):
-        if abs(info.get(kind, 0) - expected[kind]) > 25:
-            pytest.skip(
-                f"the open database has {info.get(kind)} {kind}; the "
-                f"baseline was captured from one with {expected[kind]}")
-    if info.get("impact_methods") != expected["impact_methods"]:
-        pytest.skip(
-            f"the open database has {info.get('impact_methods')} impact "
-            f"methods; the baseline was captured from one with "
-            f"{expected['impact_methods']}")
-    runner.run(baseline["program_template"].format(**names))
-    yield runner
-    # Clean up: the system and the process. The product flow stays
-    # unless OLCA_LIVE_DELETE_FLOW=1: DELETE FLOW reads every process
-    # to make sure nothing uses the flow, which takes more than half an
-    # hour on a database of 26,000 processes. The flow is reused by the
-    # next run.
-    code = (f'CONFIRM DELETE ON\nDELETE SYSTEM "{names["name"]}"\n'
-            f'DELETE PROCESS "{names["name"]}"')
-    if os.getenv("OLCA_LIVE_DELETE_FLOW") == "1":
-        code += f'\nDELETE FLOW "{names["name"]}"'
-    runner.run(code)
+# The fixtures (runner, baseline, names, tol, live) are in conftest.py:
+# the reference model is built once for the whole live run.
 
 
 def close(a, b, tol):
@@ -163,11 +101,15 @@ def test_flow_in_use_cannot_be_deleted(live, names):
     assert len(found) == 1
 
 
-def test_near_miss_method_name_is_refused(live, names):
-    result = live.session.run(f'CALCULATE "{names["name"]}" USING "EF 3.1"')
+def test_near_miss_method_name_is_refused(live, baseline, names):
+    miss = baseline.get("near_miss_method",
+                        {"typed": "EF 3.1", "offered": "EF v3.1"})
+    result = live.session.run(
+        f'CALCULATE "{names["name"]}" USING "{miss["typed"]}"')
     assert not result.ok
-    assert "No impact method is called 'EF 3.1'" in result.errors[0]["message"]
-    assert '"EF v3.1"' in result.errors[0]["hint"]
+    assert (f"No impact method is called '{miss['typed']}'"
+            in result.errors[0]["message"])
+    assert f'"{miss["offered"]}"' in result.errors[0]["hint"]
 
 
 def test_ambiguous_background_name_is_refused(live, baseline):
@@ -191,19 +133,21 @@ def test_ambiguous_background_name_is_refused(live, baseline):
         "olcaBASIC live test ambiguity")["count"] == 0
 
 
-@pytest.mark.parametrize("method", ["EF v3.1", "IPCC 2021"])
-def test_calculate_matches_the_baseline(live, baseline, names, tol, method):
-    got = live.run(f'CALCULATE "{names["name"]}" USING "{method}"')
-    want = baseline["calculate"][method]
-    assert got["method"] == want["method"]
-    got_by = {i["category"]: i for i in got["impacts"]}
-    want_by = {i["category"]: i for i in want["impacts"]}
-    assert set(got_by) == set(want_by)
-    for cat, w in want_by.items():
-        g = got_by[cat]
-        assert g["unit"] == w["unit"], cat
-        assert close(g["amount"], w["amount"], tol), (
-            f"{method} / {cat}: {g['amount']!r} is not {w['amount']!r}")
+def test_calculate_matches_the_baseline(live, baseline, names, tol):
+    """Every method the baseline holds (EF v3.1 and IPCC 2021 for the
+    ecoinvent test database; EN15804+A2 for the EN 15804 add-on)."""
+    assert baseline["calculate"]
+    for method, want in baseline["calculate"].items():
+        got = live.run(f'CALCULATE "{names["name"]}" USING "{method}"')
+        assert got["method"] == want["method"]
+        got_by = {i["category"]: i for i in got["impacts"]}
+        want_by = {i["category"]: i for i in want["impacts"]}
+        assert set(got_by) == set(want_by)
+        for cat, w in want_by.items():
+            g = got_by[cat]
+            assert g["unit"] == w["unit"], cat
+            assert close(g["amount"], w["amount"], tol), (
+                f"{method} / {cat}: {g['amount']!r} is not {w['amount']!r}")
 
 
 def test_sensitivity_matches_the_baseline(live, baseline, names, tol):

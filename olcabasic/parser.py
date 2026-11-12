@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 from .tokeniser import (Token, TokenType, TokeniseError,
                         tokenise, tokenise_line)
 from .ast_nodes import *
+from .parser_results import ResultsParserMixin, RESULT_HEADS
 
 
 class ParseError(Exception):
@@ -24,7 +25,7 @@ class ParseError(Exception):
         super().__init__(f"Line {line}: {full}" if line else full)
 
 
-class Parser:
+class Parser(ResultsParserMixin):
     """Recursive descent parser for olcaBASIC."""
 
     def __init__(self, tokens: List[Token]):
@@ -370,6 +371,15 @@ class Parser:
         if (tok.type == TokenType.IDENTIFIER and tok.upper() == "MODULE"
                 and self.peek_at(1).type == TokenType.IDENTIFIER):
             return self.parse_module(line)
+
+        # Results that stay open. RESULT and CLOSE are not reserved
+        # words either.
+        if (tok.type == TokenType.IDENTIFIER and tok.upper() == "RESULT"
+                and self.peek_at(1).upper() in RESULT_HEADS):
+            return self.parse_result_query(line)
+        if (tok.type == TokenType.IDENTIFIER and tok.upper() == "CLOSE"
+                and self.peek_at(1).upper() == "RESULT"):
+            return self.parse_close_result(line)
 
         kw = tok.upper() if tok.type == TokenType.KEYWORD else ""
 
@@ -1165,19 +1175,6 @@ class Parser:
             target_property=target_property, folder=folder,
             defaulted=self._defaulted(LINKING=linking_given,
                                       TARGET=target_amount is not None))
-
-    def parse_calculate(self, line: int) -> CalculateStmt:
-        self.advance()  # consume CALCULATE
-        system = self.parse_string_or_expr()
-        self.expect_keyword("USING")
-        method = self.parse_string_or_expr()
-        allocation = ""
-        if self.match_keyword("ALLOCATE"):
-            allocation = self.parse_allocation()
-        self.expect_newline()
-        return CalculateStmt(line=line, system=system, method=method,
-                              allocation=allocation,
-                              defaulted=self._defaulted(ALLOCATE=allocation))
 
     def parse_contribution(self, line: int) -> ContributionStmt:
         self.advance()  # consume CONTRIBUTION

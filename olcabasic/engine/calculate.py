@@ -36,7 +36,8 @@ class CalculateMixin:
     def upstream_tree(self, system_ref: str, method_ref: str,
                       category: str, levels: int = 3, top: int = 5,
                       allocation: Optional[str] = None,
-                      with_quality: bool = True) -> Dict:
+                      with_quality: bool = True,
+                      result_handle: Optional[str] = None) -> Dict:
         """
         Multi-level contribution tree for one impact category, walked
         with openLCA's upstream tree (result.get_upstream_impacts_of).
@@ -55,11 +56,11 @@ class CalculateMixin:
         if not method:
             return {"error": f"Impact method not found: {method_ref}"}
 
-        setup = o.CalculationSetup(
-            target=system, impact_method=method,
-            allocation=self._resolve_allocation(allocation))
-        result = self.client.calculate(setup)
-        result.wait_until_ready()
+        opened, borrowed, failed = self.borrow_result(
+            result_handle, system_ref, method_ref, allocation)
+        if failed:
+            return failed
+        result = opened.result
         try:
             totals = result.get_total_impacts()
             want = category.lower()
@@ -180,10 +181,8 @@ class CalculateMixin:
                 "root": root,
             }
         finally:
-            try:
-                result.dispose()
-            except Exception:
-                pass
+            if not borrowed:
+                self.close_result(opened.handle)
 
     def process_contributions(self, system_ref: str, method_ref: str,
                               direct: Optional[List[str]] = None,
@@ -295,7 +294,8 @@ class CalculateMixin:
                               threshold_pct: float = 0.1,
                               max_contributors: int = 30,
                               categories: Optional[List[str]] = None,
-                              allocation: Optional[str] = None) -> Dict:
+                              allocation: Optional[str] = None,
+                              result_handle: Optional[str] = None) -> Dict:
         """
         Process-level contribution analysis: which processes give the
         most to each impact category. It uses this pattern:
@@ -310,6 +310,9 @@ class CalculateMixin:
         If categories is provided, only those category names are
         analysed (substring match). Otherwise all categories are
         included.
+
+        result_handle: an open result (open_result) to read from when
+        it is this same calculation, instead of calculating again.
         """
         system = self._resolve_system(system_ref)
         if not system:
@@ -319,11 +322,11 @@ class CalculateMixin:
         if not method:
             return {"error": f"Impact method not found: {method_ref}"}
 
-        setup = o.CalculationSetup(
-            target=system, impact_method=method,
-            allocation=self._resolve_allocation(allocation))
-        result = self.client.calculate(setup)
-        result.wait_until_ready()
+        opened, borrowed, failed = self.borrow_result(
+            result_handle, system_ref, method_ref, allocation)
+        if failed:
+            return failed
+        result = opened.result
 
         try:
             # Get system totals
@@ -401,7 +404,8 @@ class CalculateMixin:
             }
 
         finally:
-            result.dispose()
+            if not borrowed:
+                self.close_result(opened.handle)
 
     def monte_carlo(self, system_ref: str, method_ref: str,
                     iterations: int = 1000,
@@ -409,9 +413,9 @@ class CalculateMixin:
         """
         Run Monte Carlo uncertainty simulation.
 
-        Tries multiple approaches to set up MC since the API
-        varies between olca-ipc versions. Collects per-iteration
-        impact totals and computes statistics.
+        Starts a simulation in openLCA (result/simulate), asks for one
+        run after another (result/simulate/next), collects the impact
+        totals of each and computes statistics.
         """
         # V07: Reject non-positive iterations
         if iterations <= 0:
@@ -428,113 +432,90 @@ class CalculateMixin:
         if not method:
             return {"error": f"Impact method not found: {method_ref}"}
 
+        import statistics
+
+        # A simulation is its own kind of result in openLCA
+        # (result/simulate): asking a plain calculation for another run
+        # is refused by the server, and the client swallows the refusal,
+        # so every "run" would give the same numbers.
+        made = self.open_result(system_ref, method_ref, allocation,
+                                simulate=True, temporary=True)
+        if "error" in made:
+            return made
+        opened = self._results()[made["handle"]]
+        result = opened.result
         try:
-            import statistics
+            distributions: Dict[str, List[float]] = {}
+            cat_units = {}
 
-            # Create setup without number_of_runs (constructor rejects it)
-            setup = o.CalculationSetup(
-                target=system,
-                impact_method=method,
-                allocation=self._resolve_allocation(allocation),
-            )
+            for i in range(iterations):
+                state = result.simulate_next()
+                err = getattr(state, "error", None)
+                if not err:
+                    err = getattr(result.wait_until_ready(), "error", None)
+                if err:
+                    return {"error": f"openLCA stopped the simulation at "
+                                     f"run {i + 1}: {err}"}
+                impacts = result.get_total_impacts()
 
-            # Try setting number_of_runs as attribute (works in some versions)
-            try:
-                setup.number_of_runs = iterations
-            except (AttributeError, TypeError):
-                pass  # Attribute not supported, will use simulate_next loop
+                for imp in impacts:
+                    name = imp.impact_category.name
+                    if name not in distributions:
+                        distributions[name] = []
+                        cat_units[name] = getattr(
+                            imp.impact_category, "ref_unit", "")
+                    distributions[name].append(imp.amount)
 
-            result = self.client.calculate(setup)
-            result.wait_until_ready()
+                if (i + 1) % 100 == 0:
+                    logger.info(f"Monte Carlo: {i + 1}/{iterations}")
 
-            try:
-                distributions: Dict[str, List[float]] = {}
-                cat_units = {}
+            stats = {}
+            for name, values in distributions.items():
+                n = len(values)
+                if n == 0:
+                    continue
+                mean = statistics.mean(values)
+                sd = statistics.stdev(values) if n > 1 else 0
+                cv = (sd / abs(mean) * 100) if abs(mean) > 1e-30 else 0
 
-                for i in range(iterations):
-                    # simulate_next runs one MC iteration
-                    try:
-                        result.simulate_next()
-                    except AttributeError:
-                        # simulate_next not available in this version
-                        if i == 0:
-                            # Get at least the deterministic result
-                            impacts = result.get_total_impacts()
-                            return {
-                                "system": system.name,
-                                "method": method.name,
-                                "error": (
-                                    "Monte Carlo not supported by this olca-ipc version. "
-                                    "simulate_next() is not available on the result object. "
-                                    "Returning deterministic results instead."
-                                ),
-                                "deterministic_results": self._impacts_to_list(impacts),
-                            }
-                        break
-
-                    impacts = result.get_total_impacts()
-
-                    for imp in impacts:
-                        name = imp.impact_category.name
-                        if name not in distributions:
-                            distributions[name] = []
-                            cat_units[name] = getattr(
-                                imp.impact_category, "ref_unit", "")
-                        distributions[name].append(imp.amount)
-
-                    if (i + 1) % 100 == 0:
-                        logger.info(f"Monte Carlo: {i + 1}/{iterations}")
-
-                stats = {}
-                for name, values in distributions.items():
-                    n = len(values)
-                    if n == 0:
-                        continue
-                    mean = statistics.mean(values)
-                    sd = statistics.stdev(values) if n > 1 else 0
-                    cv = (sd / abs(mean) * 100) if abs(mean) > 1e-30 else 0
-
-                    stats[name] = {
-                        "unit": cat_units[name],
-                        "iterations": n,
-                        "mean": mean,
-                        "std_dev": sd,
-                        "cv_pct": round(cv, 2),
-                        "min": min(values),
-                        "max": max(values),
-                        "median": statistics.median(values),
-                        "p5": sorted(values)[int(n * 0.05)] if n >= 20 else None,
-                        "p95": sorted(values)[int(n * 0.95)] if n >= 20 else None,
-                    }
-
-                # Detect zero-variance (no uncertainty data in database)
-                all_zero_variance = all(
-                    stats[name]["std_dev"] == 0 for name in stats
-                )
-
-                output = {
-                    "system": system.name,
-                    "method": method.name,
-                    "iterations": len(next(iter(distributions.values()), [])),
-                    "statistics": stats,
+                stats[name] = {
+                    "unit": cat_units[name],
+                    "iterations": n,
+                    "mean": mean,
+                    "std_dev": sd,
+                    "cv_pct": round(cv, 2),
+                    "min": min(values),
+                    "max": max(values),
+                    "median": statistics.median(values),
+                    "p5": sorted(values)[int(n * 0.05)] if n >= 20 else None,
+                    "p95": sorted(values)[int(n * 0.95)] if n >= 20 else None,
                 }
 
-                if all_zero_variance:
-                    output["warning"] = (
-                        "All categories have zero variance across all iterations. "
-                        "This means the database processes have no uncertainty "
-                        "distributions defined on their exchanges. The Monte Carlo "
-                        "simulation ran correctly but sampled no distributions, so "
-                        "every iteration returned the same deterministic result. "
-                        "These statistics are not meaningful for uncertainty analysis. "
-                        "Check exchange-level uncertainty in the source processes "
-                        "before relying on these numbers."
-                    )
+            # Detect zero-variance (no uncertainty data in database)
+            all_zero_variance = all(
+                stats[name]["std_dev"] == 0 for name in stats
+            )
 
-                return output
+            output = {
+                "system": system.name,
+                "method": method.name,
+                "iterations": len(next(iter(distributions.values()), [])),
+                "statistics": stats,
+            }
 
-            finally:
-                result.dispose()
+            if all_zero_variance:
+                output["warning"] = (
+                    "All categories have zero variance across all iterations. "
+                    "This means the database processes have no uncertainty "
+                    "distributions defined on their exchanges. The Monte Carlo "
+                    "simulation ran correctly but sampled no distributions, so "
+                    "every iteration returned the same deterministic result. "
+                    "These statistics are not meaningful for uncertainty analysis. "
+                    "Check exchange-level uncertainty in the source processes "
+                    "before relying on these numbers."
+                )
+
+            return output
 
         except Exception as e:
             return {"error": str(e), "note": (
@@ -542,12 +523,15 @@ class CalculateMixin:
                 "If the database has no uncertainty data, results will be "
                 "identical across all iterations."
             )}
+        finally:
+            self.close_result(opened.handle)
 
     def inventory_flows(self, system_ref: str,
                         method_ref: str,
                         threshold: float = 1e-10,
                         max_flows: int = 50,
-                        allocation: Optional[str] = None) -> Dict:
+                        allocation: Optional[str] = None,
+                        result_handle: Optional[str] = None) -> Dict:
         """
         Get elementary flow inventory results (LCI).
 
@@ -563,11 +547,11 @@ class CalculateMixin:
         if not method:
             return {"error": f"Impact method not found: {method_ref}"}
 
-        setup = o.CalculationSetup(
-            target=system, impact_method=method,
-            allocation=self._resolve_allocation(allocation))
-        result = self.client.calculate(setup)
-        result.wait_until_ready()
+        opened, borrowed, failed = self.borrow_result(
+            result_handle, system_ref, method_ref, allocation)
+        if failed:
+            return failed
+        result = opened.result
 
         try:
             total_flows = result.get_total_flows()
@@ -599,4 +583,5 @@ class CalculateMixin:
             }
 
         finally:
-            result.dispose()
+            if not borrowed:
+                self.close_result(opened.handle)

@@ -30,7 +30,7 @@ import re
 import pytest
 
 from runner import LiveRunner
-from test_live_baseline import _find_baseline
+from live_support import matching_baseline
 
 pytestmark = pytest.mark.live
 
@@ -47,6 +47,7 @@ def live():
         runner.run('DATABASE FAMILY "ecoinvent"')
     yield runner
     runner.session.run("EPD CLOSE")
+    runner.session.close()
 
 
 @pytest.fixture(scope="module")
@@ -54,12 +55,7 @@ def providers(live):
     """Two processes with the same name at different locations, taken
     from the first USE PROCESS ... LOCATION line of the private
     baseline program. Returns (first id, second id)."""
-    import json
-    path = _find_baseline()
-    if path is None or not path.exists():
-        pytest.skip("no live baseline: set OLCA_LIVE_BASELINE to the path "
-                    "of live_baseline.json")
-    program = json.loads(path.read_text(encoding="utf-8"))["program_template"]
+    program = matching_baseline(live.engine)["program_template"]
     m = re.search(r'USE PROCESS "([^"]+)".*kWh LOCATION "([^"]+)"', program)
     if not m:
         pytest.skip("the baseline program has no electricity input to use")
@@ -86,7 +82,12 @@ def _block(method=EPD_METHOD, modules="A1, A2, A3, C1, C2, C3, C4, D",
 # ── 1. refusals that need no EN 15804+A2 method ──────────────
 
 def test_a_method_that_is_not_en15804_is_refused(live):
-    r = live.session.run(_block(method="EF v3.1"))
+    methods = [m["name"] for m in
+               live.engine.list_impact_methods().get("methods", [])]
+    other = next((n for n in methods if "15804" not in n), None)
+    if other is None:
+        pytest.skip("every impact method in this database is an EN 15804 one")
+    r = live.session.run(_block(method=other))
     assert not r.ok
     assert "not an EN 15804+A2 method" in r.errors[0]["message"]
     assert r.errors[0]["line"] == 3

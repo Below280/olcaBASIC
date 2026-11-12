@@ -18,6 +18,7 @@ from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
+from .interp_results import ResultsInterpMixin
 from .workflows.epd import (
     EpdWorkflow, TAG_PREFIX, LOCATION_SWITCH, provenance_tags,
     provenance_documentation, tag_value,
@@ -91,7 +92,7 @@ def _command_word(stmt) -> str:
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
 
 
-class Interpreter(EnforcementMixin):
+class Interpreter(ResultsInterpMixin, EnforcementMixin):
     """Executes olcaBASIC AST nodes."""
 
     def __init__(self, bridge: Optional[LCABridge] = None,
@@ -139,7 +140,11 @@ class Interpreter(EnforcementMixin):
             return
 
         self._stop_requested = False
-        self._execute_block(statements)
+        try:
+            self._execute_block(statements)
+        finally:
+            # the end of a RUN: nothing is left open in openLCA
+            self.close_results()
 
     # ── Output helpers ───────────────────────────────────
 
@@ -315,6 +320,12 @@ class Interpreter(EnforcementMixin):
 
         elif isinstance(stmt, CalculateStmt):
             self._exec_calculate(stmt)
+
+        elif isinstance(stmt, ResultQueryStmt):
+            self._exec_result_query(stmt)
+
+        elif isinstance(stmt, CloseResultStmt):
+            self._exec_close_result(stmt)
 
         elif isinstance(stmt, ContributionStmt):
             self._exec_contribution(stmt)
@@ -1702,20 +1713,6 @@ class Interpreter(EnforcementMixin):
             for w in result["warnings"]:
                 self.out.write(f"  WARNING: {w}")
 
-    def _exec_calculate(self, stmt: CalculateStmt):
-        self._require_bridge(stmt.line)
-        system = self._eval_str(stmt.system)
-        method = self._method(self._eval_str(stmt.method), stmt.line)
-        self._require_valid(system, stmt.line, "CALCULATE")
-        self._defaults(stmt)
-        self.out.write(f"  Calculating: {system} using {method}...")
-        result = self.bridge.calculate(system, method, stmt.allocation)
-        self._emit("calculate", result)
-        if "error" in result:
-            raise BasicError(result["error"], stmt.line)
-        self.runtime.store_results(result, "calculate")
-        self.out.write(format_impacts(result))
-
     def _exec_contribution(self, stmt: ContributionStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
@@ -1725,7 +1722,8 @@ class Interpreter(EnforcementMixin):
         cats = [self._eval_str(c) for c in stmt.categories] or None
         self.out.write(f"  Contribution analysis: {system}...")
         result = self.bridge.contribution(
-            system, method, stmt.top, cats, stmt.allocation)
+            system, method, stmt.top, cats, stmt.allocation,
+            result_handle=self._current_handle())
         self._emit("contribution", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
@@ -1740,7 +1738,8 @@ class Interpreter(EnforcementMixin):
         self._defaults(stmt, MAX=stmt.max_flows)
         self.out.write(f"  Inventory: {system}...")
         result = self.bridge.inventory(
-            system, method, stmt.max_flows, stmt.allocation)
+            system, method, stmt.max_flows, stmt.allocation,
+            result_handle=self._current_handle())
         self._emit("inventory", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
@@ -3001,7 +3000,8 @@ class Interpreter(EnforcementMixin):
         self.out.write(f"  Building contribution tree: {system}...")
         result = self.bridge.upstream_tree(
             system, method, category, stmt.levels, stmt.top,
-            stmt.allocation, stmt.with_quality)
+            stmt.allocation, stmt.with_quality,
+            result_handle=self._current_handle())
         self._emit("upstream_tree", result)
         if "error" in result:
             extra = result.get("available")

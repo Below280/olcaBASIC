@@ -9,7 +9,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "live"))
 
-from fake_client import FakeClient, seed_ecoinvent_like  # noqa: E402
+from fake_client import (FakeClient, nothing_left_open,  # noqa: E402
+                         seed_ecoinvent_like)
 
 
 def _ipc_answering(port: int = 8080) -> bool:
@@ -45,9 +46,13 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
-def client() -> FakeClient:
-    """A fake openLCA client holding the synthetic database."""
-    return seed_ecoinvent_like()
+def client():
+    """A fake openLCA client holding the synthetic database. At the end
+    of every test that used it, no calculation result may be left
+    undisposed."""
+    c = seed_ecoinvent_like()
+    yield c
+    nothing_left_open(c)
 
 
 @pytest.fixture
