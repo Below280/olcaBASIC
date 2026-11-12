@@ -471,12 +471,13 @@ class Parser:
         # ── REPL commands ────────────────────────────
         if kw == "HELP":
             self.advance()
-            topic = ""
-            if self.peek().type in (TokenType.IDENTIFIER,
-                                     TokenType.KEYWORD):
-                topic = self.advance().value
+            # HELP, HELP topic, HELP MAKE PROCESS, HELP "CD .."
+            words = []
+            while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF,
+                                           TokenType.COMMENT):
+                words.append(self.advance().value)
             self.expect_newline()
-            return HelpStmt(line=line, topic=topic)
+            return HelpStmt(line=line, topic=" ".join(words))
 
         if kw == "CLEAR":
             self.advance()

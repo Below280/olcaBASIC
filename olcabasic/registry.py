@@ -1,0 +1,922 @@
+"""
+The olcaBASIC command reference: one entry per command.
+
+This is the only place commands are documented. HELP, HELP <topic>,
+HELP <command>, the command reference in the README and the overview
+the MCP server gives to an assistant are all generated from the entries
+below, so they cannot drift apart. A test checks that every statement
+the parser can produce has an entry here, and that every example parses.
+
+To document a new command, add a Command to COMMANDS. To refresh the
+README after a change:
+
+    python -m olcabasic.registry --readme README.md
+"""
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+# Dialects. olcaBASIC speaks three, plus its own LCA commands.
+BASIC = "BASIC"            # Dartmouth BASIC, 1964 onwards
+ACORN = "Acorn"            # Acorn Electron / BBC Micro filing commands
+LINUX = "Linux"            # shell equivalents of the Acorn commands
+OLCA = "olcaBASIC"         # the LCA commands
+
+# Topics, in the order HELP lists them.
+TOPICS: Dict[str, str] = {
+    "NAVIGATION": "Moving round the database's folders",
+    "EXPLORE": "Finding and inspecting what is in the database",
+    "BUILD": "Creating flows, processes, bridges and product systems",
+    "EDIT": "Changing what already exists",
+    "PARAMETERS": "Variables that become openLCA parameters",
+    "CALCULATE": "Impact results and where they come from",
+    "SCENARIOS": "Scenarios and sensitivity analysis",
+    "CHECK": "Checking a model before trusting its results",
+    "OUTPUT": "Showing and saving results",
+    "PROGRAMMING": "BASIC: variables, loops, conditions, subroutines",
+    "SESSION": "Help and housekeeping",
+}
+
+# Old HELP topic names that still work.
+TOPIC_ALIASES = {"FOLDER": "NAVIGATION", "FOLDERS": "NAVIGATION",
+                 "BASIC": "PROGRAMMING", "AUDIT": "CHECK",
+                 "SENSITIVITY ANALYSIS": "SCENARIOS"}
+
+
+@dataclass(frozen=True)
+class Command:
+    name: str                       # primary form, e.g. "CAT"
+    usage: str                      # one line
+    summary: str                    # one line, no full stop
+    example: str                    # a program that parses
+    topic: str
+    dialect: str = OLCA
+    aliases: Tuple[str, ...] = ()   # other words for the same command
+    alias_dialect: str = ""         # dialect of the aliases, if different
+    syntax: str = ""                # full form, several lines; default usage
+    notes: str = ""                 # detail shown by HELP <command>
+    statements: Tuple[str, ...] = ()  # AST classes this entry documents
+
+    @property
+    def heading(self) -> str:
+        """'CAT / LS': the primary form and its aliases side by side."""
+        return " / ".join((self.name,) + self.aliases)
+
+    @property
+    def full_syntax(self) -> str:
+        return self.syntax or self.usage
+
+
+COMMANDS: List[Command] = [
+
+    # ── NAVIGATION ───────────────────────────────────────────
+    Command(
+        name="CAT", aliases=("LS",), dialect=ACORN, alias_dialect=LINUX,
+        topic="NAVIGATION",
+        usage='CAT ["folder"] [FLOWS|PROCESSES|SYSTEMS] [*pattern*]',
+        summary="List the folders and entries in the current folder",
+        example='CAT\nCAT "00: My model"\nLS *concrete*',
+        notes="CAT lists a folder, as *CAT did on the Acorn Electron. It "
+              "does not print a file as the Linux cat does.",
+        statements=("CatStmt",)),
+    Command(
+        name="DIR", aliases=("CD",), dialect=ACORN, alias_dialect=LINUX,
+        topic="NAVIGATION",
+        usage='DIR "folder"',
+        summary="Go to a folder (DIR on its own shows where you are)",
+        example='DIR "C:Manufacturing"\nCD "00: My model"\nDIR',
+        notes="The folder can be relative to the current one or a full "
+              "path. A folder that does not exist is an error: use CDIR "
+              "to create one.",
+        statements=("DirStmt", "CdStmt")),
+    Command(
+        name="UP", aliases=("CD ..",), dialect=ACORN, alias_dialect=LINUX,
+        topic="NAVIGATION",
+        usage="UP",
+        summary="Go up one folder",
+        example="UP\nCD ..",
+        statements=("UpStmt",)),
+    Command(
+        name="BACK", dialect=ACORN, topic="NAVIGATION",
+        usage="BACK",
+        summary="Go back to the folder you were in before",
+        example="BACK",
+        statements=("BackStmt",)),
+    Command(
+        name="CDIR", dialect=ACORN, topic="NAVIGATION",
+        usage='CDIR "name"',
+        summary="Create a folder, go into it, and build there from now on",
+        example='CDIR "00: My model"',
+        notes="The folder appears in openLCA when the first process or "
+              "flow is built in it.",
+        statements=("CdirStmt",)),
+    Command(
+        name="PWD", dialect=LINUX, topic="NAVIGATION",
+        usage="PWD",
+        summary="Show where you are browsing and where new things are built",
+        example="PWD",
+        statements=("PwdStmt",)),
+    Command(
+        name="NAVIGATE", topic="NAVIGATION",
+        usage="NAVIGATE PROCESSES|FLOWS|METHODS|SYSTEMS",
+        summary="Choose which tree CAT, DIR and UP move through",
+        example="NAVIGATE FLOWS",
+        notes="NAVIGATE on its own shows a menu in the terminal.",
+        statements=("NavigateStmt",)),
+    Command(
+        name="SET PROCESS FOLDER", aliases=("SET FOLDER",), topic="NAVIGATION",
+        usage='SET PROCESS FOLDER "path"',
+        summary="Say where new processes are built",
+        example='SET PROCESS FOLDER "00: My model"',
+        notes="Browsing never changes where things are built. Only SET "
+              "PROCESS FOLDER, SET FLOW FOLDER and CDIR do.",
+        statements=("SetFolderStmt",)),
+    Command(
+        name="SET FLOW FOLDER", topic="NAVIGATION",
+        usage='SET FLOW FOLDER "path"',
+        summary="Say where new flows are built",
+        example='SET FLOW FOLDER "00: My model/Flows"',
+        statements=("SetFolderStmt",)),
+
+    # ── EXPLORE ──────────────────────────────────────────────
+    Command(
+        name="FIND PROCESS", topic="EXPLORE",
+        usage='FIND PROCESS "text" [AT "location"] [IN "folder"]',
+        summary="Search processes by name",
+        example='FIND PROCESS "cement"\nFIND PROCESS "electricity" IN "D:Electricity"',
+        notes="Shows name, folder and UUID. Use it to get the exact name "
+              "or the UUID for USE PROCESS and PROVIDER.",
+        statements=("FindStmt",)),
+    Command(
+        name="FIND FLOW", topic="EXPLORE",
+        usage='FIND FLOW "text" [IN "folder"]',
+        summary="Search flows by name",
+        example='FIND FLOW "Carbon dioxide"',
+        statements=("FindStmt",)),
+    Command(
+        name="FIND METHOD", topic="EXPLORE",
+        usage='FIND METHOD "text"',
+        summary="Search impact methods by name",
+        example='FIND METHOD "EF"',
+        statements=("FindStmt",)),
+    Command(
+        name="FIND UNIT", topic="EXPLORE",
+        usage='FIND UNIT "unit"',
+        summary="Look up a unit and the flow property it belongs to",
+        example='FIND UNIT "kWh"',
+        statements=("FindStmt",)),
+    Command(
+        name="FIND CHEMICAL", topic="EXPLORE",
+        usage='FIND CHEMICAL "name or CAS number"',
+        summary="Look up a chemical's synonyms on PubChem",
+        example='FIND CHEMICAL "caustic soda"',
+        notes="This sends the name to PubChem over the internet.",
+        statements=("FindStmt",)),
+    Command(
+        name="SHOW PROCESS", topic="EXPLORE",
+        usage='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|LOCATION|DESCRIPTION]',
+        summary="Show a process: exchanges, parameters, location",
+        example='SHOW PROCESS "Concrete block"\nSHOW PROCESS "Concrete block" INPUTS',
+        statements=("ShowStmt",)),
+    Command(
+        name="SHOW FLOW", topic="EXPLORE",
+        usage='SHOW FLOW "name" [UNITS|DESCRIPTION]',
+        summary="Show a flow: type, folder, properties and units",
+        example='SHOW FLOW "Concrete block" UNITS',
+        statements=("ShowStmt",)),
+    Command(
+        name="SHOW PARAMETER", topic="EXPLORE",
+        usage='SHOW PARAMETER "name" [VALUE|DESCRIPTION]',
+        summary="Show a global parameter",
+        example='SHOW PARAMETER "cement_mass"',
+        statements=("ShowStmt",)),
+    Command(
+        name="DATABASE INFO", aliases=("PRINT DATABASE", "DATABASE"),
+        topic="EXPLORE",
+        usage="DATABASE INFO",
+        summary="Count what is in the database and name its family",
+        example="DATABASE INFO",
+        statements=("PrintStmt",)),
+    Command(
+        name="DATABASE FAMILY", topic="EXPLORE",
+        usage='DATABASE FAMILY "ecoinvent"|"flcac"',
+        summary="Say which flow property names the database uses",
+        example='DATABASE FAMILY "ecoinvent"',
+        notes="The family is detected when olcaBASIC connects. ecoinvent "
+              "covers ecoinvent, EN15804GD, HiQLCD and BAFU; flcac covers "
+              "the US LCA Commons, US LCI and USEEIO.",
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT PROCESSES", topic="EXPLORE",
+        usage='PRINT PROCESSES("text" [, "folder"])',
+        summary="Search processes (same as FIND PROCESS)",
+        example='PRINT PROCESSES("cement")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT METHODS", topic="EXPLORE",
+        usage='PRINT METHODS(["text"])',
+        summary="List impact methods",
+        example='PRINT METHODS("EF")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT SYSTEMS", topic="EXPLORE",
+        usage='PRINT SYSTEMS(["text"])',
+        summary="List product systems",
+        example="PRINT SYSTEMS",
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT DETAILS", topic="EXPLORE",
+        usage='PRINT DETAILS("process")',
+        summary="Show a process (same as SHOW PROCESS)",
+        example='PRINT DETAILS("Concrete block")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT PARAMS", topic="EXPLORE",
+        usage='PRINT PARAMS("system")',
+        summary="List the parameters a product system can redefine",
+        example='PRINT PARAMS("Concrete block")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT GLOBAL PARAMS", topic="EXPLORE",
+        usage='PRINT GLOBAL PARAMS(["text"])',
+        summary="List global parameters",
+        example='PRINT GLOBAL PARAMS("cement")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT LINKS", topic="EXPLORE",
+        usage='PRINT LINKS("system" [, "text"])',
+        summary="Show which provider supplies each input in a product system",
+        example='PRINT LINKS("Concrete block", "electricity")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT QUALITY", topic="EXPLORE",
+        usage='PRINT QUALITY("process")',
+        summary="Show the data quality (pedigree) entries of a process",
+        example='PRINT QUALITY("Concrete block")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT UNITS", topic="EXPLORE",
+        usage='PRINT UNITS("unit")',
+        summary="Look up a unit (same as FIND UNIT)",
+        example='PRINT UNITS("kWh")',
+        statements=("PrintStmt",)),
+    Command(
+        name="PRINT DQ SYSTEMS", topic="EXPLORE",
+        usage="PRINT DQ SYSTEMS",
+        summary="List the data quality systems that can be used as schemas",
+        example="PRINT DQ SYSTEMS",
+        statements=("PrintStmt",)),
+
+    # ── BUILD ────────────────────────────────────────────────
+    Command(
+        name="MAKE PROCESS", aliases=("PROCESS",), topic="BUILD",
+        usage='MAKE PROCESS "name" ... END PROCESS',
+        summary="Create a process from INPUT and OUTPUT lines",
+        syntax='''MAKE PROCESS "name" [LOCATION "code"]
+  [FOLDER "path"]
+  [DESCRIPTION "text"]
+  [FLOW SCHEMA "data quality system"]
+  [PROCESS SCHEMA "data quality system"]
+  [LET name = value]
+  OUTPUT MAKE FLOW "product", amount, unit, PRODUCT
+  INPUT USE PROCESS "process name", amount, unit [LOCATION "code"] [PROVIDER "uuid"]
+  INPUT USE FLOW "flow name", amount, unit
+  INPUT MAKE FLOW "new flow", amount, unit
+  OUTPUT "elementary flow", amount, unit TO AIR|WATER|SOIL
+  INPUT "resource", amount, unit FROM NATURE
+  OUTPUT MAKE FLOW "waste", amount, unit, WASTE
+  [... PEDIGREE (1,2,1,1,3)] [COMMENT "text"] [FORMULA "expression"]
+END PROCESS''',
+        example='''MAKE PROCESS "Concrete block"
+  FOLDER "00: My model"
+  OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT
+  INPUT USE PROCESS "BRIDGE | Cement | kg", 300, kg
+  OUTPUT "Carbon dioxide, fossil", 5, kg TO AIR
+END PROCESS''',
+        notes="Exactly one line is marked PRODUCT: the reference product.\n"
+              "USE PROCESS finds an existing process and links it as the "
+              "provider; USE FLOW links a flow with no provider; MAKE FLOW "
+              "creates the flow, or reuses one with the same name.\n"
+              "An amount written as a number becomes a process parameter. "
+              "An amount written with a variable stays a formula, and the "
+              "variable becomes a global parameter.\n"
+              "Running the block twice does not create a second process: "
+              "it warns and leaves the first one alone.",
+        statements=("ProcessStmt",)),
+    Command(
+        name="MAKE FLOW", aliases=("FLOW",), topic="BUILD",
+        usage='MAKE FLOW "name", unit, PRODUCT|WASTE|ELEMENTARY [FOLDER "path"]',
+        summary="Create a flow (or reuse the one that already has that name)",
+        example='MAKE FLOW "Concrete block", m3, PRODUCT',
+        notes="FLOW without MAKE looks for an existing flow first.",
+        statements=("FlowStmt",)),
+    Command(
+        name="BRIDGE", aliases=("MAKE BRIDGE",), topic="BUILD",
+        usage='BRIDGE "name", unit [WASTE] ... END BRIDGE',
+        summary="Create a bridge process between your model and a background process",
+        syntax='''BRIDGE "BRIDGE | name | unit", unit [WASTE]
+  FOLDER "path"
+  PROVIDER "process name or uuid"
+END BRIDGE''',
+        example='''BRIDGE "BRIDGE | Cement | kg", kg
+  FOLDER "00: My model/Bridges"
+  PROVIDER "0f0f0f0f-0000-0000-0000-000000000000"
+END BRIDGE''',
+        notes="A bridge has the bridge flow as its product and one input "
+              "from the background process. Your own processes use the "
+              "bridge, so the background process can be swapped in one "
+              "place.",
+        statements=("BridgeStmt",)),
+    Command(
+        name="SYSTEM", aliases=("MAKE SYSTEM",), topic="BUILD",
+        usage='SYSTEM "process" ... END SYSTEM',
+        summary="Create the product system for a process",
+        syntax='''SYSTEM "process name"
+  [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS]
+  [TARGET amount, unit [PROPERTY "flow property"]]
+  [FOLDER "path"]
+END SYSTEM''',
+        example='SYSTEM "Concrete block"',
+        notes="Linking defaults to PREFER_DEFAULTS. One system is built "
+              "at a time. If the system already exists it is reused: "
+              "DELETE SYSTEM first to rebuild it after changing a process.",
+        statements=("SystemStmt",)),
+    Command(
+        name="LINK", topic="BUILD",
+        usage='LINK PROCESS "source" TO PROCESS "target" WITH amount, unit',
+        summary="Add the source's product as an input of the target",
+        example='LINK PROCESS "Cement supply" TO PROCESS "Concrete block" WITH 300, kg',
+        statements=("LinkStmt",)),
+    Command(
+        name="MOVE", topic="BUILD",
+        usage='MOVE PROCESS "name" TO "folder"',
+        summary="Move a process to another folder",
+        example='MOVE PROCESS "Concrete block" TO "00: My model/A3"',
+        notes='MOVE ... TO FOLDER moves it to the current build folder.',
+        statements=("MoveStmt",)),
+    Command(
+        name="DELETE", topic="BUILD",
+        usage='DELETE PROCESS|SYSTEM "name or uuid"',
+        summary="Delete a process or a product system",
+        example='CONFIRM DELETE ON\nDELETE SYSTEM "Concrete block"\nDELETE PROCESS "Concrete block"',
+        notes="Deleting cannot be undone. In the terminal olcaBASIC asks "
+              "first; a program must say CONFIRM DELETE ON. A name that "
+              "matches several entries is refused: use the UUID.",
+        statements=("DeleteStmt",)),
+    Command(
+        name="CONFIRM DELETE", topic="BUILD",
+        usage="CONFIRM DELETE ON|OFF",
+        summary="Let a program delete without being asked each time",
+        example="CONFIRM DELETE ON",
+        statements=("ConfirmDeleteStmt",)),
+
+    # ── EDIT ─────────────────────────────────────────────────
+    Command(
+        name="EDIT PROCESS", topic="EDIT",
+        usage='EDIT PROCESS "name" ... END EDIT',
+        summary="Add, remove or update exchanges and parameters of a process",
+        syntax='''EDIT PROCESS "name or uuid"
+  ADD INPUT|OUTPUT ...                 (same forms as in MAKE PROCESS)
+  ADD PARAM name = value
+  REMOVE INPUT|OUTPUT "flow or provider name"
+  UPDATE INPUT|OUTPUT "name", amount [, unit]
+  UPDATE INPUT|OUTPUT "name" [LOCATION "code"] [PROVIDER "uuid"]
+                             [PEDIGREE (1,2,1,1,3)] [COMMENT "text"]
+  UPDATE PARAM name = value
+  SET DESCRIPTION|FOLDER|LOCATION "value"
+END EDIT''',
+        example='''EDIT PROCESS "Concrete block"
+  UPDATE INPUT "BRIDGE | Cement | kg", 320, kg
+  SET DESCRIPTION "Mix revised"
+END EDIT''',
+        notes="Product systems that already use the process keep their "
+              "old links: DELETE SYSTEM and SYSTEM again after adding or "
+              "removing exchanges.",
+        statements=("EditProcessStmt",)),
+    Command(
+        name="EDIT FLOW", topic="EDIT",
+        usage='EDIT FLOW "name" ... END EDIT',
+        summary="Add or update a flow property, or set the reference property",
+        syntax='''EDIT FLOW "name"
+  ADD PROPERTY "Mass" AS 2400 kg PER m3
+  UPDATE PROPERTY "Mass" AS 2350 kg PER m3
+  SET REFERENCE "Mass"
+END EDIT''',
+        example='''EDIT FLOW "Concrete block"
+  ADD PROPERTY "Mass" AS 2400 kg PER m3
+END EDIT''',
+        statements=("EditFlowStmt",)),
+
+    # ── PARAMETERS ───────────────────────────────────────────
+    Command(
+        name="LET", dialect=BASIC, topic="PARAMETERS",
+        usage="LET name = expression",
+        summary="Set a variable (LET may be left out: name = expression)",
+        example="LET cement_mass = 300\nLET water_mass = cement_mass * 0.5",
+        notes="A top-level variable used as an exchange amount becomes a "
+              "global parameter in openLCA. A variable defined from other "
+              "variables becomes a formula parameter, so it follows them "
+              "in scenarios. Text variables end in $: LET folder$ = \"00: X\".",
+        statements=("LetStmt",)),
+    Command(
+        name="UPDATE PARAMETER", topic="PARAMETERS",
+        usage="UPDATE PARAMETER name = expression",
+        summary="Set a variable and write the global parameter to openLCA now",
+        example="UPDATE PARAMETER cement_mass = 320",
+        statements=("UpdateParamStmt",)),
+
+    # ── CALCULATE ────────────────────────────────────────────
+    Command(
+        name="CALCULATE", topic="CALCULATE",
+        usage='CALCULATE "system" USING "method" [ALLOCATE method]',
+        summary="Calculate the impacts of a product system",
+        example='CALCULATE "Concrete block" USING "EF v3.1"',
+        notes="USING is required: there is no default method. ALLOCATE "
+              "takes AS_DEFINED (the default), PHYSICAL, ECONOMIC, CAUSAL "
+              "or NONE.",
+        statements=("CalculateStmt",)),
+    Command(
+        name="CONTRIBUTION", topic="CALCULATE",
+        usage='CONTRIBUTION "system" USING "method" [TOP n]',
+        summary="Show which processes contribute most to each impact category",
+        syntax='''CONTRIBUTION "system" USING "method" [TOP n] [ALLOCATE method]
+  [CATEGORIES "category", "category"]
+END CONTRIBUTION''',
+        example='CONTRIBUTION "Concrete block" USING "EF v3.1" TOP 5',
+        notes="TOP defaults to 10. Without CATEGORIES every category is "
+              "analysed. The block form ends with END CONTRIBUTION.",
+        statements=("ContributionStmt",)),
+    Command(
+        name="TREE", topic="CALCULATE",
+        usage='TREE "system" USING "method" CATEGORY "category" [LEVELS n] [TOP n] [NOQUALITY]',
+        summary="Show the contribution tree for one category, with pedigree scores",
+        example='TREE "Concrete block" USING "EF v3.1" CATEGORY "Climate change" LEVELS 3 TOP 5',
+        notes="LEVELS defaults to 3 and TOP to 5.",
+        statements=("TreeStmt",)),
+    Command(
+        name="INVENTORY", topic="CALCULATE",
+        usage='INVENTORY "system" USING "method" [MAX n]',
+        summary="List the largest elementary flows of a product system",
+        example='INVENTORY "Concrete block" USING "EF v3.1" MAX 20',
+        notes="MAX defaults to 50.",
+        statements=("InventoryStmt",)),
+    Command(
+        name="MONTECARLO", topic="CALCULATE",
+        usage='MONTECARLO "system" USING "method" [RUNS n]',
+        summary="Run a Monte Carlo simulation and report the spread per category",
+        example='MONTECARLO "Concrete block" USING "EF v3.1" RUNS 500',
+        notes="RUNS defaults to 1000. Reports mean, standard deviation, "
+              "coefficient of variation, minimum, maximum, median and the "
+              "5th and 95th percentiles. If the processes carry no "
+              "uncertainty data every run is the same, and it says so.",
+        statements=("MonteCarloStmt",)),
+
+    # ── SCENARIOS ────────────────────────────────────────────
+    Command(
+        name="SCENARIO", topic="SCENARIOS",
+        usage='SCENARIO "name" ... END SCENARIO',
+        summary="Define a scenario as a set of parameter values",
+        syntax='''SCENARIO "name"
+  LET parameter = value
+END SCENARIO''',
+        example='''SCENARIO "Low cement"
+  LET cement_mass = 250
+END SCENARIO''',
+        notes="A variable calculated from others cannot be set in a "
+              "scenario: set the variables it is calculated from.",
+        statements=("ScenarioStmt",)),
+    Command(
+        name="RUN SCENARIOS", topic="SCENARIOS",
+        usage='RUN SCENARIOS ON "system" USING "method"',
+        summary="Calculate every scenario defined so far",
+        syntax='''RUN SCENARIOS ON "system" USING "method" [ALLOCATE method]
+  [FROM CSV "scenarios.csv"]
+  [SAVE "results.csv"]
+END RUN''',
+        example='RUN SCENARIOS ON "Concrete block" USING "EF v3.1"',
+        notes="With FROM CSV the scenarios come from a file whose first "
+              "column is Parameter and whose other columns are scenarios. "
+              "The scenarios are cleared after the run.",
+        statements=("RunScenariosStmt",)),
+    Command(
+        name="SENSITIVITY", topic="SCENARIOS",
+        usage='SENSITIVITY ON "system" USING "method" BY n% ... END SENSITIVITY',
+        summary="Vary parameters up and down by a percentage, one at a time",
+        syntax='''SENSITIVITY ON "system" USING "method" BY n% [ALLOCATE method]
+  VARY parameter [, parameter]
+  [FROM "parameters.csv"]
+  [SAVE "results.csv"]
+END SENSITIVITY''',
+        example='''SENSITIVITY ON "Concrete block" USING "EF v3.1" BY 10%
+  VARY cement_mass
+END SENSITIVITY''',
+        statements=("SensitivityStmt",)),
+
+    # ── CHECK ────────────────────────────────────────────────
+    Command(
+        name="VALIDATE", topic="CHECK",
+        usage='VALIDATE "system" [WITH CALCULATION]',
+        summary="Check the structure of a product system",
+        example='VALIDATE "Concrete block"',
+        notes="Checks the reference process, its reference product, the "
+              "links and the parameters. It does not check whether the "
+              "amounts are right.",
+        statements=("ValidateStmt",)),
+    Command(
+        name="CHECK", topic="CHECK",
+        usage='CHECK "system" [TIER 1|2|3] [AGAINST "file"]',
+        summary="Run a tier of model checks",
+        example='CHECK "Concrete block" TIER 1',
+        notes="Tier 1 is structural. Tier 2 compares the model with its "
+              "source data. Tier 3 asks whether the results are plausible.",
+        statements=("CheckStmt",)),
+    Command(
+        name="AUDIT", topic="CHECK",
+        usage='AUDIT [FOLDER] "folder"',
+        summary="Look for structural problems in the processes of a folder",
+        example='AUDIT FOLDER "00: My model"',
+        statements=("AuditStmt",)),
+    Command(
+        name="EXTRACT", topic="CHECK",
+        usage='EXTRACT [FOLDER] "folder"',
+        summary="List every process and exchange in a folder, to compare with source data",
+        example='EXTRACT FOLDER "00: My model"',
+        statements=("ExtractStmt",)),
+
+    # ── OUTPUT ───────────────────────────────────────────────
+    Command(
+        name="PRINT RESULTS", topic="OUTPUT",
+        usage="PRINT RESULTS",
+        summary="Show the most recent results again",
+        example="PRINT RESULTS",
+        statements=("PrintResultsStmt",)),
+    Command(
+        name="SAVE RESULTS", aliases=("EXPORT RESULTS TO",), topic="OUTPUT",
+        usage='SAVE RESULTS "file.csv"',
+        summary="Write the most recent results to a CSV file",
+        example='SAVE RESULTS "results.csv"',
+        statements=("SaveResultsStmt", "ExportResultsStmt")),
+
+    # ── PROGRAMMING ──────────────────────────────────────────
+    Command(
+        name="PRINT", dialect=BASIC, topic="PROGRAMMING",
+        usage="PRINT expression [, expression]",
+        summary="Print text or values",
+        example='PRINT "Cement:", cement_mass',
+        statements=("PrintExprStmt", "PrintStmt")),
+    Command(
+        name="REM", aliases=("'",), dialect=BASIC, topic="PROGRAMMING",
+        usage="REM text",
+        summary="A comment (an apostrophe starts one too)",
+        example="REM The mix design\nLET cement_mass = 300 ' kg per m3",
+        statements=("CommentStmt",)),
+    Command(
+        name="IF", dialect=BASIC, topic="PROGRAMMING",
+        usage="IF condition THEN ... [ELSE ...] END IF",
+        summary="Do something only if a condition holds",
+        syntax='''IF condition THEN
+  statements
+[ELSE
+  statements]
+END IF
+
+IF condition THEN statement [ELSE statement]''',
+        example='IF cement_mass > 350 THEN\n  PRINT "High cement mix"\nEND IF',
+        notes="Conditions use =, <>, <, >, <=, >=, AND, OR and NOT.",
+        statements=("IfStmt",)),
+    Command(
+        name="FOR", dialect=BASIC, topic="PROGRAMMING",
+        usage="FOR name = start TO end [STEP n] ... NEXT",
+        summary="Repeat with a counter",
+        example='FOR i = 1 TO 3\n  PRINT i\nNEXT i',
+        statements=("ForStmt",)),
+    Command(
+        name="FOR EACH", dialect=BASIC, topic="PROGRAMMING",
+        usage="FOR EACH name IN value, value ... NEXT",
+        summary="Repeat once for each value in a list",
+        example='FOR EACH method$ IN "EF v3.1", "IPCC 2021"\n  PRINT method$\nNEXT',
+        statements=("ForEachStmt",)),
+    Command(
+        name="WHILE", dialect=BASIC, topic="PROGRAMMING",
+        usage="WHILE condition ... WEND",
+        summary="Repeat while a condition holds",
+        example="LET n = 0\nWHILE n < 3\n  LET n = n + 1\nWEND",
+        statements=("WhileStmt",)),
+    Command(
+        name="SUB", dialect=BASIC, topic="PROGRAMMING",
+        usage="SUB name(parameters) ... END SUB",
+        summary="Define a subroutine; call it by name",
+        example='SUB report(title$)\n  PRINT title$\nEND SUB\nreport "Results"',
+        statements=("SubDef", "SubCall")),
+    Command(
+        name="FUNCTION", dialect=BASIC, topic="PROGRAMMING",
+        usage="FUNCTION name(parameters) ... END FUNCTION",
+        summary="Define a function; it returns the variable with its own name",
+        example="FUNCTION double(x)\n  LET double = x * 2\nEND FUNCTION\nPRINT double(4)",
+        notes="Built-in functions: ABS, INT, SQR, LOG, EXP, SIN, COS, TAN, "
+              "MIN, ROUND, LEN, VAL, STR$, TRIM$, UCASE$, LCASE$.",
+        statements=("FunctionDef",)),
+    Command(
+        name="DATA", dialect=BASIC, topic="PROGRAMMING",
+        usage='DATA "name", amount, unit',
+        summary="Queue values for READ INPUTS FROM DATA inside a PROCESS block",
+        example='DATA "BRIDGE | Cement | kg", 300, kg\n'
+                'PROCESS "Concrete block"\n'
+                '  OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT\n'
+                '  READ INPUTS FROM DATA\nEND PROCESS',
+        statements=("DataStmt",)),
+    Command(
+        name="INPUT", dialect=BASIC, topic="PROGRAMMING",
+        usage='INPUT "prompt", name',
+        summary="Ask for a value at the terminal",
+        example='INPUT "Cement mass in kg?", cement_mass',
+        notes="Only works in the terminal. A program run through a "
+              "Session has nobody to ask.",
+        statements=("InputStmt",)),
+    Command(
+        name="INCLUDE", dialect=BASIC, topic="PROGRAMMING",
+        usage='INCLUDE "file.baslca"',
+        summary="Insert another program file at this point",
+        example='INCLUDE "bridges.baslca"',
+        statements=("IncludeStmt",)),
+    Command(
+        name="RUN", dialect=BASIC, topic="PROGRAMMING",
+        usage='RUN "file.baslca"',
+        summary="Run a program file",
+        example='RUN "model.baslca"',
+        notes="There is no GOTO and there are no line numbers.",
+        statements=("RunFileStmt",)),
+
+    # ── SESSION ──────────────────────────────────────────────
+    Command(
+        name="HELP", topic="SESSION",
+        usage="HELP [topic or command]",
+        summary="Show the command list, a topic, or one command",
+        example="HELP\nHELP NAVIGATION\nHELP MAKE PROCESS",
+        statements=("HelpStmt",)),
+    Command(
+        name="REFRESH", topic="SESSION",
+        usage="REFRESH",
+        summary="Read the lists of processes and flows from openLCA again",
+        example="REFRESH",
+        notes="Use it after changing the database in openLCA itself.",
+        statements=("RefreshStmt",)),
+    Command(
+        name="CLEAR", topic="SESSION",
+        usage="CLEAR",
+        summary="Clear the terminal screen",
+        example="CLEAR",
+        statements=("ClearStmt",)),
+    Command(
+        name="EXIT", aliases=("QUIT",), topic="SESSION",
+        usage="EXIT",
+        summary="Leave olcaBASIC",
+        example="EXIT",
+        statements=("ExitStmt",)),
+]
+
+
+# ── lookups ──────────────────────────────────────────────────
+
+def _norm(text: str) -> str:
+    return " ".join(text.upper().split())
+
+
+def find(name: str) -> Optional[Command]:
+    """The entry for a command word or one of its aliases."""
+    key = _norm(name)
+    for c in COMMANDS:
+        if _norm(c.name) == key or key in (_norm(a) for a in c.aliases):
+            return c
+    return None
+
+
+def find_all(name: str) -> List[Command]:
+    """Entries a word could mean: 'FIND' gives every FIND command."""
+    exact = find(name)
+    if exact:
+        return [exact]
+    key = _norm(name)
+    return [c for c in COMMANDS
+            if _norm(c.name).startswith(key + " ")
+            or any(_norm(a).startswith(key + " ") for a in c.aliases)]
+
+
+def topic_of(name: str) -> Optional[str]:
+    key = _norm(name)
+    key = TOPIC_ALIASES.get(key, key)
+    return key if key in TOPICS else None
+
+
+def by_topic(topic: str) -> List[Command]:
+    return [c for c in COMMANDS if c.topic == topic]
+
+
+def documented_statements() -> set:
+    """Names of every AST statement class that has an entry."""
+    return {s for c in COMMANDS for s in c.statements}
+
+
+# ── renderers ────────────────────────────────────────────────
+
+def _indent(text: str, by: str = "    ") -> str:
+    return "\n".join(by + line if line else line for line in text.split("\n"))
+
+
+def _summary_line(c: Command) -> List[str]:
+    """'    CAT / LS      summary', wrapped if the words are long."""
+    if len(c.heading) <= 28:
+        return [f"    {c.heading:<28}  {c.summary}"]
+    return [f"    {c.heading}", f"    {'':<28}  {c.summary}"]
+
+
+def render_help() -> str:
+    """HELP: every command with its one-line summary, by topic."""
+    out = ["", "  olcaBASIC commands"]
+    for topic, title in TOPICS.items():
+        commands = by_topic(topic)
+        if not commands:
+            continue
+        out.append("")
+        out.append(f"  {topic}: {title}")
+        for c in commands:
+            out.extend(_summary_line(c))
+    out.append("")
+    out.append("  HELP <topic> shows syntax and examples: "
+               + ", ".join(TOPICS))
+    out.append("  HELP <command> shows one command, for example HELP MAKE PROCESS")
+    out.append("  Navigation works in two dialects: Acorn (CAT, DIR, UP) "
+               "and Linux (LS, CD, CD ..).")
+    out.append("")
+    return "\n".join(out)
+
+
+def render_command(c: Command) -> str:
+    """HELP <command>."""
+    out = ["", f"  {c.heading}", f"    {c.summary}."]
+    if c.aliases:
+        if c.alias_dialect and c.alias_dialect != c.dialect:
+            out.append(f"    {c.name} is the {c.dialect} form; "
+                       f"{', '.join(c.aliases)} the {c.alias_dialect} form. "
+                       f"They do the same thing.")
+        else:
+            out.append(f"    Also written: {', '.join(c.aliases)}")
+    out.append("")
+    out.append("  Syntax:")
+    out.append(_indent(c.full_syntax))
+    out.append("")
+    out.append("  Example:")
+    out.append(_indent(c.example))
+    if c.notes:
+        out.append("")
+        for para in c.notes.split("\n"):
+            out.append(f"  {para}")
+    out.append("")
+    return "\n".join(out)
+
+
+def render_topic(topic: str) -> str:
+    """HELP <topic>: syntax and an example for each command."""
+    out = ["", f"  {topic}: {TOPICS[topic]}"]
+    for c in by_topic(topic):
+        out.append("")
+        out.append(f"  {c.heading}")
+        out.append(f"    {c.summary}.")
+        out.append(_indent(c.full_syntax, "      "))
+    out.append("")
+    out.append("  HELP <command> shows an example and notes for one command.")
+    out.append("")
+    return "\n".join(out)
+
+
+def render(query: str = "") -> str:
+    """What HELP prints for a query: nothing, a topic, or a command."""
+    query = (query or "").strip().strip('"')
+    if not query:
+        return render_help()
+    topic = topic_of(query)
+    exact = find(query)
+    if exact and not topic:
+        return render_command(exact)
+    if topic:
+        text = render_topic(topic)
+        if exact:
+            text = render_command(exact).rstrip("\n") + "\n" + text
+        return text
+    matches = find_all(query)
+    if len(matches) == 1:
+        return render_command(matches[0])
+    if matches:
+        out = ["", f"  {_norm(query)} has several forms:"]
+        for c in matches:
+            out.extend(_summary_line(c))
+        out.append("")
+        out.append("  HELP <one of these> shows its syntax and an example.")
+        out.append("")
+        return "\n".join(out)
+    if _norm(query) == "NEW":
+        return ("\n  NEW is the old word for MAKE FLOW inside a PROCESS block "
+                "(INPUT NEW, OUTPUT NEW).\n  It still works but is "
+                "deprecated. See HELP MAKE PROCESS.\n")
+    return (f"\n  No help for: {query}\n  Type HELP for the command list. "
+            f"Topics: {', '.join(TOPICS)}\n")
+
+
+RULES = """\
+olcaBASIC is a BASIC-style language that drives openLCA. One statement per
+line. Names go in "double quotes". Blocks end with END <word>. No GOTO, no
+line numbers. Comments start with REM or '.
+- Every calculation needs USING "method" (the full method name).
+- A name that could mean several processes is an error: add LOCATION "code"
+  or PROVIDER "uuid". FIND PROCESS shows the candidates.
+- A program stops at its first error. Each error gives the line and a hint.
+- DELETE needs CONFIRM DELETE ON earlier in the program.
+- Variables persist between runs in the same session. A top-level variable
+  used as an amount becomes a global parameter in openLCA.
+- MAKE is idempotent: running a build twice does not duplicate anything.
+"""
+
+
+def render_overview() -> str:
+    """A compact reference for an assistant: the rules of the language
+    and one line per command. Kept under 2,000 tokens (tested)."""
+    out = [RULES.rstrip(), ""]
+    for topic in TOPICS:
+        commands = by_topic(topic)
+        if not commands:
+            continue
+        out.append(f"{topic}")
+        for c in commands:
+            alias = f"  (= {', '.join(c.aliases)})" if c.aliases else ""
+            out.append(f"  {c.usage}{alias}")
+    out.append("")
+    out.append("Detail: olcabasic_help with a topic ("
+               + ", ".join(t.lower() for t in TOPICS)
+               + ") or a command name.")
+    return "\n".join(out)
+
+
+def render_markdown() -> str:
+    """The command reference section of the README."""
+    out = ["Every command, by topic. `HELP`, `HELP <topic>` and "
+           "`HELP <command>` show the same reference inside olcaBASIC.", ""]
+    for topic, title in TOPICS.items():
+        commands = by_topic(topic)
+        if not commands:
+            continue
+        out.append(f"### {topic.capitalize()}: {title.lower()}")
+        out.append("")
+        out.append("| Command | Dialect | What it does |")
+        out.append("|---|---|---|")
+        for c in commands:
+            words = " / ".join(f"`{w}`" for w in (c.name,) + c.aliases)
+            dialect = c.dialect
+            if c.aliases and c.alias_dialect and c.alias_dialect != c.dialect:
+                dialect = f"{c.dialect} / {c.alias_dialect}"
+            out.append(f"| {words} | {dialect} | {c.summary} |")
+        out.append("")
+        out.append("```basic")
+        blocks = []
+        for c in commands:
+            blocks.append(c.full_syntax)
+        out.append("\n".join(blocks))
+        out.append("```")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+README_BEGIN = "<!-- BEGIN COMMAND REFERENCE (generated by olcabasic.registry; do not edit by hand) -->"
+README_END = "<!-- END COMMAND REFERENCE -->"
+
+
+def update_readme(text: str) -> str:
+    """README text with the generated reference between the markers."""
+    start = text.index(README_BEGIN) + len(README_BEGIN)
+    end = text.index(README_END)
+    return text[:start] + "\n\n" + render_markdown() + "\n" + text[end:]
+
+
+def _main(argv=None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Print the olcaBASIC command reference, or write it "
+                    "into a README between the reference markers.")
+    parser.add_argument("--readme", help="README file to update in place")
+    parser.add_argument("--overview", action="store_true",
+                        help="print the compact overview")
+    args = parser.parse_args(argv)
+    if args.readme:
+        with open(args.readme, "r", encoding="utf-8") as f:
+            text = f.read()
+        with open(args.readme, "w", encoding="utf-8", newline="\n") as f:
+            f.write(update_readme(text))
+        print(f"Updated the command reference in {args.readme}")
+    elif args.overview:
+        print(render_overview())
+    else:
+        print(render_help())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
