@@ -67,6 +67,11 @@ class Command:
     def full_syntax(self) -> str:
         return self.syntax or self.usage
 
+    @property
+    def ipc(self) -> Tuple[str, ...]:
+        """The openLCA IPC methods this command uses (see IPC_USE)."""
+        return IPC_USE.get(self.name, ())
+
 
 COMMANDS: List[Command] = [
 
@@ -1033,6 +1038,61 @@ IF condition THEN statement [ELSE statement]''',
 
 
 # ── lookups ──────────────────────────────────────────────────
+
+# ── which IPC methods each command uses ──────────────────────
+#
+# Command name -> the methods of openLCA's IPC server it calls. The
+# authoritative method list is olcabasic.engine.ipc_methods.IPC_METHODS;
+# a test fails if any method there is used by no command here.
+_READ = ("data/get", "data/get/descriptors")
+
+IPC_USE: Dict[str, Tuple[str, ...]] = {
+    "CAT": ("data/get/descriptors",),
+    "DIR": ("data/get/descriptors",),
+    "FIND PROCESS": ("data/get/descriptors",),
+    "FIND FLOW": ("data/get/descriptors",),
+    "FIND SYSTEM": ("data/get/descriptors",),
+    "FIND METHOD": ("data/get/descriptors",),
+    "FIND UNIT": ("data/get/all",),
+    "SHOW PROCESS": _READ + ("data/get/descriptor",),
+    "SHOW FLOW": _READ + ("data/get/providers",),
+    "SHOW SYSTEM": _READ + ("data/get/parameters",),
+    "SHOW GLOBAL PARAMS": ("data/get/all",),
+    "SHOW PARAMETER": ("data/get/all",),
+    "DATABASE INFO": ("data/get/descriptors",),
+    "PRINT UNITS": ("data/get/all",),
+    "PRINT DQ SYSTEMS": ("data/get/all",),
+    "MAKE PROCESS": _READ + ("data/put", "data/get/providers"),
+    "MAKE FLOW": _READ + ("data/put",),
+    "BRIDGE": _READ + ("data/put",),
+    "SYSTEM": _READ + ("data/create/system", "data/put"),
+    "LINK": _READ + ("data/put",),
+    "MOVE": _READ + ("data/put",),
+    "DELETE": _READ + ("data/delete",),
+    "EDIT PROCESS": _READ + ("data/put",),
+    "EDIT FLOW": _READ + ("data/put",),
+    "PARAMETERISE PROCESS": _READ + ("data/put",),
+    "LET": ("data/put",),
+    "UPDATE PARAMETER": ("data/get/all", "data/put"),
+    "CALCULATE": ("result/calculate", "result/state",
+                  "result/total-impacts", "result/dispose"),
+    "CONTRIBUTION": ("result/calculate", "result/tech-flows",
+                     "result/total-impacts-of", "result/dispose"),
+    "TREE": ("result/calculate", "result/demand",
+             "result/upstream-impacts-of", "result/dispose"),
+    "INVENTORY": ("result/calculate", "result/total-flows",
+                  "result/dispose"),
+    "MONTECARLO": ("result/simulate", "result/simulate/next",
+                   "result/total-impacts", "result/dispose"),
+    "RUN SCENARIOS": ("data/get/parameters", "result/calculate",
+                      "result/total-impacts", "result/dispose"),
+    "SENSITIVITY": ("data/get/parameters", "result/calculate",
+                    "result/total-impacts", "result/dispose"),
+    "VALIDATE": _READ,
+    "AUDIT": _READ,
+    "EXTRACT": _READ,
+}
+
 
 def _norm(text: str) -> str:
     return " ".join(text.upper().split())
