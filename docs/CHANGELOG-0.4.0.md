@@ -11,6 +11,8 @@ Programs written for 0.3.0 keep working, except in the cases below. Each one use
 | Change | 0.3.0 | 0.4.0 | What to do |
 |---|---|---|---|
 | A `USE PROCESS` name that matches several processes | Warning; the first match was used | Error listing the location and UUID of each candidate | Add `LOCATION "code"` to the line, or `PROVIDER "uuid"` |
+| A `USE FLOW` name that several flows share | Warning; the first match was used | Error listing the folder and UUID of each candidate. A flow in your `SET FLOW FOLDER` is still found first | Add `FOLDER "path"` to the line, or give the flow's UUID in place of its name |
+| `EPD CHECK SKIP` under `PROGRAMME` | (new in 0.4.0) | Refused: a programme's EPD is always checked | Run `EPD CHECK` and fix what it finds. Without a programme `SKIP` still works |
 | Unknown database family | Building went ahead with ecoinvent flow property names | `MAKE FLOW`, `BRIDGE` and anything else that creates a flow is refused | `DATABASE FAMILY "ecoinvent"` or `DATABASE FAMILY "flcac"` |
 | Calculating a system that failed `VALIDATE` | Allowed | Refused for the rest of the session, until `VALIDATE` passes | Fix the links, or `DELETE SYSTEM` and `SYSTEM` again, then `VALIDATE` |
 | Impact method names | Part of a name was enough if only one method matched (`USING "IPCC"`) | The full name is required; a near miss lists the close matches | Use the full name, for example `USING "IPCC 2021"`. `FIND METHOD "IPCC"` lists them |
@@ -19,7 +21,8 @@ Programs written for 0.3.0 keep working, except in the cases below. Each one use
 | `ALLOCATE` with an unknown word | Reached openLCA and failed there | Parse error listing the valid words | `AS_DEFINED`, `PHYSICAL`, `ECONOMIC`, `CAUSAL` or `NONE` |
 | `BRIDGE "Cement", kg` | Bridge named `Cement` | Bridge named `BRIDGE \| Cement \| kg` | Nothing. A bridge that already exists under the plain name is reused |
 | `DELETE FLOW` | Refused by the parser | Allowed, after checking that nothing uses the flow | Nothing |
-| `SAVE "file.baslca"` | Wrote the latest results as CSV into that file | Writes the programs run so far | For results use a name that does not end in `.baslca` or `.bas`, or `SAVE RESULTS` |
+| `SAVE "file.baslca"` | Wrote the latest results as CSV into that file | Writes the program in memory | For results use a name that does not end in `.baslca` or `.bas`, or `SAVE RESULTS` |
+| `LOAD` and `LIST` | Refused as unsupported | As on a BBC Micro: `LOAD "file"` puts a program in memory without running it, `LIST` shows it, `RUN` on its own runs it | Nothing |
 | `MOVE` a flow or product system | "not yet supported" | Works | Nothing |
 | Errors inside `PROCESS`, `EDIT`, `SCENARIO` and `SENSITIVITY` blocks | Reported the first line of the block | Report their own line | Nothing |
 | A `PROCESS` block with a wrong name on one line | Flows on earlier lines had already been created | Nothing is created: every line is looked up before anything is written | Nothing |
