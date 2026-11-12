@@ -70,8 +70,7 @@ def test_every_statement_keyword_of_the_parser_is_documented():
     keywords = set(re.findall(r'kw == "([A-Z]+)"', body))
     keywords |= {w for group in re.findall(r'kw in \(([^)]*)\)', body)
                  for w in re.findall(r'"([A-Z]+)"', group)}
-    refused = {"GOTO", "GOSUB", "RETURN", "ON", "LOAD", "HISTORY", "INSPECT",
-               "LIST", "NEW"}
+    refused = {"GOTO", "GOSUB", "RETURN", "ON", "HISTORY", "INSPECT", "NEW"}
     first_words = {w.split()[0] for c in COMMANDS for w in (c.name,) + c.aliases}
     assert keywords - refused - first_words == set()
 

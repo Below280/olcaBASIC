@@ -35,7 +35,7 @@ PRIMARY_KEYWORDS = [
     "FIND", "FLOW", "FOR",
     "HELP",
     "IF", "INCLUDE", "INPUT", "INVENTORY",
-    "LET", "LINK", "LOAD", "LS",
+    "LET", "LINK", "LIST", "LOAD", "LS",
     "MAKE", "MKDIR", "MODULE", "MONTECARLO", "MOVE",
     "NAVIGATE", "NEW",
     "PARAMETERISE", "PRINT", "PWD",

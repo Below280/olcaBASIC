@@ -16,8 +16,8 @@ def test_line_numbers_are_refused():
     assert "Line numbers are not supported" in str(e) and e.line == 1
 
 
-@pytest.mark.parametrize("word", ["GOTO", "GOSUB", "RETURN", "LOAD", "HISTORY",
-                                  "INSPECT", "LIST", "NEW"])
+@pytest.mark.parametrize("word", ["GOTO", "GOSUB", "RETURN", "HISTORY",
+                                  "INSPECT", "NEW"])
 def test_unsupported_basic_keywords_say_so(word):
     assert f"{word} is not supported in olcaBASIC" in str(error(f"{word} 10"))
 

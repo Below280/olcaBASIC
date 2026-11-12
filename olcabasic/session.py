@@ -163,7 +163,9 @@ class Session:
                     sink.write(f"  Error: Line {line}: {e}")
                     break
             if not errors and not all(
-                    type(st).__name__ in ("SaveProgramStmt", "HelpStmt")
+                    type(st).__name__ in ("SaveProgramStmt", "HelpStmt",
+                                          "LoadStmt", "ListStmt",
+                                          "RunMemoryStmt")
                     for st in statements):
                 self.runtime.program_history.append(code)
             return self._result(sink, errors)

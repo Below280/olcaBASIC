@@ -450,6 +450,22 @@ class RunFileStmt(Statement):
 
 
 @dataclass
+class LoadStmt(Statement):
+    """LOAD "file.baslca": put a program in memory without running it"""
+    filename: Expr = None
+
+
+@dataclass
+class ListStmt(Statement):
+    """LIST: show the program in memory"""
+
+
+@dataclass
+class RunMemoryStmt(Statement):
+    """RUN on its own: run the program in memory"""
+
+
+@dataclass
 class IncludeStmt(Statement):
     """INCLUDE "filename.baslca" """
     filename: Expr = None

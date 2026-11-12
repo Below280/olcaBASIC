@@ -398,6 +398,12 @@ NEXT mass
 there too. `GOTO` and line numbers aren't; olcaBASIC says so if you
 try them.
 
+The program in memory works as it did on a BBC Micro. `LOAD "file"`
+puts a program there without running it, `LIST` shows it, `RUN` on its
+own runs it, and `SAVE "file.baslca"` writes it out. Everything you run
+without an error is added to it, so `SAVE` at the end of a session keeps
+a program that repeats the work.
+
 ## Deleting
 
 Re-running a program leaves existing processes and systems as they are,
@@ -723,7 +729,7 @@ NEW FROM TEMPLATE "name" AS "file.baslca"
 |---|---|---|
 | `PRINT RESULTS` | olcaBASIC | Show the most recent results again |
 | `SAVE RESULTS` / `EXPORT RESULTS TO` | olcaBASIC | Write the most recent results to a CSV file |
-| `SAVE PROGRAM` / `SAVE "file.baslca"` | olcaBASIC | Write every program run so far in this session to a file |
+| `SAVE PROGRAM` / `SAVE "file.baslca"` | olcaBASIC | Write the program in memory to a file |
 
 ```basic
 PRINT RESULTS
@@ -746,7 +752,9 @@ SAVE PROGRAM "file.baslca"
 | `DATA` | BASIC | Queue values for READ INPUTS FROM DATA inside a PROCESS block |
 | `INPUT` | BASIC | Ask for a value at the terminal |
 | `INCLUDE` | BASIC | Insert another program file at this point |
-| `RUN` | BASIC | Run a program file |
+| `RUN` | BASIC | Run a program file, or on its own the program in memory |
+| `LOAD` | BASIC | Put a program in memory without running it |
+| `LIST` | BASIC | Show the program in memory |
 
 ```basic
 PRINT expression [, expression]
@@ -766,7 +774,9 @@ FUNCTION name(parameters) ... END FUNCTION
 DATA "name", amount, "unit"
 INPUT "prompt", name
 INCLUDE "file.baslca"
-RUN "file.baslca"
+RUN ["file.baslca"]
+LOAD "file.baslca"
+LIST
 ```
 
 ### Session: help and housekeeping

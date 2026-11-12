@@ -92,3 +92,73 @@ def test_unique_flow_name_still_resolves(session, client):
     r = session.run(_process_using("lonely blend"))
     assert r.ok, r.errors
     assert _input_flow_id(client) == only.id
+
+
+# ── LOAD, LIST, RUN: the program in memory, as on a BBC Micro ───────
+
+PROGRAM = 'LET x = 6\nPRINT "x is", x * 7\n'
+
+
+def _file(tmp_path, text=PROGRAM, name="prog.baslca"):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return str(p).replace("\\", "/")
+
+
+def test_load_puts_the_program_in_memory_without_running_it(session, tmp_path):
+    f = _file(tmp_path)
+    r = session.run(f'LOAD "{f}"')
+    assert r.ok, r.errors
+    assert "Loaded" in r.text and "2 lines" in r.text
+    assert "x is" not in r.text
+    assert not session.runtime.has_var("x")
+
+
+def test_list_shows_the_loaded_program(session, tmp_path):
+    session.run(f'LOAD "{_file(tmp_path)}"')
+    r = session.run("LIST")
+    assert "1  LET x = 6" in r.text and '2  PRINT "x is", x * 7' in r.text
+
+
+def test_run_on_its_own_runs_the_program_in_memory(session, tmp_path):
+    session.run(f'LOAD "{_file(tmp_path)}"')
+    r = session.run("RUN")
+    assert r.ok, r.errors
+    assert "42" in r.text
+
+
+def test_load_list_run_do_not_add_to_the_program(session, tmp_path):
+    session.run(f'LOAD "{_file(tmp_path)}"')
+    session.run("LIST")
+    session.run("RUN")
+    out = tmp_path / "saved.baslca"
+    session.run(f'SAVE "{str(out).replace(chr(92), "/")}"')
+    assert out.read_text(encoding="utf-8") == PROGRAM
+
+
+def test_load_replaces_what_was_in_memory(session, tmp_path):
+    session.run('PRINT "typed earlier"')
+    session.run(f'LOAD "{_file(tmp_path)}"')
+    assert "typed earlier" not in session.run("LIST").text
+
+
+def test_load_of_a_broken_file_leaves_memory_alone(session, tmp_path):
+    session.run(f'LOAD "{_file(tmp_path)}"')
+    bad = _file(tmp_path, 'GOTO 10\n', "bad.baslca")
+    e = err(session.run(f'LOAD "{bad}"'))
+    assert "was not loaded" in e["message"] and "has not changed" in e["hint"]
+    assert "LET x = 6" in session.run("LIST").text
+
+
+def test_load_missing_file(session, tmp_path):
+    e = err(session.run(f'LOAD "{tmp_path}/none.baslca"'.replace("\\", "/")))
+    assert "File not found" in e["message"]
+
+
+def test_run_with_nothing_in_memory(session):
+    e = err(session.run("RUN"))
+    assert "no program in memory" in e["message"] and "LOAD" in e["hint"]
+
+
+def test_list_with_nothing_in_memory(session):
+    assert "No program in memory" in session.run("LIST").text

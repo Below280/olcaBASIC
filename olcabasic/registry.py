@@ -879,11 +879,12 @@ END BRIDGE''',
     Command(
         name="SAVE PROGRAM", aliases=('SAVE "file.baslca"',), topic="OUTPUT",
         usage='SAVE PROGRAM "file.baslca"',
-        summary="Write every program run so far in this session to a file",
+        summary="Write the program in memory to a file",
         example='SAVE PROGRAM "my_model.baslca"',
-        notes="The file is the reproducible record of the work: RUN "
-              "\"my_model.baslca\" repeats it. Only programs that ran "
-              "without an error are saved. SAVE with a name ending in "
+        notes="The program in memory is what LOAD put there, plus every "
+              "program that has run without an error since. The file is "
+              "the reproducible record of the work: RUN "
+              "\"my_model.baslca\" repeats it. SAVE with a name ending in "
               ".baslca does the same.",
         statements=("SaveProgramStmt",)),
 
@@ -971,11 +972,29 @@ IF condition THEN statement [ELSE statement]''',
         statements=("IncludeStmt",)),
     Command(
         name="RUN", dialect=BASIC, topic="PROGRAMMING",
-        usage='RUN "file.baslca"',
-        summary="Run a program file",
-        example='RUN "model.baslca"',
+        usage='RUN ["file.baslca"]',
+        summary="Run a program file, or on its own the program in memory",
+        example='RUN "model.baslca"\nLOAD "model.baslca"\nRUN',
         notes="There is no GOTO and there are no line numbers.",
-        statements=("RunFileStmt",)),
+        statements=("RunFileStmt", "RunMemoryStmt")),
+    Command(
+        name="LOAD", dialect=BASIC, topic="PROGRAMMING",
+        usage='LOAD "file.baslca"',
+        summary="Put a program in memory without running it",
+        example='LOAD "model.baslca"\nLIST\nRUN',
+        notes="As on a BBC Micro: LOAD replaces the program in memory, "
+              "LIST shows it, RUN runs it and SAVE writes it out. A file "
+              "that does not parse is refused and memory is left as it "
+              "was.",
+        statements=("LoadStmt",)),
+    Command(
+        name="LIST", dialect=BASIC, topic="PROGRAMMING",
+        usage="LIST",
+        summary="Show the program in memory",
+        example="LIST",
+        notes="Lines are numbered for reference only; olcaBASIC programs "
+              "have no line numbers.",
+        statements=("ListStmt",)),
 
     # ── SESSION ──────────────────────────────────────────────
     Command(

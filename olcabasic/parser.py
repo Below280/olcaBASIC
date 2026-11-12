@@ -584,9 +584,20 @@ class Parser:
         if kw == "NEW" and self.peek_at(1).upper() == "FROM":
             return self.parse_new_from_template(line)
 
+        if kw == "LOAD":
+            self.advance()
+            filename = self.parse_string_or_expr()
+            self.expect_newline()
+            return LoadStmt(line=line, filename=filename)
+
+        if kw == "LIST":
+            self.advance()
+            self.expect_newline()
+            return ListStmt(line=line)
+
         # Known BASIC keywords we don't implement: say so plainly
-        if kw in ("GOTO", "GOSUB", "RETURN", "ON", "LOAD",
-                  "HISTORY", "INSPECT", "LIST", "NEW"):
+        if kw in ("GOTO", "GOSUB", "RETURN", "ON",
+                  "HISTORY", "INSPECT", "NEW"):
             raise ParseError(f"{kw} is not supported in olcaBASIC", line)
 
         raise ParseError(f"'{tok.value}' cannot start a statement", line)
@@ -1413,6 +1424,12 @@ class Parser:
                 from_csv=from_csv, save_to=save_to,
                 allocation=allocation,
                 defaulted=self._defaulted(ALLOCATE=allocation))
+
+        # RUN on its own: the program in memory (LOAD puts one there)
+        if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                TokenType.COMMENT):
+            self.expect_newline()
+            return RunMemoryStmt(line=line)
 
         # RUN "filename.baslca"
         filename = self.parse_string_or_expr()

@@ -31,6 +31,10 @@ from .formatting import (
 )
 
 
+# Commands about the program in memory: running them does not add to it.
+PROGRAM_COMMANDS = (SaveProgramStmt, HelpStmt, LoadStmt, ListStmt,
+                    RunMemoryStmt)
+
 # A flow named by its UUID in place of its name (USE FLOW "uuid").
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -193,7 +197,7 @@ class Interpreter(EnforcementMixin):
             except Exception as e:
                 failed = True
                 self.out.write(f"  Error: {e}")
-        if not failed and not all(isinstance(st, (SaveProgramStmt, HelpStmt))
+        if not failed and not all(isinstance(st, PROGRAM_COMMANDS)
                                   for st in statements):
             self.runtime.program_history.append(text)
 
@@ -378,6 +382,15 @@ class Interpreter(EnforcementMixin):
 
         elif isinstance(stmt, RunFileStmt):
             self._exec_run_file(stmt)
+
+        elif isinstance(stmt, LoadStmt):
+            self._exec_load(stmt)
+
+        elif isinstance(stmt, ListStmt):
+            self._exec_list(stmt)
+
+        elif isinstance(stmt, RunMemoryStmt):
+            self._exec_run_memory(stmt)
 
         elif isinstance(stmt, EditProcessStmt):
             self._exec_edit_process(stmt)
@@ -2067,6 +2080,60 @@ class Interpreter(EnforcementMixin):
                 self.runtime.set_var(param, args[i])
         self._execute_block(sub_def.body)
         self.runtime.pop_scope()
+
+    def _exec_load(self, stmt: LoadStmt):
+        """LOAD "file": the program in memory becomes the file, as on a
+        BBC Micro. Nothing runs until RUN. A file that does not parse is
+        refused and the program in memory stays as it was."""
+        filename = self._eval_str(stmt.filename)
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                source = f.read()
+        except FileNotFoundError:
+            raise BasicError(f"File not found: {filename}", stmt.line)
+        try:
+            parse(self._process_includes(source, filename))
+        except ParseError as e:
+            raise BasicError(
+                f"{filename} was not loaded: {e}", stmt.line,
+                hint="Fix the file and LOAD it again. The program in "
+                     "memory has not changed.")
+        self.runtime.program_history[:] = [source]
+        lines = len(source.rstrip("\n").splitlines())
+        self.out.write(f"  Loaded {filename} ({lines} lines). "
+                       f"LIST shows it, RUN runs it.")
+
+    def _memory_text(self) -> str:
+        return "\n".join(part.rstrip("\n")
+                         for part in self.runtime.program_history)
+
+    def _exec_list(self, stmt: ListStmt):
+        """LIST: the program in memory, numbered for reference (the
+        numbers are not part of the program)."""
+        text = self._memory_text()
+        if not text.strip():
+            self.out.write("  No program in memory. LOAD \"file\" puts one "
+                           "there; so does anything you run.")
+            return
+        lines = text.splitlines()
+        width = len(str(len(lines)))
+        for i, row in enumerate(lines, 1):
+            self.out.write(f"  {i:>{width}}  {row}")
+
+    def _exec_run_memory(self, stmt: RunMemoryStmt):
+        """RUN on its own: run the program in memory."""
+        text = self._memory_text()
+        if not text.strip():
+            raise BasicError(
+                "There is no program in memory to run.", stmt.line,
+                hint='LOAD "file.baslca" then RUN, or RUN "file.baslca".')
+        try:
+            statements = parse(self._process_includes(text, ""))
+        except ParseError as e:
+            raise BasicError(f"The program in memory does not parse: {e}",
+                             stmt.line)
+        self._stop_requested = False
+        self._execute_block(statements)
 
     def _exec_run_file(self, stmt: RunFileStmt):
         filename = self._eval_str(stmt.filename)
