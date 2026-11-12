@@ -13,7 +13,7 @@ import os
 from typing import Dict, List
 
 from . import ast_nodes as ast
-from .errors import error_dict
+from .errors import BasicError, error_dict
 
 BUILTINS = {"ABS", "INT", "SQR", "LOG", "EXP", "SIN", "COS", "TAN", "MIN",
             "MAX", "ROUND", "LEN", "VAL", "STR$", "TRIM$", "UCASE$", "LCASE$"}
@@ -33,7 +33,8 @@ NO_CONNECTION_NEEDED = (
     ast.IncludeStmt, ast.ScenarioStmt, ast.SaveResultsStmt,
     ast.ExportResultsStmt, ast.SetFolderStmt, ast.NavigateStmt, ast.PwdStmt,
     ast.UpStmt, ast.BackStmt, ast.CdirStmt, ast.MkdirStmt, ast.HelpStmt,
-    ast.ClearStmt, ast.ConfirmDeleteStmt, ast.ExitStmt, ast.SaveProgramStmt)
+    ast.ClearStmt, ast.ConfirmDeleteStmt, ast.ExitStmt, ast.SaveProgramStmt,
+    ast.NewFromTemplateStmt)
 
 
 def command_word(stmt) -> str:
@@ -138,6 +139,36 @@ def _uses_variables(expr, known) -> bool:
                for e in _walk_exprs(expr))
 
 
+def _check_epd(stmt, report):
+    """The checks on an EPD block that need no database. Returns the
+    definition, or None if the block is wrong or cannot be read
+    without running the program."""
+    from .workflows import epd
+
+    class _NotLiteral(Exception):
+        pass
+
+    def text(expr):
+        if isinstance(expr, ast.StringLiteral):
+            return expr.value
+        raise _NotLiteral()
+
+    def number(expr):
+        if isinstance(expr, ast.NumberLiteral):
+            return expr.value
+        raise _NotLiteral()
+
+    try:
+        fields = epd.field_values(stmt, text, number)
+        return epd.check_definition(text(stmt.name), fields, stmt.lines,
+                                    stmt.line)
+    except _NotLiteral:
+        return None       # built from variables: checked when it runs
+    except BasicError as e:
+        report.error(e.line or stmt.line, e.message, e.hint)
+        return None
+
+
 def check(statements, runtime, connected: bool = True,
           interactive: bool = False) -> Report:
     report = Report()
@@ -181,6 +212,9 @@ def check(statements, runtime, connected: bool = True,
 
     confirm = bool(runtime.confirm_delete)
     scenarios_defined = bool(runtime.scenarios)
+    active = getattr(runtime, "epd", None)
+    epd_defined = active is not None
+    epd_modules = list(active.d["modules"]) if active is not None else None
 
     for stmt in everything:
         word = command_word(stmt)
@@ -294,6 +328,65 @@ def check(statements, runtime, connected: bool = True,
                         f"PROCESS \"{name}\" has {len(products)} exchanges "
                         f"marked PRODUCT.",
                         "Mark only the main output with PRODUCT.")
+
+        elif isinstance(stmt, ast.EpdStmt):
+            name = _literal(stmt.name) or "?"
+            report.writes.append(f"EPD \"{name}\" (folders)")
+            definition = _check_epd(stmt, report)
+            if definition is not None:
+                epd_modules = definition["modules"]
+            epd_defined = True
+
+        elif isinstance(stmt, ast.ModuleStmt):
+            code = stmt.code.upper()
+            if not epd_defined:
+                report.error(line, f"MODULE {code} needs an EPD, and none "
+                                   f"is defined before it.",
+                             "Define one first: EPD \"name\" ... END EPD.")
+            elif epd_modules is not None and code not in epd_modules:
+                report.error(line, f"MODULE {code} is not declared in the "
+                                   f"EPD block (MODULES "
+                                   f"{', '.join(epd_modules)}).",
+                             "Add it to the MODULES line, or remove this "
+                             "MODULE block.")
+            if stmt.total is None:
+                report.error(line, f"MODULE {code} has no TOTAL line.",
+                             "Add TOTAL \"name\" before END MODULE.")
+            else:
+                total = _literal(stmt.total["name"]) or "?"
+                report.writes.append(f"MAKE PROCESS \"{code}: {total}\"")
+            if stmt.net_flows and code != "D":
+                report.error(stmt.net_flows[0]["line"],
+                             f"NET FLOW belongs in MODULE D, not MODULE "
+                             f"{code}.")
+
+        elif isinstance(stmt, ast.EpdCommandStmt):
+            if not epd_defined and stmt.command not in ("STATUS", "CLOSE"):
+                report.error(line, f"EPD {stmt.command} needs an EPD, and "
+                                   f"none is defined before it.",
+                             "Define one first: EPD \"name\" ... END EPD.")
+            if stmt.command == "SYSTEMS":
+                report.writes.append("EPD SYSTEMS")
+            elif stmt.command in ("CALCULATE", "DATA QUALITY"):
+                report.calculations.append(f"EPD {stmt.command}")
+            elif stmt.command == "REPORT":
+                report.writes.append(
+                    f"EPD REPORT \"{_literal(stmt.argument) or '?'}\" (file)")
+            elif stmt.command == "CLOSE":
+                epd_defined, epd_modules = False, None
+
+        elif isinstance(stmt, ast.NewFromTemplateStmt):
+            from . import templates
+            name = _literal(stmt.template)
+            if name is not None and templates.read(name) is None:
+                report.error(line, f"There is no template called '{name}'.",
+                             "Templates: " + ", ".join(
+                                 f'"{n}"' for n in templates.names()) + ".")
+            target = _literal(stmt.filename)
+            if target and os.path.exists(target):
+                report.error(line, f"'{target}' already exists, and NEW "
+                                   f"FROM TEMPLATE does not write over a "
+                                   f"file.")
 
         elif isinstance(stmt, WRITES):
             target = None

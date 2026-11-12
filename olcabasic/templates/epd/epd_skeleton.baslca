@@ -1,0 +1,128 @@
+' ============================================================
+' EPD skeleton (EN 15804+A2)
+'
+' Work down the file. Every line marked DECIDE needs a decision
+' from the practitioner; the comments say what the choice is.
+' Run it with:  RUN "my_epd.baslca"
+' From Python, Session.run(code, dry_run=True) checks it without
+' touching openLCA.
+' ============================================================
+
+' DECIDE: which family of names the database uses.
+DATABASE FAMILY "ecoinvent"
+
+' ------------------------------------------------------------
+' 1. The EPD
+' ------------------------------------------------------------
+EPD "Product name"
+  ' DECIDE: the programme operator. Remove the three lines below to
+  ' apply EN 15804+A2 alone. With a programme, its rules are errors.
+  PROGRAMME "IES" GPI "5.1.0"
+  PCR "Name of the PCR" VERSION "0.0"
+  DATABASE "ecoinvent" VERSION "3.11"
+
+  ' DECIDE: the declared unit. FUNCTIONAL UNIT is only for EPD types
+  ' with options or cradle to grave.
+  DECLARED UNIT 1, kg
+
+  ' The EN 15804+A2 method. The workflow refuses a method with the
+  ' wrong number of impact categories.
+  METHOD "EN15804+A2 (EF 3.1)"
+
+  ' DECIDE: the folder everything is built in.
+  FOLDER "00: Product name EPD"
+
+  ' DECIDE: the modules. A1 to A3, C1 to C4 and D are mandatory.
+  ' A4, A5 and B1 to B7 are options.
+  MODULES A1, A2, A3, C1, C2, C3, C4, D
+
+  ' DECIDE: does the product contain biogenic carbon? YES or NO.
+  BIOGENIC CARBON NO
+
+  ' DECIDE: anything left out of the model is declared here, per
+  ' module, as a share of mass or energy.
+  ' CUTOFF A3 "Lubricants", 0.2%
+
+  ' Only for a product that meets every condition of the exemption
+  ' in EN 15804+A2 clause 5.2: take C1 to C4 and D out of MODULES
+  ' and justify it here.
+  ' EXEMPT C AND D
+  '   INTEGRATED "why the product cannot be separated at end of life"
+  '   NOT IDENTIFIABLE "why it is no longer identifiable at end of life"
+  '   END OF LIFE SCENARIOS "where the end of life scenarios can be found"
+  ' END EXEMPT
+END EPD
+
+' ------------------------------------------------------------
+' 2. Bridges: one per background dataset, so each choice sits in
+'    one place. NEW FROM TEMPLATE "bridges_common" has the patterns.
+'    DECIDE: the provider of each (FIND PROCESS gives the UUID).
+' ------------------------------------------------------------
+' BRIDGE "Raw material", kg
+'   PROVIDER "uuid of the background process"
+'   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE
+
+' ------------------------------------------------------------
+' 3. Modules. Amounts are per declared unit. Inside a module a
+'    process is named without its prefix: "Material supply" becomes
+'    "A1 | Material supply". Inputs come from bridges or from
+'    processes of this EPD.
+'    DECIDE for each process: where its data comes from (DATA), and
+'    whether the manufacturer controls it (CONTROL). A3 is taken to
+'    be under direct control unless a process says CONTROL NONE.
+' ------------------------------------------------------------
+MODULE A1
+  ' MAKE PROCESS "Material supply"
+  '   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+  '   OUTPUT MAKE FLOW "Material, supplied", 1, kg, PRODUCT
+  '   INPUT USE PROCESS "BRIDGE | Raw material | kg", 1, kg
+  ' END PROCESS
+  TOTAL "Raw material supply"
+END MODULE
+
+MODULE A2
+  TOTAL "Transport to the factory"
+END MODULE
+
+MODULE A3
+  ' MAKE PROCESS "Manufacturing"
+  '   DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
+  '   OUTPUT MAKE FLOW "Product, at factory gate", 1, kg, PRODUCT
+  '   INPUT USE PROCESS "BRIDGE | Electricity | kWh", 0.5, kWh
+  ' END PROCESS
+  TOTAL "Manufacturing"
+END MODULE
+
+MODULE C1
+  TOTAL "Deconstruction"
+END MODULE
+
+MODULE C2
+  TOTAL "Transport to waste processing"
+END MODULE
+
+MODULE C3
+  TOTAL "Waste processing"
+END MODULE
+
+MODULE C4
+  TOTAL "Disposal"
+END MODULE
+
+MODULE D
+  ' DECIDE: the net flow leaving the product system, and its quality
+  ' factor if it is not 100%.
+  NET FLOW "Recovered material", 0, kg QUALITY 100%
+  TOTAL "Benefits and loads beyond the system boundary"
+END MODULE
+
+' ------------------------------------------------------------
+' 4. Systems, checks, results. Each step refuses to run until the
+'    one before it has passed.
+' ------------------------------------------------------------
+EPD SYSTEMS
+EPD CHECK
+EPD CALCULATE
+EPD DATA QUALITY
+EPD REPORT "epd_results.csv"

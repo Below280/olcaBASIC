@@ -511,11 +511,17 @@ MAKE PROCESS "name" [LOCATION "code"]
   INPUT "resource", amount, unit FROM NATURE
   OUTPUT MAKE FLOW "waste", amount, unit, WASTE
   [... PEDIGREE (1,2,1,1,3)] [COMMENT "text"] [FORMULA "expression"]
+  [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
+  [CONTROL DIRECT|NONE]
 END PROCESS
 MAKE FLOW "name", unit, PRODUCT|WASTE|ELEMENTARY [FOLDER "path"]
 BRIDGE "BRIDGE | name | unit", unit [WASTE]
   FOLDER "path"
   PROVIDER "process name or uuid"
+  [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
+  [ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION]
+  [COUNTRY "code"] [REGION "grid region"] [ENERGY SOURCE "text"]
+  [LOCATION BASED PROVIDER "process name or uuid"]
 END BRIDGE
 SYSTEM "process name"
   [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS]
@@ -625,6 +631,66 @@ AUDIT [FOLDER] "folder"
 EXTRACT [FOLDER] "folder"
 ```
 
+### Epd: environmental product declarations (en 15804+a2)
+
+| Command | Dialect | What it does |
+|---|---|---|
+| `EPD` | olcaBASIC | Define an EPD: unit, method, folder, modules and programme |
+| `MODULE` | olcaBASIC | Build the processes of one EPD module and the process that adds them up |
+| `EPD SYSTEMS` | olcaBASIC | Create one product system per module total, one at a time |
+| `EPD CHECK` | olcaBASIC | Validate every module system and list what is missing |
+| `EPD CALCULATE` | olcaBASIC | Calculate every module with the EPD method |
+| `EPD DATA QUALITY` | olcaBASIC | Do the programme's data quality arithmetic and apply its limits |
+| `EPD REPORT` | olcaBASIC | Write the results table and the declarations to a CSV file |
+| `EPD STATUS` / `EPD CLOSE` | olcaBASIC | Show how far the active EPD has got, or end EPD mode |
+| `DATA PRIMARY` / `DATA SECONDARY` / `DATA PROXY` / `CONTROL` | olcaBASIC | Declare where the data of a process or bridge comes from |
+| `ELECTRICITY` | olcaBASIC | Declare how the electricity of a bridge is modelled |
+| `NEW FROM TEMPLATE` | olcaBASIC | Copy a template program into the working folder |
+
+```basic
+EPD "product name"
+  [PROGRAMME "IES" [GPI "5.1.0"]]
+  [PCR "name" [VERSION "n"]]
+  [DATABASE "name" [VERSION "n"]]
+  DECLARED UNIT amount, unit | FUNCTIONAL UNIT amount, unit
+  METHOD "EN15804+A2 (EF 3.1)" [CATEGORIES n]
+  FOLDER "path"
+  MODULES A1, A2, A3, C1, C2, C3, C4, D
+  BIOGENIC CARBON YES|NO
+  [CUTOFF module "item", n%]
+  [GWP INDICATOR "category name"]
+  [EXEMPT C AND D
+     INTEGRATED "text"
+     NOT IDENTIFIABLE "text"
+     END OF LIFE SCENARIOS "text"
+   END EXEMPT]
+END EPD
+MODULE A1
+  MAKE PROCESS "name"
+    ...
+  END PROCESS
+  [NET FLOW "flow", amount, unit [QUALITY n%]]     (module D)
+  TOTAL "name" [AS "flow", amount, unit]
+END MODULE
+EPD SYSTEMS
+EPD CHECK [SKIP "reason"]
+EPD CALCULATE
+EPD DATA QUALITY
+EPD REPORT "file.csv" [LOCATION BASED]
+EPD STATUS | EPD CLOSE
+DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
+DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+DATA PROXY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2019 REASON "why"
+  [SHARE n%]
+CONTROL DIRECT|NONE
+ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION
+COUNTRY "code"
+[REGION "grid region"]
+[ENERGY SOURCE "text"]
+[LOCATION BASED PROVIDER "process name or uuid"]
+NEW FROM TEMPLATE "name" AS "file.baslca"
+```
+
 ### Output: showing and saving results
 
 | Command | Dialect | What it does |
@@ -671,7 +737,7 @@ FOR EACH name IN value, value ... NEXT
 WHILE condition ... WEND
 SUB name(parameters) ... END SUB
 FUNCTION name(parameters) ... END FUNCTION
-DATA "name", amount, unit
+DATA "name", amount, "unit"
 INPUT "prompt", name
 INCLUDE "file.baslca"
 RUN "file.baslca"

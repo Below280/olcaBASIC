@@ -2454,6 +2454,293 @@ class Engine(ResolveMixin):
         except Exception as ex:
             return {"error": str(ex)}
 
+    # ── process metadata (tags and documentation) ────────────
+
+    def get_process_tags(self, process_id: str, prefix: str = "") -> Dict:
+        """The tags of a process that have the form 'key=value' (and,
+        if prefix is given, start with 'prefix:'), as {key: value}.
+        Returns {"error": ...} if the process cannot be read."""
+        try:
+            process = self.client.get(o.Process, process_id)
+            if not process:
+                return {"error": f"Process not found: {process_id}"}
+            out = {}
+            lead = f"{prefix}:" if prefix else ""
+            for tag in process.tags or []:
+                if lead and not tag.startswith(lead):
+                    continue
+                key, sep, value = tag[len(lead):].partition("=")
+                if sep:
+                    out[key] = value
+            return {"process_id": process.id, "process_name": process.name,
+                    "category": getattr(process, "category", "") or "",
+                    "description": getattr(process, "description", "") or "",
+                    "tags": out}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def set_process_tags(self, process_id: str, tags: Dict[str, Any],
+                         prefix: str = "",
+                         documentation: Optional[Dict[str, str]] = None) -> Dict:
+        """Set 'prefix:key=value' tags on a process, replacing any tag
+        with the same prefix and key. A value of None removes the tag.
+        Tags the call does not name are left alone.
+
+        documentation, if given, sets fields of openLCA's process
+        documentation: valid_from, valid_until (dates, YYYY-MM-DD),
+        time_description, data_collection_description,
+        technology_description, geography_description."""
+        allowed_docs = ("valid_from", "valid_until", "time_description",
+                        "data_collection_description",
+                        "technology_description", "geography_description")
+        try:
+            process = self.client.get(o.Process, process_id)
+            if not process:
+                return {"error": f"Process not found: {process_id}"}
+            lead = f"{prefix}:" if prefix else ""
+            kept = []
+            for tag in process.tags or []:
+                key = tag[len(lead):].partition("=")[0] if tag.startswith(lead) else None
+                if key is not None and key in tags:
+                    continue
+                kept.append(tag)
+            for key, value in tags.items():
+                if value is None:
+                    continue
+                text = str(value).replace("\n", " ").strip()
+                kept.append(f"{lead}{key}={text}")
+            process.tags = kept
+            if documentation:
+                doc = process.process_documentation or o.ProcessDocumentation()
+                for field_name, value in documentation.items():
+                    if field_name not in allowed_docs:
+                        return {"error": f"Unknown documentation field "
+                                         f"'{field_name}'. Use: "
+                                         f"{', '.join(allowed_docs)}"}
+                    setattr(doc, field_name, value)
+                process.process_documentation = doc
+            self.client.put(process)
+            return {"process_id": process.id, "process_name": process.name,
+                    "tags": sorted(kept)}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def process_structure(self, process_id: str) -> Dict:
+        """How a process is wired, from one read: its reference
+        exchange, its technosphere inputs with their providers, its
+        local parameters, its tags and what documentation it carries.
+
+        Returns {"id", "name", "category", "description", "tags",
+        "qref": {"flow_id", "flow", "amount", "formula", "unit",
+        "is_input"} or None, "links": [{"flow_id", "flow", "amount",
+        "formula", "unit", "is_input", "provider_id", "provider"}],
+        "parameters": {name: value}, "exchange_count",
+        "exchanges_without_pedigree", "has_dq_entry", "valid_from",
+        "valid_until"}. links holds every exchange that has a default
+        provider (inputs, and waste outputs sent to treatment)."""
+        try:
+            process = self.client.get(o.Process, process_id)
+            if not process:
+                return {"error": f"Process not found: {process_id}"}
+            qref, links, no_pedigree, count = None, [], 0, 0
+            for ex in process.exchanges or []:
+                count += 1
+                row = {
+                    "flow_id": ex.flow.id if ex.flow else None,
+                    "flow": ex.flow.name if ex.flow else "",
+                    "amount": ex.amount,
+                    "formula": getattr(ex, "amount_formula", None),
+                    "unit": ex.unit.name if ex.unit else "",
+                    "is_input": bool(ex.is_input),
+                }
+                if getattr(ex, "is_quantitative_reference", False):
+                    qref = row
+                    continue
+                if not getattr(ex, "dq_entry", None):
+                    no_pedigree += 1
+                provider = getattr(ex, "default_provider", None)
+                if provider is not None:
+                    row["provider_id"] = provider.id
+                    row["provider"] = provider.name or ""
+                    links.append(row)
+            doc = getattr(process, "process_documentation", None)
+            return {
+                "id": process.id, "name": process.name,
+                "category": getattr(process, "category", "") or "",
+                "description": getattr(process, "description", "") or "",
+                "tags": list(process.tags or []),
+                "qref": qref, "links": links,
+                "parameters": {p.name: p.value
+                               for p in process.parameters or []},
+                "exchange_count": count,
+                "exchanges_without_pedigree": no_pedigree,
+                "has_dq_entry": bool(getattr(process, "dq_entry", None)),
+                "valid_from": getattr(doc, "valid_from", None) if doc else None,
+                "valid_until": getattr(doc, "valid_until", None) if doc else None,
+            }
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def set_switched_provider(self, process_id: str, provider_id: str,
+                              parameter: str) -> Dict:
+        """Give a bridge a second provider that a global parameter
+        switches to.
+
+        The bridge's existing input keeps its provider and gets the
+        amount formula "1 - parameter"; a second input, from
+        provider_id, gets the formula "parameter". With the parameter
+        at 0 (its value in the database) the bridge behaves as before;
+        a calculation that redefines it to 1 draws on the second
+        provider instead. Doing it twice changes nothing."""
+        try:
+            process = self.client.get(o.Process, process_id)
+            if not process:
+                return {"error": f"Process not found: {process_id}"}
+            second = self.client.get(o.Process, provider_id)
+            if not second:
+                return {"error": f"Process not found: {provider_id}"}
+            linked = [ex for ex in process.exchanges or []
+                      if not getattr(ex, "is_quantitative_reference", False)
+                      and getattr(ex, "default_provider", None) is not None]
+            if any(ex.default_provider.id == provider_id
+                   and ex.amount_formula == parameter for ex in linked):
+                return {"process_id": process.id, "already_set": True}
+            if len(linked) != 1:
+                return {"error": f"'{process.name}' has {len(linked)} linked "
+                                 f"inputs; a second provider can only be "
+                                 f"added to a bridge with one."}
+            first = linked[0]
+            flow_ref = None
+            for ex in second.exchanges or []:
+                if getattr(ex, "is_quantitative_reference", False) and ex.flow:
+                    flow_ref = o.Ref(id=ex.flow.id, name=ex.flow.name,
+                                     ref_type=o.RefType.Flow)
+                    break
+            if flow_ref is None:
+                return {"error": f"'{second.name}' has no reference flow."}
+            made = self.create_global_parameter(
+                parameter, value=0.0,
+                description="Switch used by olcaBASIC: 0 for the main "
+                            "provider of a bridge, 1 for its second one.")
+            if "error" in made:
+                return made
+            first.amount_formula = f"1 - {parameter}"
+            first.amount = 1.0
+            extra = o.Exchange()
+            extra.flow = flow_ref
+            extra.amount = 0.0
+            extra.amount_formula = parameter
+            extra.unit = first.unit
+            extra.is_input = first.is_input
+            extra.is_quantitative_reference = False
+            extra.is_avoided_product = False
+            extra.default_provider = o.Ref(id=provider_id,
+                                           ref_type=o.RefType.Process)
+            process.last_internal_id = (process.last_internal_id or
+                                        len(process.exchanges)) + 1
+            extra.internal_id = process.last_internal_id
+            process.exchanges.append(extra)
+            self.client.put(process)
+            self._cache.pop("Process", None)
+            return {"process_id": process.id, "provider_id": provider_id,
+                    "parameter": parameter}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def get_method_categories(self, method_ref: str) -> Dict:
+        """The impact categories of a method, in the method's order:
+        {"method", "method_id", "count", "categories": [{"id", "name",
+        "unit"}]}. method_ref is a UUID or the full name."""
+        found = self.find_method_strict(method_ref)
+        if "error" in found:
+            return found
+        try:
+            method = self.client.get(o.ImpactMethod, found["id"])
+            cats = []
+            for ref in (method.impact_categories or []) if method else []:
+                cats.append({"id": ref.id, "name": ref.name,
+                             "unit": getattr(ref, "ref_unit", "") or ""})
+            return {"method": found["name"], "method_id": found["id"],
+                    "count": len(cats), "categories": cats}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def process_contributions(self, system_ref: str, method_ref: str,
+                              direct: Optional[List[str]] = None,
+                              upstream: Optional[List[str]] = None,
+                              allocation: Optional[str] = None,
+                              parameters: Optional[Dict[str, float]] = None
+                              ) -> Dict:
+        """
+        One calculation, then the contribution of named processes to
+        every impact category.
+
+        direct: process UUIDs whose own (direct) impacts are wanted.
+        upstream: process UUIDs whose total upstream impacts are wanted
+            (the process and everything that supplies it).
+        parameters: global parameter values to redefine for this run.
+
+        Returns {"system", "method", "totals": {category: amount},
+        "units": {category: unit}, "direct": {process_id: {category:
+        amount}}, "upstream": {...}, "names": {process_id: name},
+        "missing": [ids not in the system]}.
+
+        Summing the direct impacts of the foreground processes and the
+        upstream impacts of the bridges that feed them gives the system
+        total, which is what a split by data source needs.
+        """
+        system = self._resolve_system(system_ref)
+        if not system:
+            return {"error": f"Product system not found: {system_ref}"}
+        found = self.find_method_strict(method_ref)
+        if "error" in found:
+            return {"error": found["error"]}
+        method = next(m for m in self._get_descriptors(o.ImpactMethod)
+                      if m.id == found["id"])
+        redefs = None
+        if parameters:
+            targets = self._parameter_targets(system, set(parameters))
+            redefs = [o.ParameterRedef(name=name, value=float(value),
+                                       context=copy["context"])
+                      for name, value in parameters.items()
+                      for copy in targets.get(name, []) if copy["is_input"]]
+            missing_params = [n for n in parameters if not targets.get(n)]
+            if missing_params:
+                return {"error": "Parameter(s) not found in the system: "
+                                 + ", ".join(missing_params)}
+        setup = o.CalculationSetup(
+            target=system, impact_method=method, parameters=redefs,
+            allocation=self._resolve_allocation(allocation))
+        result = self.client.calculate(setup)
+        result.wait_until_ready()
+        try:
+            totals, units = {}, {}
+            for imp in result.get_total_impacts():
+                totals[imp.impact_category.name] = imp.amount
+                units[imp.impact_category.name] = getattr(
+                    imp.impact_category, "ref_unit", "") or ""
+            by_id = {tf.provider.id: tf for tf in result.get_tech_flows()
+                     if tf.provider}
+            out = {"system": system.name, "method": method.name,
+                   "totals": totals, "units": units, "direct": {},
+                   "upstream": {}, "names": {}, "missing": []}
+            for kind, ids, getter in (
+                    ("direct", direct or [], result.get_direct_impacts_of),
+                    ("upstream", upstream or [], result.get_total_impacts_of)):
+                for pid in ids:
+                    tf = by_id.get(pid)
+                    if tf is None:
+                        if pid not in out["missing"]:
+                            out["missing"].append(pid)
+                        continue
+                    out["names"][pid] = tf.provider.name
+                    out[kind][pid] = {
+                        imp.impact_category.name: imp.amount
+                        for imp in getter(tf)}
+            return out
+        finally:
+            result.dispose()
+
     def move_entity(self, entity_type: str, entity_id: str,
                     category: str) -> Dict:
         """

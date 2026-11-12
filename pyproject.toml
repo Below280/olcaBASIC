@@ -36,6 +36,9 @@ Issues = "https://github.com/Below280/olcaBASIC/issues"
 [tool.setuptools.packages.find]
 include = ["olcabasic*"]
 
+[tool.setuptools.package-data]
+"olcabasic.templates" = ["*/*.baslca"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

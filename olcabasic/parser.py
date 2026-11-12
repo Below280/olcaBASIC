@@ -358,6 +358,14 @@ class Parser:
                 and self.peek_at(1).type == TokenType.EQUALS):
             return self.parse_let(line, implicit=True)
 
+        # EPD workflow. EPD and MODULE are not reserved words (so they
+        # stay usable as variable names); they are recognised here.
+        if tok.type == TokenType.IDENTIFIER and tok.upper() == "EPD":
+            return self.parse_epd(line)
+        if (tok.type == TokenType.IDENTIFIER and tok.upper() == "MODULE"
+                and self.peek_at(1).type == TokenType.IDENTIFIER):
+            return self.parse_module(line)
+
         kw = tok.upper() if tok.type == TokenType.KEYWORD else ""
 
         # ── Core BASIC ───────────────────────────────
@@ -568,6 +576,9 @@ class Parser:
         if tok.type == TokenType.IDENTIFIER:
             return self.parse_sub_call(line)
 
+        if kw == "NEW" and self.peek_at(1).upper() == "FROM":
+            return self.parse_new_from_template(line)
+
         # Known BASIC keywords we don't implement: say so plainly
         if kw in ("GOTO", "GOSUB", "RETURN", "ON", "LOAD",
                   "HISTORY", "INSPECT", "LIST", "NEW"):
@@ -751,6 +762,7 @@ class Parser:
         folder = None
         provider = None
         provider_flow = None
+        extra = {}
 
         # Check for WASTE on same line
         if self.match_keyword("WASTE"):
@@ -763,7 +775,10 @@ class Parser:
             self.expect_newline()
             # Check for block continuation
             self.skip_newlines()
-            if (self.at_keyword("FOLDER", "PROVIDER")
+            if (self.at_keyword("FOLDER", "PROVIDER", "WASTE", "DATA",
+                                "LOCATION")
+                    or self.at_word("ELECTRICITY", "COUNTRY", "REGION",
+                                    "ENERGY")
                     or self.at_end_of("BRIDGE")):
                 # Block form
                 while not self.at_keyword("END"):
@@ -778,11 +793,44 @@ class Parser:
                             provider = self.parse_string_or_expr()
                     elif self.match_keyword("WASTE"):
                         is_waste = True
+                    elif self.at_keyword("DATA"):
+                        extra["provenance"] = self.parse_provenance()
+                    elif self.match_word("ELECTRICITY"):
+                        if not self.at_word("CONTRACT", "RESIDUAL",
+                                            "CONSUMPTION"):
+                            raise ParseError(
+                                "ELECTRICITY needs the modelling approach.",
+                                self.current_line(),
+                                hint="ELECTRICITY CONTRACT (a contractual "
+                                     "instrument), ELECTRICITY RESIDUAL "
+                                     "(the residual mix) or ELECTRICITY "
+                                     "CONSUMPTION (the consumption mix).")
+                        extra["electricity"] = self.advance().upper()
+                    elif self.match_word("COUNTRY"):
+                        extra["country"] = self.parse_string_or_expr()
+                    elif self.match_word("REGION"):
+                        extra["region"] = self.parse_string_or_expr()
+                    elif self.match_word("ENERGY"):
+                        if not self.match_word("SOURCE"):
+                            raise ParseError(
+                                "Expected ENERGY SOURCE \"text\".",
+                                self.current_line())
+                        extra["energy_source"] = self.parse_string_or_expr()
+                    elif self.match_keyword("LOCATION"):
+                        if not (self.match_word("BASED")
+                                and self.match_keyword("PROVIDER")):
+                            raise ParseError(
+                                "Expected LOCATION BASED PROVIDER \"process "
+                                "name or uuid\".", self.current_line())
+                        extra["location_based_provider"] = \
+                            self.parse_string_or_expr()
                     else:
                         raise ParseError(
                             f"'{self.peek().value}' is not allowed inside "
-                            f"BRIDGE (expected FOLDER, PROVIDER, WASTE or "
-                            f"END BRIDGE)", self.current_line())
+                            f"BRIDGE (expected FOLDER, PROVIDER, WASTE, DATA, "
+                            f"ELECTRICITY, COUNTRY, REGION, ENERGY SOURCE, "
+                            f"LOCATION BASED PROVIDER or END BRIDGE)",
+                            self.current_line())
                     self.expect_newline()
                     self.skip_newlines()
 
@@ -795,7 +843,8 @@ class Parser:
 
         return BridgeStmt(line=line, name=name, unit=unit,
                            is_waste=is_waste, folder=folder,
-                           provider=provider, provider_flow=provider_flow)
+                           provider=provider, provider_flow=provider_flow,
+                           **extra)
 
     def parse_process(self, line: int) -> ProcessStmt:
         self.advance()  # consume PROCESS
@@ -817,6 +866,8 @@ class Parser:
         exchanges = []
         local_params = []
         read_data = False
+        provenance = None
+        control = ""
 
         self._inside_process = True
 
@@ -862,6 +913,14 @@ class Parser:
                 stmt = self.parse_let(tok.line)
                 local_params.append(stmt)
 
+            elif kw == "DATA":
+                provenance = self.parse_provenance()
+                self.expect_newline()
+
+            elif self.at_word("CONTROL"):
+                control = self.parse_control()
+                self.expect_newline()
+
             elif kw == "READ":
                 self.advance()
                 self.match_keyword("INPUTS")
@@ -878,7 +937,7 @@ class Parser:
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside PROCESS "
                     f"(expected INPUT, OUTPUT, LET, FOLDER, LOCATION, "
-                    f"DESCRIPTION or END PROCESS)", tok.line)
+                    f"DESCRIPTION, DATA, CONTROL or END PROCESS)", tok.line)
 
             self.skip_newlines()
 
@@ -893,7 +952,8 @@ class Parser:
             line=line, name=name, location=location, folder=folder,
             description=description, flow_schema=flow_schema,
             process_schema=process_schema, exchanges=exchanges,
-            local_params=local_params, read_data=read_data)
+            local_params=local_params, read_data=read_data,
+            provenance=provenance, control=control)
 
     def parse_pedigree(self):
         """PEDIGREE (1,2,1,1,3) or PEDIGREE "(1;2;1;1;3)" """
@@ -2193,6 +2253,7 @@ class Parser:
                         raise ParseError(f"Expected '=' after {name}", ln)
                     self.advance()
                     stmt.update_params[name] = self.parse_expr()
+                    stmt.update_param_lines[name] = ln
                     self.expect_newline()
                 else:
                     d = direction()
@@ -2231,6 +2292,20 @@ class Parser:
                     stmt.update_exchanges.append(upd)
                     self.expect_newline()
 
+            elif kw == "DATA" or (kw == "SET"
+                                  and self.peek_at(1).upper() == "DATA"):
+                if kw == "SET":
+                    self.advance()
+                stmt.provenance = self.parse_provenance()
+                self.expect_newline()
+
+            elif self.at_word("CONTROL") or (
+                    kw == "SET" and self.peek_at(1).upper() == "CONTROL"):
+                if kw == "SET":
+                    self.advance()
+                stmt.control = self.parse_control()
+                self.expect_newline()
+
             elif kw == "SET":
                 self.advance()
                 if self.match_keyword("DESCRIPTION"):
@@ -2247,13 +2322,356 @@ class Parser:
             else:
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside EDIT "
-                    f"(expected ADD, REMOVE, UPDATE, SET or END EDIT)", ln)
+                    f"(expected ADD, REMOVE, UPDATE, SET, DATA, CONTROL or "
+                    f"END EDIT)", ln)
             self.skip_newlines()
 
         self.expect_keyword("END")
         self.match_keyword("EDIT")
         self.expect_newline()
         return stmt
+
+    # ── EPD workflow ─────────────────────────────────────
+
+    DATA_CATEGORIES = ("PRIMARY", "SECONDARY", "PROXY")
+    EPD_COMMANDS = ("SYSTEMS", "CHECK", "CALCULATE", "REPORT", "DATA",
+                    "STATUS", "CLOSE")
+
+    def _percent(self, what: str) -> float:
+        """A number followed by an optional % sign."""
+        value = self.parse_number(what)
+        if self.peek().type == TokenType.PERCENT:
+            self.advance()
+        return value
+
+    def parse_provenance(self) -> dict:
+        """DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who"
+        YEAR n [REASON "why"] [SHARE n%]"""
+        ln = self.current_line()
+        self.advance()                                    # DATA
+        if not self.at_word(*self.DATA_CATEGORIES):
+            raise ParseError(
+                "DATA needs a data category.", ln,
+                hint='For example: DATA PRIMARY SOURCE "Collected" PROVIDER '
+                     '"EPD owner" YEAR 2025 (or SECONDARY, or PROXY with '
+                     'REASON "why").')
+        prov = {"category": self.advance().upper(), "line": ln}
+        while True:
+            if self.match_word("SOURCE"):
+                prov["source"] = self.parse_string_or_expr()
+            elif self.match_keyword("PROVIDER"):
+                prov["provider"] = self.parse_string_or_expr()
+            elif self.match_word("YEAR"):
+                prov["year"] = self.parse_int("YEAR")
+            elif self.match_word("REASON"):
+                prov["reason"] = self.parse_string_or_expr()
+            elif self.match_word("SHARE"):
+                prov["share"] = self._percent("SHARE")
+            else:
+                break
+        missing = [w for w, k in (("SOURCE", "source"), ("PROVIDER", "provider"),
+                                  ("YEAR", "year")) if k not in prov]
+        if missing:
+            raise ParseError(
+                f"DATA {prov['category']} is missing {', '.join(missing)}.", ln,
+                hint=f'For example: DATA {prov["category"]} SOURCE "Database" '
+                     f'PROVIDER "ecoinvent 3.11" YEAR 2024')
+        if prov["category"] == "PROXY" and "reason" not in prov:
+            raise ParseError(
+                "DATA PROXY needs REASON: why the data is a proxy.", ln,
+                hint='For example: ... YEAR 2019 REASON "Different country"')
+        if "share" in prov and not 0 <= prov["share"] <= 100:
+            raise ParseError("SHARE is a percentage between 0 and 100.", ln)
+        return prov
+
+    def parse_control(self) -> str:
+        """CONTROL DIRECT|NONE"""
+        ln = self.current_line()
+        self.advance()                                    # CONTROL
+        if self.at_word("DIRECT"):
+            self.advance()
+            return "DIRECT"
+        if self.at_keyword("NONE"):
+            self.advance()
+            return "NONE"
+        raise ParseError(
+            "CONTROL needs DIRECT or NONE.", ln,
+            hint="CONTROL DIRECT: the process is under the manufacturer's "
+                 "direct control. CONTROL NONE: it is not.")
+
+    def _module_code(self, what: str) -> str:
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER:
+            raise ParseError(
+                f"Expected a module code after {what}, got '{tok.value}'.",
+                tok.line, hint="Modules are A1 to A5, B1 to B7, C1 to C4 and D.")
+        return self.advance().value.upper()
+
+    def parse_epd(self, line: int) -> Statement:
+        """EPD "name" ... END EPD, or an EPD command."""
+        self.advance()                                    # EPD
+        if self.at_word(*self.EPD_COMMANDS):
+            return self.parse_epd_command(line)
+        if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                TokenType.COMMENT):
+            raise ParseError(
+                "EPD needs a name, or a command.", line,
+                hint='EPD "Product name" starts a definition (HELP EPD). '
+                     'The commands are EPD SYSTEMS, EPD CHECK, EPD '
+                     'CALCULATE, EPD DATA QUALITY, EPD REPORT "file.csv", '
+                     'EPD STATUS and EPD CLOSE.')
+        stmt = EpdStmt(line=line, name=self.parse_string_or_expr())
+        self.expect_newline()
+        self.skip_newlines()
+        f, lines = stmt.fields, stmt.lines
+
+        def once(key, ln, label):
+            if key in f:
+                raise ParseError(f"{label} is given twice in the EPD block.",
+                                 ln, hint="Keep one.")
+            lines[key] = ln
+
+        def optional(word, key):
+            if self.match_word(word):
+                f[key] = self.parse_string_or_expr()
+
+        while not self.at_end_of("EPD"):
+            tok = self.peek()
+            ln = tok.line
+            if tok.type == TokenType.EOF:
+                raise ParseError("EPD block missing END EPD", line)
+            if tok.type in (TokenType.COMMENT, TokenType.NEWLINE):
+                self.advance()
+                continue
+            if self.match_word("PROGRAMME", "PROGRAM"):
+                once("programme", ln, "PROGRAMME")
+                f["programme"] = self.parse_string_or_expr()
+                optional("GPI", "gpi")
+            elif self.match_word("PCR"):
+                once("pcr", ln, "PCR")
+                f["pcr"] = self.parse_string_or_expr()
+                optional("VERSION", "pcr_version")
+            elif self.match_keyword("DATABASE"):
+                once("database", ln, "DATABASE")
+                f["database"] = self.parse_string_or_expr()
+                optional("VERSION", "database_version")
+            elif self.at_word("DECLARED", "FUNCTIONAL"):
+                kind = self.advance().upper()
+                if not self.match_word("UNIT"):
+                    raise ParseError(f"Expected {kind} UNIT amount, unit.", ln,
+                                     hint=f"For example: {kind} UNIT 1, m3")
+                once("unit_kind", ln, "The declared or functional unit")
+                f["unit_kind"] = kind
+                f["unit_amount"] = self.parse_expr()
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+                f["unit"] = self.parse_unit()
+            elif self.match_word("METHOD"):
+                once("method", ln, "METHOD")
+                f["method"] = self.parse_string_or_expr()
+                if self.match_keyword("CATEGORIES"):
+                    f["expected_categories"] = self.parse_int("CATEGORIES")
+            elif self.match_keyword("FOLDER"):
+                once("folder", ln, "FOLDER")
+                f["folder"] = self.parse_string_or_expr()
+            elif self.match_word("MODULES"):
+                once("modules", ln, "MODULES")
+                codes = [self._module_code("MODULES")]
+                while self.peek().type == TokenType.COMMA:
+                    self.advance()
+                    codes.append(self._module_code("MODULES"))
+                f["modules"] = codes
+            elif self.match_word("BIOGENIC"):
+                if not self.match_word("CARBON"):
+                    raise ParseError("Expected BIOGENIC CARBON YES or NO.", ln)
+                once("biogenic", ln, "BIOGENIC CARBON")
+                if self.match_word("YES"):
+                    f["biogenic"] = True
+                elif self.match_word("NO"):
+                    f["biogenic"] = False
+                else:
+                    raise ParseError(
+                        "BIOGENIC CARBON needs YES or NO.", ln,
+                        hint="BIOGENIC CARBON YES if the product contains "
+                             "biogenic carbon, BIOGENIC CARBON NO if not.")
+            elif self.match_word("EXEMPT"):
+                once("exempt", ln, "EXEMPT")
+                if not (self.match_word("C") and self.match_keyword("AND")
+                        and self.match_word("D")):
+                    raise ParseError(
+                        "The exemption covers C1 to C4 and D together: "
+                        "write EXEMPT C AND D.", ln)
+                self.expect_newline()
+                self.skip_newlines()
+                exempt = {"line": ln}
+                while not self.at_end_of("EXEMPT"):
+                    t = self.peek()
+                    if t.type == TokenType.EOF:
+                        raise ParseError("EXEMPT block missing END EXEMPT", ln)
+                    if t.type in (TokenType.COMMENT, TokenType.NEWLINE):
+                        self.advance()
+                        continue
+                    if self.match_word("INTEGRATED"):
+                        exempt["integrated"] = self.parse_string_or_expr()
+                    elif (self.at_keyword("NOT")
+                          and self.peek_at(1).upper() == "IDENTIFIABLE"):
+                        self.advance()
+                        self.advance()
+                        exempt["not_identifiable"] = self.parse_string_or_expr()
+                    elif (self.at_keyword("END")
+                          and self.peek_at(1).upper() == "OF"):
+                        self.advance()
+                        if not (self.match_word("OF") and self.match_word("LIFE")
+                                and self.match_word("SCENARIOS")):
+                            raise ParseError(
+                                "Expected END OF LIFE SCENARIOS \"where they "
+                                "can be found\".", t.line)
+                        exempt["eol_scenarios"] = self.parse_string_or_expr()
+                    else:
+                        raise ParseError(
+                            f"'{t.value}' is not allowed inside EXEMPT "
+                            f"(expected INTEGRATED, NOT IDENTIFIABLE, END OF "
+                            f"LIFE SCENARIOS or END EXEMPT)", t.line)
+                    self.expect_newline()
+                    self.skip_newlines()
+                self.advance()
+                self.advance()                            # END EXEMPT
+                f["exempt"] = exempt
+            elif self.match_word("CUTOFF"):
+                module = self._module_code("CUTOFF")
+                item = self.parse_string_or_expr()
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+                pct = self._percent("the item")
+                f.setdefault("cutoffs", []).append(
+                    {"module": module, "item": item, "percent": pct,
+                     "line": ln})
+            elif self.match_word("GWP"):
+                if not self.match_word("INDICATOR"):
+                    raise ParseError("Expected GWP INDICATOR \"category name\".",
+                                     ln)
+                once("gwp_indicator", ln, "GWP INDICATOR")
+                f["gwp_indicator"] = self.parse_string_or_expr()
+            else:
+                raise ParseError(
+                    f"'{tok.value}' is not allowed inside EPD (expected "
+                    f"PROGRAMME, PCR, DATABASE, DECLARED UNIT, FUNCTIONAL "
+                    f"UNIT, METHOD, FOLDER, MODULES, BIOGENIC CARBON, EXEMPT "
+                    f"C AND D, CUTOFF, GWP INDICATOR or END EPD)", ln)
+            self.expect_newline()
+            self.skip_newlines()
+
+        self.advance()
+        self.advance()                                    # END EPD
+        self.expect_newline()
+        return stmt
+
+    def parse_epd_command(self, line: int) -> EpdCommandStmt:
+        command = self.advance().upper()
+        stmt = EpdCommandStmt(line=line, command=command)
+        if command == "DATA":
+            if not self.match_keyword("QUALITY"):
+                raise ParseError("Expected EPD DATA QUALITY.", line)
+            stmt.command = "DATA QUALITY"
+        elif command == "CHECK":
+            if self.match_word("SKIP"):
+                stmt.skip = True
+                if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                        TokenType.COMMENT):
+                    raise ParseError(
+                        "EPD CHECK SKIP needs a reason.", line,
+                        hint='For example: EPD CHECK SKIP "Checked on '
+                             '12/11/2026, nothing has changed since"')
+                stmt.argument = self.parse_string_or_expr()
+        elif command == "REPORT":
+            if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                    TokenType.COMMENT):
+                raise ParseError("EPD REPORT needs a file name.", line,
+                                 hint='For example: EPD REPORT "results.csv"')
+            stmt.argument = self.parse_string_or_expr()
+            if self.match_keyword("LOCATION"):
+                if not self.match_word("BASED"):
+                    raise ParseError("Expected LOCATION BASED.", line)
+                stmt.location_based = True
+        self.expect_newline()
+        return stmt
+
+    def parse_module(self, line: int) -> ModuleStmt:
+        """MODULE A1 ... [TOTAL "name"] ... END MODULE"""
+        self.advance()                                    # MODULE
+        stmt = ModuleStmt(line=line, code=self._module_code("MODULE"))
+        self.expect_newline()
+        self.skip_newlines()
+        while not self.at_end_of("MODULE"):
+            tok = self.peek()
+            ln = tok.line
+            if tok.type == TokenType.EOF:
+                raise ParseError("MODULE block missing END MODULE", line)
+            if tok.type == TokenType.IDENTIFIER and tok.upper() == "TOTAL":
+                if stmt.total is not None:
+                    raise ParseError(
+                        f"MODULE {stmt.code} has two TOTAL lines.", ln,
+                        hint="A module has one total process.")
+                self.advance()
+                total = {"name": self.parse_string_or_expr(), "line": ln}
+                if self.match_keyword("AS"):
+                    total["flow"] = self.parse_string_or_expr()
+                    if self.peek().type == TokenType.COMMA:
+                        self.advance()
+                    total["amount"] = self.parse_expr()
+                    if self.peek().type == TokenType.COMMA:
+                        self.advance()
+                    total["unit"] = self.parse_unit()
+                stmt.total = total
+                self.expect_newline()
+            elif (tok.type == TokenType.IDENTIFIER and tok.upper() == "NET"
+                  and self.peek_at(1).upper() == "FLOW"):
+                self.advance()
+                self.advance()
+                net = {"flow": self.parse_string_or_expr(), "line": ln}
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+                net["amount"] = self.parse_expr()
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+                net["unit"] = self.parse_unit()
+                if self.match_keyword("QUALITY"):
+                    net["quality"] = self._percent("QUALITY")
+                stmt.net_flows.append(net)
+                self.expect_newline()
+            else:
+                inner = self.parse_statement()
+                if inner is not None:
+                    if isinstance(inner, (EpdStmt, ModuleStmt)):
+                        raise ParseError(
+                            "EPD and MODULE blocks cannot sit inside a "
+                            "MODULE block.", ln,
+                            hint=f"Close MODULE {stmt.code} with END MODULE "
+                                 f"first.")
+                    stmt.body.append(inner)
+            self.skip_newlines()
+        self.advance()
+        self.advance()                                    # END MODULE
+        self.expect_newline()
+        return stmt
+
+    def parse_new_from_template(self, line: int) -> NewFromTemplateStmt:
+        """NEW FROM TEMPLATE "name" AS "file.baslca" """
+        self.advance()                                    # NEW
+        self.advance()                                    # FROM
+        if not self.match_word("TEMPLATE"):
+            raise ParseError("Expected NEW FROM TEMPLATE \"name\" AS \"file\".",
+                             line)
+        template = self.parse_string_or_expr()
+        if not self.match_keyword("AS"):
+            raise ParseError(
+                "NEW FROM TEMPLATE needs AS \"file name\".", line,
+                hint='For example: NEW FROM TEMPLATE "epd_skeleton" AS '
+                     '"my_epd.baslca"')
+        filename = self.parse_string_or_expr()
+        self.expect_newline()
+        return NewFromTemplateStmt(line=line, template=template,
+                                   filename=filename)
 
 
 def parse(source: str) -> List[Statement]:

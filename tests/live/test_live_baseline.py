@@ -13,9 +13,10 @@ variable, or by looking in the parent folders for
 REBUILD_PLAN/live_baseline.json.
 
 Everything the tests create goes in the folder "00: olcaBASIC live test"
-and the product system, the process and its product flow are deleted at
-the end. The global parameter the model uses stays: openLCA parameters
-have no folder and olcaBASIC has no command to delete one.
+and the product system and the process are deleted at the end. The
+product flow is deleted too if OLCA_LIVE_DELETE_FLOW=1 is set (slow: see
+the fixture). The global parameter the model uses stays: openLCA
+parameters have no folder and olcaBASIC has no command to delete one.
 """
 
 import json
@@ -80,12 +81,16 @@ def live(baseline, names):
             f"{expected['impact_methods']}")
     runner.run(baseline["program_template"].format(**names))
     yield runner
-    # Clean up: the system, the process, then its product flow. DELETE
-    # FLOW reads every process to make sure nothing uses the flow, so
-    # this takes a while on a large database.
-    runner.run(f'CONFIRM DELETE ON\nDELETE SYSTEM "{names["name"]}"\n'
-               f'DELETE PROCESS "{names["name"]}"\n'
-               f'DELETE FLOW "{names["name"]}"')
+    # Clean up: the system and the process. The product flow stays
+    # unless OLCA_LIVE_DELETE_FLOW=1: DELETE FLOW reads every process
+    # to make sure nothing uses the flow, which takes more than half an
+    # hour on a database of 26,000 processes. The flow is reused by the
+    # next run.
+    code = (f'CONFIRM DELETE ON\nDELETE SYSTEM "{names["name"]}"\n'
+            f'DELETE PROCESS "{names["name"]}"')
+    if os.getenv("OLCA_LIVE_DELETE_FLOW") == "1":
+        code += f'\nDELETE FLOW "{names["name"]}"'
+    runner.run(code)
 
 
 def close(a, b, tol):

@@ -32,6 +32,7 @@ TOPICS: Dict[str, str] = {
     "CALCULATE": "Impact results and where they come from",
     "SCENARIOS": "Scenarios and sensitivity analysis",
     "CHECK": "Checking a model before trusting its results",
+    "EPD": "Environmental product declarations (EN 15804+A2)",
     "OUTPUT": "Showing and saving results",
     "PROGRAMMING": "BASIC: variables, loops, conditions, subroutines",
     "SESSION": "Help and housekeeping",
@@ -323,6 +324,8 @@ COMMANDS: List[Command] = [
   INPUT "resource", amount, unit FROM NATURE
   OUTPUT MAKE FLOW "waste", amount, unit, WASTE
   [... PEDIGREE (1,2,1,1,3)] [COMMENT "text"] [FORMULA "expression"]
+  [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
+  [CONTROL DIRECT|NONE]
 END PROCESS''',
         example='''MAKE PROCESS "Concrete block"
   FOLDER "00: My model"
@@ -338,7 +341,9 @@ END PROCESS''',
               "An amount written with a variable stays a formula, and the "
               "variable becomes a global parameter.\n"
               "Running the block twice does not create a second process: "
-              "it warns and leaves the first one alone.",
+              "it warns and leaves the first one alone.\n"
+              "DATA and CONTROL declare where the data comes from and "
+              "whether the manufacturer controls the process (HELP DATA PRIMARY).",
         statements=("ProcessStmt",)),
     Command(
         name="MAKE FLOW", aliases=("FLOW",), topic="BUILD",
@@ -354,6 +359,10 @@ END PROCESS''',
         syntax='''BRIDGE "BRIDGE | name | unit", unit [WASTE]
   FOLDER "path"
   PROVIDER "process name or uuid"
+  [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
+  [ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION]
+  [COUNTRY "code"] [REGION "grid region"] [ENERGY SOURCE "text"]
+  [LOCATION BASED PROVIDER "process name or uuid"]
 END BRIDGE''',
         example='''BRIDGE "BRIDGE | Cement | kg", kg
   FOLDER "00: My model/Bridges"
@@ -365,7 +374,10 @@ END BRIDGE''',
               "place.\n"
               "Bridges are always named BRIDGE | what | unit. A plain name "
               "(BRIDGE \"Cement\", kg) is given that form. PROVIDER takes "
-              "a UUID or a name that only one process has.",
+              "a UUID or a name that only one process has.\n"
+              "While an EPD is active a bridge with no FOLDER line goes "
+              "into the EPD's Bridges folder. DATA and ELECTRICITY are "
+              "described under HELP DATA PRIMARY and HELP ELECTRICITY.",
         statements=("BridgeStmt",)),
     Command(
         name="SYSTEM", aliases=("MAKE SYSTEM",), topic="BUILD",
@@ -601,6 +613,232 @@ END SENSITIVITY''',
         example='EXTRACT FOLDER "00: My model"',
         statements=("ExtractStmt",)),
 
+    # ── EPD ──────────────────────────────────────────────────
+    Command(
+        name="EPD", topic="EPD",
+        usage='EPD "product name" ... END EPD',
+        summary="Define an EPD: unit, method, folder, modules and programme",
+        syntax='''EPD "product name"
+  [PROGRAMME "IES" [GPI "5.1.0"]]
+  [PCR "name" [VERSION "n"]]
+  [DATABASE "name" [VERSION "n"]]
+  DECLARED UNIT amount, unit | FUNCTIONAL UNIT amount, unit
+  METHOD "EN15804+A2 (EF 3.1)" [CATEGORIES n]
+  FOLDER "path"
+  MODULES A1, A2, A3, C1, C2, C3, C4, D
+  BIOGENIC CARBON YES|NO
+  [CUTOFF module "item", n%]
+  [GWP INDICATOR "category name"]
+  [EXEMPT C AND D
+     INTEGRATED "text"
+     NOT IDENTIFIABLE "text"
+     END OF LIFE SCENARIOS "text"
+   END EXEMPT]
+END EPD''',
+        example='''EPD "Concrete block"
+  DECLARED UNIT 1, m3
+  METHOD "EN15804+A2 (EF 3.1)"
+  FOLDER "00: Concrete block EPD"
+  MODULES A1, A2, A3, C1, C2, C3, C4, D
+  BIOGENIC CARBON NO
+END EPD''',
+        notes="The block is checked as it is read, and nothing is built "
+              "if it is wrong.\n"
+              "Modules: A1, A2 and A3 are always declared. C1 to C4 and D "
+              "are declared together, or left out together with an EXEMPT "
+              "C AND D block that justifies it. The exemption is refused "
+              "for a product with biogenic carbon (EN 15804+A2, clause "
+              "5.2). A4, A5 and B1 to B7 are options. The EPD type follows "
+              "from the modules and is written into the report.\n"
+              "Unit: FUNCTIONAL UNIT is only for types with options or "
+              "cradle to grave.\n"
+              "Method: it has to be an EN 15804+A2 method with the full "
+              "indicator set (38 categories for \"EN15804+A2 (EF 3.1)\"). "
+              "CATEGORIES n states another size.\n"
+              "PROGRAMME adds a programme operator's rules. They are "
+              "errors, with no override. PROGRAMME \"IES\" is the "
+              "International EPD System; with it, DATA is required on "
+              "every process and bridge, and EPD DATA QUALITY has to pass "
+              "before EPD REPORT.\n"
+              "CUTOFF declares what was left out of a module, as a share "
+              "of mass or energy.\n"
+              "The steps: EPD block, bridges, MODULE blocks, EPD SYSTEMS, "
+              "EPD CHECK, EPD CALCULATE, EPD DATA QUALITY, EPD REPORT. NEW "
+              "FROM TEMPLATE \"epd_skeleton\" AS \"my_epd.baslca\" "
+              "writes a starting point.",
+        statements=("EpdStmt",)),
+    Command(
+        name="MODULE", topic="EPD",
+        usage='MODULE code ... TOTAL "name" ... END MODULE',
+        summary="Build the processes of one EPD module and the process that adds them up",
+        syntax='''MODULE A1
+  MAKE PROCESS "name"
+    ...
+  END PROCESS
+  [NET FLOW "flow", amount, unit [QUALITY n%]]     (module D)
+  TOTAL "name" [AS "flow", amount, unit]
+END MODULE''',
+        example='''MODULE A1
+  MAKE PROCESS "Cement supply"
+    OUTPUT MAKE FLOW "Cement, supplied", 300, kg, PRODUCT
+    INPUT USE PROCESS "BRIDGE | Cement | kg", 300, kg
+  END PROCESS
+  TOTAL "Raw material supply"
+END MODULE''',
+        notes="Names are given without the prefix: the process above "
+              "becomes \"A1 | Cement supply\" and the total \"A1: Raw "
+              "material supply\", both in the module's folder.\n"
+              "Amounts are per declared unit. TOTAL takes the whole output "
+              "of each process of the module, with the declared unit as "
+              "its own product (or the product given after AS). A process "
+              "whose output goes into another process of the same module "
+              "is counted through that one.\n"
+              "An input has to come from a bridge or from a process in "
+              "the EPD folder. A background process used directly is an "
+              "error.\n"
+              "A module with nothing in it still needs its TOTAL line; "
+              "its results are zero.\n"
+              "NET FLOW, in MODULE D, declares what leaves the product "
+              "system and its quality factor.",
+        statements=("ModuleStmt",)),
+    Command(
+        name="EPD SYSTEMS", topic="EPD",
+        usage="EPD SYSTEMS",
+        summary="Create one product system per module total, one at a time",
+        example="EPD SYSTEMS",
+        notes="Uses LINKING PREFER_DEFAULTS. A system that already exists "
+              "is reused, with a warning.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD CHECK", topic="EPD",
+        usage='EPD CHECK [SKIP "reason"]',
+        summary="Validate every module system and list what is missing",
+        example='EPD CHECK\nEPD CHECK SKIP "Checked this morning, nothing has changed"',
+        notes="Validates each product system, lists processes with no "
+              "pedigree scores or no description, and applies the "
+              "programme's rules to the model as built. It checks "
+              "structure and declarations only.\n"
+              "EPD CALCULATE is refused until this has passed. EPD CHECK "
+              "SKIP \"reason\" goes on without it, and the reason is "
+              "written into the report.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD CALCULATE", topic="EPD",
+        usage="EPD CALCULATE",
+        summary="Calculate every module with the EPD method",
+        example="EPD CALCULATE",
+        notes="Shows indicator by module, with A1-A3 as the one total. "
+              "Module D is never part of a total.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD DATA QUALITY", topic="EPD",
+        usage="EPD DATA QUALITY",
+        summary="Do the programme's data quality arithmetic and apply its limits",
+        example="EPD DATA QUALITY",
+        notes="Needs PROGRAMME in the EPD block. From the DATA lines and "
+              "the results it works out: the processes above 10% of "
+              "GWP-GHG in A1-A3, with their source and data category; the "
+              "share of primary data; the share of each indicator that "
+              "comes from proxy data; the age of the data; and the "
+              "processes that give 80% of each indicator. A limit that is "
+              "passed is an error (GPI 5.1.0, A.5).\n"
+              "The thresholds are named values in the programme profile.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD REPORT", topic="EPD",
+        usage='EPD REPORT "file.csv" [LOCATION BASED]',
+        summary="Write the results table and the declarations to a CSV file",
+        example='EPD REPORT "results.csv"',
+        notes="The header gives the product, EPD type, unit, method, "
+              "database family, olcaBASIC version, date, programme, PCR and "
+              "database. Then the cut-offs, the electricity used by "
+              "processes under direct control (approach, energy source and "
+              "climate impact per kWh), the net flows of module D, the "
+              "data sources, and the indicators by module with A1-A3 "
+              "added up and D on its own.\n"
+              "Under a programme it is refused until EPD DATA QUALITY has "
+              "passed.\n"
+              "LOCATION BASED adds a second table with every electricity "
+              "bridge on its LOCATION BASED PROVIDER.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="EPD STATUS", aliases=("EPD CLOSE",), topic="EPD",
+        usage="EPD STATUS | EPD CLOSE",
+        summary="Show how far the active EPD has got, or end EPD mode",
+        example="EPD STATUS",
+        notes="EPD CLOSE ends EPD mode. What was built stays in the "
+              "database.",
+        statements=("EpdCommandStmt",)),
+    Command(
+        name="DATA PRIMARY", topic="EPD",
+        aliases=("DATA SECONDARY", "DATA PROXY", "CONTROL"),
+        usage='DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n',
+        summary="Declare where the data of a process or bridge comes from",
+        syntax='''DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
+DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+DATA PROXY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2019 REASON "why"
+  [SHARE n%]
+CONTROL DIRECT|NONE''',
+        example='''EDIT PROCESS "A3 | Manufacturing"
+  DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
+  CONTROL DIRECT
+END EDIT''',
+        notes="A line inside MAKE PROCESS, BRIDGE or EDIT PROCESS. "
+              "SOURCE is the type of source (collected data, a database, "
+              "an EPD), PROVIDER is who or what it came from, YEAR is the "
+              "reference year. PROXY needs REASON. SHARE n% states the "
+              "share of primary data when it is neither all nor nothing, "
+              "for example for data taken from another EPD.\n"
+              "CONTROL says whether the manufacturer controls the process "
+              "directly. A3 is taken to be under direct control unless a "
+              "process says CONTROL NONE.\n"
+              "It is stored on the process as tags (epd:data=PRIMARY and "
+              "so on), and the year also as the validity dates of the "
+              "process documentation.\n"
+              "DATA followed by values, on a line outside these blocks, is "
+              "still the statement that queues values for READ INPUTS FROM "
+              "DATA (HELP DATA).",
+        statements=("EditProcessStmt",)),
+    Command(
+        name="ELECTRICITY", topic="EPD",
+        usage='ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION',
+        summary="Declare how the electricity of a bridge is modelled",
+        syntax='''ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION
+COUNTRY "code"
+[REGION "grid region"]
+[ENERGY SOURCE "text"]
+[LOCATION BASED PROVIDER "process name or uuid"]''',
+        example='''BRIDGE "Electricity", kWh
+  PROVIDER "0f0f0f0f-0000-0000-0000-000000000000"
+  ELECTRICITY RESIDUAL
+  COUNTRY "GB"
+  ENERGY SOURCE "Residual mix, United Kingdom"
+END BRIDGE''',
+        notes="Lines inside a BRIDGE block. CONTRACT is electricity "
+              "backed by a contractual instrument, RESIDUAL the residual "
+              "mix of the market, CONSUMPTION the consumption mix.\n"
+              "Under PROGRAMME \"IES\": a consumption-mix bridge is "
+              "refused in an A1 to A3 process under the manufacturer's "
+              "direct control (GPI 5.1.0, A.7.1); for Australia, Brazil, "
+              "Canada, China, India and the USA a residual or consumption "
+              "mix needs REGION, the grid region (A.6.2).\n"
+              "LOCATION BASED PROVIDER gives the bridge a second provider, "
+              "the consumption mix, used only for the location-based "
+              "results of EPD REPORT ... LOCATION BASED.",
+        statements=("BridgeStmt",)),
+    Command(
+        name="NEW FROM TEMPLATE", topic="EPD",
+        usage='NEW FROM TEMPLATE "name" AS "file.baslca"',
+        summary="Copy a template program into the working folder",
+        example='NEW FROM TEMPLATE "epd_skeleton" AS "my_epd.baslca"',
+        notes="Templates: epd_skeleton (the EPD block and empty modules, "
+              "with a comment at every decision), bridges_common (bridge "
+              "patterns for electricity, road transport, water, landfill "
+              "and incineration), sensitivity_epd (sensitivity on the "
+              "main A1 and A3 parameters). It does not write over a file "
+              "that exists.",
+        statements=("NewFromTemplateStmt",)),
+
     # ── OUTPUT ───────────────────────────────────────────────
     Command(
         name="PRINT RESULTS", topic="OUTPUT",
@@ -686,9 +924,9 @@ IF condition THEN statement [ELSE statement]''',
         statements=("FunctionDef",)),
     Command(
         name="DATA", dialect=BASIC, topic="PROGRAMMING",
-        usage='DATA "name", amount, unit',
+        usage='DATA "name", amount, "unit"',
         summary="Queue values for READ INPUTS FROM DATA inside a PROCESS block",
-        example='DATA "BRIDGE | Cement | kg", 300, kg\n'
+        example='DATA "BRIDGE | Cement | kg", 300, "kg"\n'
                 'PROCESS "Concrete block"\n'
                 '  OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT\n'
                 '  READ INPUTS FROM DATA\nEND PROCESS',
@@ -871,6 +1109,11 @@ def render(query: str = "") -> str:
         if exact:
             text = render_command(exact).rstrip("\n") + "\n" + text
         return text
+    if _norm(query) == "NEW":
+        return ("\n  NEW is the old word for MAKE FLOW inside a PROCESS block "
+                "(INPUT NEW, OUTPUT NEW).\n  It still works but is "
+                "deprecated. See HELP MAKE PROCESS.\n  NEW FROM TEMPLATE "
+                "copies a template program: HELP NEW FROM TEMPLATE.\n")
     matches = find_all(query)
     if len(matches) == 1:
         return render_command(matches[0])
@@ -882,10 +1125,6 @@ def render(query: str = "") -> str:
         out.append("  HELP <one of these> shows its syntax and an example.")
         out.append("")
         return "\n".join(out)
-    if _norm(query) == "NEW":
-        return ("\n  NEW is the old word for MAKE FLOW inside a PROCESS block "
-                "(INPUT NEW, OUTPUT NEW).\n  It still works but is "
-                "deprecated. See HELP MAKE PROCESS.\n")
     return (f"\n  No help for: {query}\n  Type HELP for the command list. "
             f"Topics: {', '.join(TOPICS)}\n")
 

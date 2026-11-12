@@ -175,6 +175,12 @@ class BridgeStmt(Statement):
     folder: Expr = None
     provider: Expr = None
     provider_flow: Expr = None
+    provenance: Dict = None        # DATA PRIMARY|SECONDARY|PROXY ...
+    electricity: str = ""          # CONTRACT, RESIDUAL or CONSUMPTION
+    country: Expr = None           # COUNTRY "GB"
+    region: Expr = None            # REGION "name" (sub-national grid)
+    energy_source: Expr = None     # ENERGY SOURCE "wind"
+    location_based_provider: Expr = None   # LOCATION BASED PROVIDER "uuid"
 
 
 # ── Process ──────────────────────────────────────────────
@@ -191,6 +197,8 @@ class ProcessStmt(Statement):
     exchanges: List[ExchangeDef] = field(default_factory=list)
     local_params: List[LetStmt] = field(default_factory=list)
     read_data: bool = False  # READ INPUTS FROM DATA
+    provenance: Dict = None  # DATA PRIMARY|SECONDARY|PROXY ...
+    control: str = ""        # CONTROL DIRECT|NONE
 
 
 # ── Edit process ─────────────────────────────────────────
@@ -207,6 +215,9 @@ class EditProcessStmt(Statement):
     set_description: Expr = None
     set_category: Expr = None
     set_location: Expr = None
+    provenance: Dict = None  # DATA PRIMARY|SECONDARY|PROXY ...
+    control: str = ""        # CONTROL DIRECT|NONE
+    update_param_lines: Dict[str, int] = field(default_factory=dict)
 
 
 # ── Edit flow / update parameter ─────────────────────
@@ -563,6 +574,41 @@ class BackStmt(Statement):
 class CdirStmt(Statement):
     """CDIR "name" — create a category folder"""
     name: Expr = None
+
+
+# ── EPD workflow ─────────────────────────────────────────
+
+@dataclass
+class EpdStmt(Statement):
+    """EPD "name" ... END EPD: the definition of an EPD."""
+    name: Expr = None
+    fields: Dict[str, Any] = field(default_factory=dict)
+    lines: Dict[str, int] = field(default_factory=dict)   # field -> line
+
+
+@dataclass
+class ModuleStmt(Statement):
+    """MODULE A1 ... TOTAL "name" ... END MODULE"""
+    code: str = ""
+    body: List[Statement] = field(default_factory=list)
+    total: Dict = None                 # {"name", "flow", "amount", "unit", "line"}
+    net_flows: List[Dict] = field(default_factory=list)
+
+
+@dataclass
+class EpdCommandStmt(Statement):
+    """EPD SYSTEMS | CHECK | CALCULATE | DATA QUALITY | REPORT | STATUS | CLOSE"""
+    command: str = ""
+    argument: Expr = None              # report file, or the SKIP reason
+    skip: bool = False                 # EPD CHECK SKIP "reason"
+    location_based: bool = False       # EPD REPORT ... LOCATION BASED
+
+
+@dataclass
+class NewFromTemplateStmt(Statement):
+    """NEW FROM TEMPLATE "name" AS "file" """
+    template: Expr = None
+    filename: Expr = None
 
 
 @dataclass

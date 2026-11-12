@@ -18,6 +18,10 @@ from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
+from .workflows.epd import (
+    EpdWorkflow, TAG_PREFIX, LOCATION_SWITCH, provenance_tags,
+    provenance_documentation, tag_value,
+)
 from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
@@ -443,6 +447,19 @@ class Interpreter(EnforcementMixin):
         elif isinstance(stmt, SaveProgramStmt):
             self._exec_save_program(stmt)
 
+        elif isinstance(stmt, EpdStmt):
+            EpdWorkflow.define(self, stmt)
+
+        elif isinstance(stmt, ModuleStmt):
+            self._require_bridge(stmt.line)
+            self._require_epd(stmt.line, f"MODULE {stmt.code}").run_module(stmt)
+
+        elif isinstance(stmt, EpdCommandStmt):
+            self._exec_epd_command(stmt)
+
+        elif isinstance(stmt, NewFromTemplateStmt):
+            self._exec_new_from_template(stmt)
+
         elif isinstance(stmt, ClearStmt):
             self.out.clear_screen()
 
@@ -803,8 +820,36 @@ class Interpreter(EnforcementMixin):
         self._require_bridge(stmt.line)
         given = self._eval_str(stmt.name)
         name = self._bridge_name(given, stmt.unit, stmt.line)
-        folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.process_folder
+        epd = self.runtime.epd
+        if stmt.folder:
+            folder = self._eval_str(stmt.folder)
+        elif epd is not None:
+            folder = epd.bridges_folder     # the EPD keeps its bridges together
+        else:
+            folder = self.runtime.process_folder
         self._require_family(stmt.line, "BRIDGE")
+        if stmt.electricity and stmt.country is None:
+            raise BasicError(
+                f"ELECTRICITY {stmt.electricity} needs the country the "
+                f"electricity is used in.", stmt.line,
+                hint='Add COUNTRY "code" inside the block, for example '
+                     'COUNTRY "GB".')
+        if not stmt.electricity and (stmt.country is not None
+                                     or stmt.region is not None
+                                     or stmt.energy_source is not None
+                                     or stmt.location_based_provider is not None):
+            raise BasicError(
+                "COUNTRY, REGION, ENERGY SOURCE and LOCATION BASED PROVIDER "
+                "describe an electricity bridge, and this one has no "
+                "ELECTRICITY line.", stmt.line,
+                hint="Add ELECTRICITY CONTRACT, ELECTRICITY RESIDUAL or "
+                     "ELECTRICITY CONSUMPTION.")
+        if stmt.location_based_provider is not None and \
+                stmt.electricity == "CONSUMPTION":
+            raise BasicError(
+                "A consumption-mix bridge is location-based already, so it "
+                "takes no LOCATION BASED PROVIDER.", stmt.line,
+                hint="Remove the LOCATION BASED PROVIDER line.")
         # A bridge made before 0.4.0 may carry the plain name: reuse it
         # rather than building a second one beside it.
         if name != given:
@@ -823,6 +868,19 @@ class Interpreter(EnforcementMixin):
             if "error" in prov:
                 raise BasicError(prov["error"], stmt.line)
             provider_id = prov["process_id"]
+
+        second_id = None
+        if stmt.location_based_provider is not None:
+            prov = self.bridge.resolve_process_strict(
+                self._eval_str(stmt.location_based_provider))
+            if "error" in prov:
+                raise BasicError(f"LOCATION BASED PROVIDER: {prov['error']}",
+                                 stmt.line)
+            second_id = prov["process_id"]
+        if epd is not None:
+            info = (self.bridge.describe_process(provider_id)
+                    if provider_id else None)
+            epd.check_bridge(stmt, name, info["name"] if info else "")
 
         provider_flow_id = None
         if stmt.provider_flow:
@@ -846,6 +904,40 @@ class Interpreter(EnforcementMixin):
         if result.get("warning"):
             self.out.write(f"  WARNING: {result['warning']}")
 
+        # What the block declares about the data and the electricity
+        tags = provenance_tags(stmt.provenance, self._eval_str)
+        if stmt.electricity:
+            tags["electricity"] = stmt.electricity
+            tags["country"] = tag_value(self._eval_str(stmt.country)).upper()
+            tags["region"] = (tag_value(self._eval_str(stmt.region))
+                              if stmt.region is not None else None)
+            tags["energy_source"] = (
+                tag_value(self._eval_str(stmt.energy_source))
+                if stmt.energy_source is not None else None)
+        if second_id:
+            done = self.bridge.set_switched_provider(
+                result["process_id"], second_id, LOCATION_SWITCH)
+            if "error" in done:
+                raise BasicError(f"LOCATION BASED PROVIDER: {done['error']}",
+                                 stmt.line)
+            tags["switch"] = LOCATION_SWITCH
+            if not done.get("already_set"):
+                self.out.write(
+                    f"  Location-based provider set. The bridge uses it "
+                    f"when the global parameter {LOCATION_SWITCH} is 1 "
+                    f"(EPD REPORT ... LOCATION BASED does that).")
+        if tags or epd is not None:
+            tags["role"] = "bridge"
+            done = self.bridge.set_process_tags(
+                result["process_id"], tags, TAG_PREFIX,
+                provenance_documentation(stmt.provenance))
+            if "error" in done:
+                raise BasicError(done["error"], stmt.line)
+            if existed and (stmt.provenance or stmt.electricity):
+                self.out.write("  Declarations on the bridge updated.")
+        if epd is not None:
+            epd._reset_progress()
+
     def _exec_process(self, stmt: ProcessStmt):
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
@@ -854,6 +946,9 @@ class Interpreter(EnforcementMixin):
         location = self._eval_str(stmt.location) if stmt.location else None
         flow_schema = self._eval_str(stmt.flow_schema) if stmt.flow_schema else None
         process_schema = self._eval_str(stmt.process_schema) if stmt.process_schema else None
+        epd = self.runtime.epd if self.runtime.epd_module else None
+        if epd is not None:
+            name, folder = epd.begin_process(stmt, name)
 
         # Handle READ INPUTS FROM DATA. Work on a copy so running the
         # same PROCESS twice (e.g. in a loop) doesn't pile up exchanges.
@@ -875,11 +970,17 @@ class Interpreter(EnforcementMixin):
         # exchange amounts, so evaluate them into a temporary scope.
         self._flows_made = []
         self._direct_background = []
+        self._last_created = None
         try:
             done = self._exec_process_body(stmt, name, folder, description,
                                            location, flow_schema,
                                            process_schema, ex_list)
             self._lint_direct_background()
+            created = self._last_created
+            if epd is not None:
+                epd.end_process(stmt, created)
+            elif created and not created.get("already_existed"):
+                self._declare(created["process_id"], stmt)
             return done
         except BasicError as e:
             self._direct_background = None
@@ -1295,6 +1396,7 @@ class Interpreter(EnforcementMixin):
             raise BasicError(msg, self._engine_error_line(
                 result["error"], ex_lines, param_lines, stmt.line))
 
+        self._last_created = result
         if result.get("already_existed", False):
             where = folder or "(root)"
             self.out.write(f"  WARNING: process '{name}' already exists in {where}. "
@@ -1305,6 +1407,99 @@ class Interpreter(EnforcementMixin):
         p_count = result.get("parameter_count", 0)
         self.out.write(f"  Process created: {name} "
               f"({ex_count} exchanges, {p_count} parameters)")
+
+    def _declare(self, process_id: str, stmt) -> bool:
+        """Store what the DATA and CONTROL lines of a PROCESS or EDIT
+        block declare, as tags on the process. True if there were any."""
+        tags = provenance_tags(stmt.provenance, self._eval_str)
+        if stmt.control:
+            tags["control"] = stmt.control
+        if not tags:
+            return False
+        done = self.bridge.set_process_tags(
+            process_id, tags, TAG_PREFIX,
+            provenance_documentation(stmt.provenance))
+        if "error" in done:
+            raise BasicError(done["error"], stmt.line)
+        return True
+
+    # ── EPD workflow ─────────────────────────────────────
+
+    def _require_epd(self, line: int, command: str):
+        epd = self.runtime.epd
+        if epd is None:
+            raise BasicError(
+                f"{command} needs an EPD, and none is defined in this "
+                f"session.", line,
+                hint='Define one first: EPD "name" ... END EPD. HELP EPD '
+                     'shows the block, and NEW FROM TEMPLATE '
+                     '"epd_skeleton" AS "my_epd.baslca" writes a starting '
+                     'point.')
+        return epd
+
+    def _exec_epd_command(self, stmt):
+        command = stmt.command
+        if command == "CLOSE":
+            if self.runtime.epd is None:
+                self.out.write("  No EPD is active.")
+            else:
+                self.out.write(f"  EPD '{self.runtime.epd.name}' closed. "
+                               f"What it built stays in the database.")
+            self.runtime.epd = None
+            self.runtime.epd_module = ""
+            return
+        if command == "STATUS" and self.runtime.epd is None:
+            self.out.write("  No EPD is active. EPD \"name\" ... END EPD "
+                           "defines one.")
+            return
+        self._require_bridge(stmt.line)
+        epd = self._require_epd(stmt.line, f"EPD {command}")
+        if self.runtime.epd_module:
+            raise BasicError(
+                f"EPD {command} cannot run inside MODULE "
+                f"{self.runtime.epd_module}.", stmt.line,
+                hint="Close the module with END MODULE first.")
+        if command == "SYSTEMS":
+            epd.systems(stmt.line)
+        elif command == "CHECK":
+            epd.check(stmt.line, stmt.skip,
+                      self._eval_str(stmt.argument) if stmt.skip else "")
+        elif command == "CALCULATE":
+            epd.calculate(stmt.line)
+        elif command == "DATA QUALITY":
+            epd.data_quality(stmt.line)
+        elif command == "REPORT":
+            epd.report(stmt.line, self._eval_str(stmt.argument),
+                       stmt.location_based)
+        elif command == "STATUS":
+            epd.status()
+
+    def _exec_new_from_template(self, stmt):
+        """NEW FROM TEMPLATE "name" AS "file": copy a template that
+        ships with olcaBASIC into the working folder."""
+        from . import templates
+        name = self._eval_str(stmt.template).strip()
+        target = self._eval_str(stmt.filename).strip()
+        source = templates.read(name)
+        if source is None:
+            raise BasicError(
+                f"There is no template called '{name}'.", stmt.line,
+                hint="Templates: " + ", ".join(
+                    f'"{n}"' for n in templates.names()) + ".")
+        if not target:
+            raise BasicError("NEW FROM TEMPLATE needs a file name after AS.",
+                             stmt.line)
+        if "." not in os.path.basename(target):
+            target += ".baslca"
+        if os.path.exists(target):
+            raise BasicError(
+                f"'{target}' already exists, and NEW FROM TEMPLATE does "
+                f"not write over a file.", stmt.line,
+                hint="Choose another name, or remove the file first.")
+        with open(target, "w", encoding="utf-8", newline="\n") as f:
+            f.write(source)
+        self.out.write(f"  Template '{name}' copied to {target}")
+        self.out.write(f"  Edit it, then: RUN \"{target}\"")
 
     def _exec_system(self, stmt: SystemStmt):
         self._require_bridge(stmt.line)
@@ -2045,7 +2240,13 @@ class Interpreter(EnforcementMixin):
         if stmt.set_location is not None:
             kwargs["location"] = self._eval_str(stmt.set_location)
         if not kwargs:
-            self.out.write(f"  Nothing to change in '{target}'.")
+            if self._declare(proc_id, stmt):
+                self.out.write(f"  Edited process: {target}")
+                self.out.write("    data declaration updated")
+                if self.runtime.epd is not None:
+                    self.runtime.epd._reset_progress()
+            else:
+                self.out.write(f"  Nothing to change in '{target}'.")
             return
 
         result = self.bridge.edit_process(proc_id, **kwargs)
@@ -2058,6 +2259,10 @@ class Interpreter(EnforcementMixin):
         for c in changes:
             if c not in warnings:
                 self.out.write(f"    {c}")
+        if self._declare(proc_id, stmt):
+            self.out.write("    data declaration updated")
+        if self.runtime.epd is not None:
+            self.runtime.epd._reset_progress()
         for w in warnings:
             self.out.write(f"  {w}")
         if (stmt.set_location is not None and

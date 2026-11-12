@@ -40,6 +40,21 @@ class ResolveMixin:
                         "category": getattr(p, "category", "") or ""})
         return sorted(out, key=lambda c: (c["location"], c["id"]))
 
+    def processes_in_folder(self, path: str, deep: bool = True) -> list:
+        """Every process in a folder (and, with deep, in the folders
+        below it), as [{"id", "name", "location", "category"}] sorted
+        by category then name. From descriptors: no full reads."""
+        base = (path or "").strip("/").lower()
+        out = []
+        for p in self.get_descriptors(o.Process):
+            cat = (getattr(p, "category", "") or "").strip("/")
+            low = cat.lower()
+            if low == base or (deep and low.startswith(base + "/")):
+                out.append({"id": p.id, "name": p.name,
+                            "location": getattr(p, "location", "") or "",
+                            "category": cat})
+        return sorted(out, key=lambda c: (c["category"], c["name"]))
+
     def describe_process(self, process_id: str) -> Optional[Dict]:
         """{"id", "name", "location", "category"} of a process, from its
         descriptor (no full read). None if there is no such process."""

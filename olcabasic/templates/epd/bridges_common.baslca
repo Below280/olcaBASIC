@@ -1,0 +1,77 @@
+' ============================================================
+' Common bridges for an EPD
+'
+' A bridge stands between the model and one background dataset, so
+' the choice of dataset sits in one place. Each pattern below has a
+' FIND line to list the candidates and a BRIDGE block to fill in.
+'
+' How to use it: run the FIND lines, pick a process, paste its UUID
+' into PROVIDER, take the apostrophes off the block and run it. While
+' an EPD is active, bridges go into the EPD's Bridges folder.
+'
+' DATA says where the data comes from. Under a programme profile it
+' is required on every bridge.
+' ============================================================
+
+' ------------------------------------------------------------
+' Electricity
+' The modelling approach is declared:
+'   ELECTRICITY CONTRACT     backed by a contractual instrument
+'   ELECTRICITY RESIDUAL     the residual mix of the market
+'   ELECTRICITY CONSUMPTION  the consumption mix of the market
+' Under PROGRAMME "IES" a consumption mix is refused in A1 to A3
+' processes the manufacturer controls, and some countries need the
+' mix of the grid region (REGION) and not the national one.
+' LOCATION BASED PROVIDER names the consumption mix to use for the
+' extra location-based results (EPD REPORT ... LOCATION BASED).
+' ------------------------------------------------------------
+FIND PROCESS "electricity" AT "GB"
+
+' BRIDGE "Electricity", kWh
+'   PROVIDER "uuid of the residual mix or the contracted supply"
+'   ELECTRICITY RESIDUAL
+'   COUNTRY "GB"
+'   ENERGY SOURCE "Residual mix, United Kingdom"
+'   LOCATION BASED PROVIDER "uuid of the consumption mix"
+'   DATA PRIMARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE
+
+' ------------------------------------------------------------
+' Road transport (unit t*km: tonnes carried times kilometres)
+' ------------------------------------------------------------
+FIND PROCESS "transport, freight, lorry"
+
+' BRIDGE "Road transport", t*km
+'   PROVIDER "uuid of the lorry size and emission class used"
+'   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE
+
+' ------------------------------------------------------------
+' Water
+' ------------------------------------------------------------
+FIND PROCESS "tap water"
+
+' BRIDGE "Tap water", kg
+'   PROVIDER "uuid of the water supply for the region"
+'   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE
+
+' ------------------------------------------------------------
+' Landfill (a waste treatment: note WASTE after the unit)
+' ------------------------------------------------------------
+FIND PROCESS "sanitary landfill"
+
+' BRIDGE "Landfill", kg WASTE
+'   PROVIDER "uuid of the treatment for this waste"
+'   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE
+
+' ------------------------------------------------------------
+' Incineration (a waste treatment)
+' ------------------------------------------------------------
+FIND PROCESS "municipal incineration"
+
+' BRIDGE "Incineration", kg WASTE
+'   PROVIDER "uuid of the treatment for this waste"
+'   DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024
+' END BRIDGE

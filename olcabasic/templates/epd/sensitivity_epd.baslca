@@ -1,0 +1,35 @@
+' ============================================================
+' Sensitivity analysis for an EPD
+'
+' Varies the main A1 and A3 parameters up and down, one at a time,
+' and shows how far each one moves the results of the EPD method.
+'
+' A parameter here is a variable used as an amount in a PROCESS
+' block, for example:
+'
+'     LET cement_mass = 300
+'     ...
+'     INPUT USE PROCESS "BRIDGE | Cement | kg", cement_mass, kg
+'
+' SHOW SYSTEM "A1: Raw material supply" PARAMS lists the parameters
+' of a module's product system.
+'
+' DECIDE: the system names (the module totals), the parameters, and
+' the range. BY has no default.
+' ============================================================
+
+LET range_percent = 10
+
+' A1: the main raw material amounts
+' SENSITIVITY ON "A1: Raw material supply" USING "EN15804+A2 (EF 3.1)" BY 10%
+'   VARY cement_mass, aggregate_mass
+'   SAVE "sensitivity_a1.csv"
+' END SENSITIVITY
+
+' A3: energy and yield in manufacturing
+' SENSITIVITY ON "A3: Manufacturing" USING "EN15804+A2 (EF 3.1)" BY 10%
+'   VARY electricity_kwh, heat_mj
+'   SAVE "sensitivity_a3.csv"
+' END SENSITIVITY
+
+PRINT "Take the apostrophes off the SENSITIVITY blocks and put your own names in."

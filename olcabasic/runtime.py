@@ -200,3 +200,5 @@ class Runtime:
         self.program_history.clear()
         self.epd = None
         self.epd_module = ""
+        self.epd = None
+        self.epd_module = ""
