@@ -32,7 +32,7 @@ from . import __version__ as VERSION
 
 def main():
     parser = argparse.ArgumentParser(
-        description="olcaBASIC — BASIC-like language for openLCA",
+        description="olcaBASIC: a BASIC-like language for openLCA",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

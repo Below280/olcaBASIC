@@ -207,7 +207,7 @@ class ExploreMixin:
         if limit <= 0:
             return {
                 "error": f"limit must be a positive integer (got {limit}). "
-                         f"Use 1–{MAX_SEARCH_LIMIT}."
+                         f"Use 1 to {MAX_SEARCH_LIMIT}."
             }
         elif limit > MAX_SEARCH_LIMIT:
             limit = MAX_SEARCH_LIMIT
@@ -258,7 +258,7 @@ class ExploreMixin:
         if limit <= 0:
             return {
                 "error": f"limit must be a positive integer (got {limit}). "
-                         f"Use 1–{MAX_SEARCH_LIMIT}."
+                         f"Use 1 to {MAX_SEARCH_LIMIT}."
             }
         elif limit > MAX_SEARCH_LIMIT:
             limit = MAX_SEARCH_LIMIT
