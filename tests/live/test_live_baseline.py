@@ -227,10 +227,27 @@ def test_contribution_matches_the_baseline(live, baseline, names, tol):
                              if c["process"] not in live.bridges
                              ][:len(w["contributors"])]
         assert len(g["contributors"]) == len(w["contributors"]), cat
-        for gc, wc in zip(g["contributors"], w["contributors"]):
-            assert gc["process"] == rename(wc["process"], baseline, names), cat
-            assert gc["flow"] == rename(wc["flow"], baseline, names), cat
+        gs, ws = g["contributors"], w["contributors"]
+        # Every amount, in rank order, matches to the tolerance.
+        for gc, wc in zip(gs, ws):
             assert close(gc["amount"], wc["amount"], tol), (
                 f"{cat} / {wc['process']}: {gc['amount']!r} is not "
                 f"{wc['amount']!r}")
             assert abs(gc["pct"] - wc["pct"]) <= 0.011, cat
+        # Every name matches. Processes whose amounts are equal to the
+        # tolerance may come in either order: a market with one supplier
+        # passes on everything upstream of it, so the two tie, and which
+        # is ranked first is floating-point noise (seen on 12/11/2026:
+        # 1.384078928112377e-08 against 1.3840789281123769e-08).
+        i = 0
+        while i < len(ws):
+            j = i
+            while j + 1 < len(ws) and close(ws[j + 1]["amount"],
+                                            ws[i]["amount"], tol):
+                j += 1
+            got_names = sorted((c["process"], c["flow"]) for c in gs[i:j + 1])
+            want_names = sorted((rename(c["process"], baseline, names),
+                                 rename(c["flow"], baseline, names))
+                                for c in ws[i:j + 1])
+            assert got_names == want_names, (cat, i, j)
+            i = j + 1

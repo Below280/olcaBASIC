@@ -241,10 +241,13 @@ def test_attach_a_file_or_say_why_not(made, tmp_path):
             assert r.ok, r.errors
             assert get(made, o.Source, name).external_file
     else:
+        # refused before anything is saved (12/11/2026)
         if "exists already" not in r.text:
             assert not r.ok
             assert "2.6.2" in r.errors[0]["message"] + r.errors[0]["hint"]
-        assert get(made, o.Source, name)
+            assert "Nothing was saved" in r.errors[0]["message"]
+            assert not [d for d in made.engine.client.get_descriptors(o.Source)
+                        if d.name == name]
 
 
 def test_export_json_ld(made, tmp_path):
