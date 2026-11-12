@@ -1449,23 +1449,22 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                                 f"or use INPUT MAKE FLOW to create a "
                                 f"new flow.",
                                 line)
-                        elif check_only:
-                            self._require_family(line, "a new output flow")
-                            flow_id = "(to be created)"
                         else:
-                            self.out.write(f"  NOTE: Creating new flow "
-                                  f"'{flow_name}' (use OUTPUT NEW to "
-                                  f"suppress this message)")
-                            flow_result = self.bridge.create_flow(
-                                flow_name, unit, category, flow_type)
-                            if "error" in flow_result:
-                                raise BasicError(
-                                    f"Flow '{flow_name}': "
-                                    f"{flow_result['error']}",
-                                    line)
-                            flow_id = flow_result["flow_id"]
-                            if not flow_result.get("already_existed"):
-                                self._made_flow(flow_name)
+                            # An OUTPUT that matches nothing used to
+                            # create the flow with a note. A misspelt
+                            # name then made a second flow without a
+                            # word, so it is an error, as for INPUT.
+                            kind = (", PRODUCT" if ex.is_product
+                                    else ", WASTE" if ex.is_waste else "")
+                            raise BasicError(
+                                f"No flow is called '{flow_name}', and an "
+                                f"OUTPUT line does not create one.", line,
+                                hint=f"To create it, write OUTPUT MAKE FLOW "
+                                     f"\"{flow_name}\", amount, "
+                                     f"{unit or 'unit'}{kind}. If the flow "
+                                     f"should exist already, FIND FLOW "
+                                     f"\"{flow_name}\" shows the names in "
+                                     f"the database.")
 
             # Build exchange dict
             ex_dict = {

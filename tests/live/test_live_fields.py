@@ -125,7 +125,7 @@ SYSTEM "{NAME}"
     {PARAM} = 4
   END PARAMETER SET
   ANALYSIS GROUP "Energy"
-    "{name}" LOCATION "{location}"
+    "{BRIDGE}"
   END ANALYSIS GROUP
 END SYSTEM
 VALIDATE "{NAME}"
@@ -233,7 +233,9 @@ def test_results_by_analysis_group(runner, model, unallocated):
     by = {r["group"]: r["amount"] for r in rows}
     assert near(sum(by.values()), total)
     # everything comes through the electricity; the process itself
-    # emits nothing
+    # emits nothing. The group holds the bridge: in a large system
+    # openLCA gives a group behind an ungrouped process nothing (see
+    # NO_GROUP_ROWS in engine/results.py).
     assert near(by["Energy"], total)
     flows = runner.run("RESULT FLOWS TOP 1")["rows"]
     rows = runner.run(

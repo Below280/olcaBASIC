@@ -585,6 +585,26 @@ class ResultsMixin:
                         "again."})
         return r._groups
 
+    # openLCA follows a group from the reference process downwards. In
+    # a system with more than a few hundred links on the way to the
+    # grouped processes (any system on a background database) it only
+    # steps into a process that is itself in a group, so a group that
+    # starts behind an ungrouped process, such as a bridge, gets
+    # nothing, and no row comes back at all. (olca-core, results/agroups:
+    # Traversal runs "reduced" above 250 links. Found live.)
+    NO_GROUP_ROWS = (
+        "openLCA returned no group results. In a large system it only "
+        "follows a group from the reference process through processes "
+        "that are in a group themselves. Put the process the reference "
+        "process uses directly in the group (the bridge, not the "
+        "background process behind it), then calculate again.")
+
+    def _grouped(self, out: Dict) -> Dict:
+        if not out.get("rows"):
+            out["note"] = (out["note"] + " " if out.get("note") else "") \
+                + self.NO_GROUP_ROWS
+        return out
+
     def _tf_rows(self, values, key="amount") -> List[Dict]:
         return [dict(self._tf(v.tech_flow), **{key: v.amount})
                 for v in values if v.tech_flow is not None]
@@ -1055,10 +1075,11 @@ class ResultsMixin:
             self._need_groups(r)
             rows = [{"group": g.group, "amount": g.amount}
                     for g in res.get_grouped_cost_results()]
-            return {"title": "Net costs by analysis group",
-                    "total": total.amount, "currency": currency,
-                    "note": note, "columns": ["group", "amount"],
-                    "rows": rows}
+            return self._grouped({
+                "title": "Net costs by analysis group",
+                "total": total.amount, "currency": currency,
+                "note": note, "columns": ["group", "amount"],
+                "rows": rows})
         if by == "tag":
             return self._by_tag(r, "result/tag-results-of-costs", {},
                                 "Net costs by process tag", currency)
@@ -1108,9 +1129,10 @@ class ResultsMixin:
             for g in r.result.get_grouped_impact_results_of(cat):
                 rows.append(dict(self._cat(cat), group=g.group,
                                  amount=g.amount))
-        return {"title": "Impacts by analysis group",
-                "columns": ["category", "group", "amount", "unit"],
-                "rank_within": "category", "rows": rows}
+        return self._grouped({
+            "title": "Impacts by analysis group",
+            "columns": ["category", "group", "amount", "unit"],
+            "rank_within": "category", "rows": rows})
 
     def _q_flows_by_group(self, r, flow, compartment=None):
         self._need_groups(r)
@@ -1118,9 +1140,10 @@ class ResultsMixin:
         rows = [{"group": g.group, "amount": g.amount,
                  "unit": getattr(ef.flow, "ref_unit", "") or ""}
                 for g in r.result.get_grouped_flow_results_of(ef)]
-        return {"title": f"{ef.flow.name} by analysis group",
-                "flow": ef.flow.name,
-                "columns": ["group", "amount", "unit"], "rows": rows}
+        return self._grouped({
+            "title": f"{ef.flow.name} by analysis group",
+            "flow": ef.flow.name,
+            "columns": ["group", "amount", "unit"], "rows": rows})
 
     def _by_tag(self, r, method: str, params: Dict, title: str, unit: str):
         if not self.ipc_supports(method):

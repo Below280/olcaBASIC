@@ -672,13 +672,17 @@ class EpdWorkflow(EpdToolkitMixin):
         if not bridged:
             seg = info["category"].strip("/").split("/")[-1].upper()
             if seg in MODULE_ORDER and seg != code:
-                # said once the process is built (this is also called
-                # on the look-up pass, whose output is not shown)
-                text = (f"  WARNING: MODULE {code} uses '{info['name']}' "
-                        f"from module {seg}. Its impacts are then counted "
-                        f"in both modules.")
-                if text not in self._notes:
-                    self._notes.append(text)
+                # One module's process inside another module is
+                # counted in both, so it is refused (it was a warning).
+                raise BasicError(
+                    f"MODULE {code} uses '{info['name']}', which belongs "
+                    f"to module {seg}. Its impacts would be counted in "
+                    f"both modules.", line,
+                    hint=f"If {code} needs the same supply, give it its "
+                         f"own input: a bridge to the background process, "
+                         f"or a process of its own inside MODULE {code}. "
+                         f"If the process belongs in {code}, build it "
+                         f"there and not in {seg}.")
             return
         tags = self._tags(info["id"])
         current = self.current or {}

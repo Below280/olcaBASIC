@@ -595,7 +595,9 @@ END MODULE''')
     assert amount_of(total, inputs[0]) == pytest.approx(1.9)
 
 
-def test_using_another_modules_process_is_a_warning(session, client):
+def test_using_another_modules_process_is_refused(session, client):
+    """It was a warning; the impacts were then counted in both modules
+    (second rebuild, rule 4)."""
     build(session, client)
     session.run('CONFIRM DELETE ON\nDELETE PROCESS "A3: Manufacturing"\n'
                 'DELETE PROCESS "A3 | Manufacturing"')
@@ -607,8 +609,13 @@ def test_using_another_modules_process_is_a_warning(session, client):
   END PROCESS
   TOTAL "Manufacturing"
 END MODULE''')
-    assert r.ok, r.errors
-    assert any("counted in both modules" in w["message"] for w in r.warnings)
+    assert not r.ok
+    error = r.errors[0]
+    assert error["line"] == 5
+    assert "belongs to module A1" in error["message"]
+    assert "counted in both modules" in error["message"]
+    assert "MODULE A3" in error["hint"]
+    assert not client.by_name(o.Process, "A3 | Manufacturing")
 
 
 def test_the_total_has_the_declared_unit_as_its_product(session, client):

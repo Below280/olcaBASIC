@@ -754,6 +754,36 @@ def test_impacts_by_group(grouped):
     assert len(every["rows"]) == 12
 
 
+def test_a_group_behind_an_ungrouped_process_says_why_it_is_empty(
+        session, client):
+    """Found live: in a large system openLCA gives a group nothing
+    unless the reference process uses a grouped process directly, and
+    then no row comes back. The answer says so, and what to do."""
+    client.large_system = True
+    system = client.by_name(o.ProductSystem, "Widget")[0]
+    elec = next(p for p in client.store["Process"].values()
+                if p.name == ELECTRICITY
+                and client._location_code(p.location) == "GB")
+    system.analysis_groups = [o.AnalysisGroup(
+        name="Energy", processes=[o.Ref(id=elec.id)])]
+    assert session.run(CALC).ok
+    r = query(session, f'RESULT IMPACTS BY GROUP CATEGORY "{FOSSIL}"')
+    assert r["rows"] == []
+    assert "the bridge, not the background process behind it" in r["note"]
+    # with the bridge in the group, the group has the electricity
+    widget = client.by_name(o.Process, "Widget")[0]
+    names = {p.id: p.name for p in client.store["Process"].values()}
+    bridge = next(ex.default_provider for ex in widget.exchanges
+                  if ex.default_provider is not None
+                  and "lectricity" in names[ex.default_provider.id])
+    system.analysis_groups = [o.AnalysisGroup(
+        name="Energy", processes=[o.Ref(id=bridge.id)])]
+    assert session.run(CALC).ok
+    r = query(session, f'RESULT IMPACTS BY GROUP CATEGORY "{FOSSIL}"')
+    assert rows_by(r, "group")["Energy"]["amount"] == pytest.approx(0.625)
+    assert "note" not in r
+
+
 def test_flows_and_costs_by_group(grouped, client):
     r = query(grouped, f'RESULT FLOWS BY GROUP FLOW "{CO2}"')
     assert rows_by(r, "group")["Top"]["amount"] == pytest.approx(0.5)
