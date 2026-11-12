@@ -2145,7 +2145,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 hint="Give the uncertain amounts a distribution: add "
                      "UNCERTAINTY LOGNORMAL gm, gsd (or NORMAL mean, sd; "
                      "TRIANGLE min, mode, max; UNIFORM min, max) to an "
-                     "INPUT or OUTPUT line, or to a LET. HELP UNCERTAINTY "
+                     "INPUT or OUTPUT line, or to a LET. HELP MAKE PROCESS "
                      "has the details.")
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
