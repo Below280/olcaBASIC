@@ -4,3 +4,7 @@
 dist/
 build/
 .eggs/
+
+tests/fixtures_private/
+.pytest_cache/
+*.bundle
