@@ -32,3 +32,13 @@ olcabasic = "olcabasic.__main__:main"
 Homepage = "https://github.com/Below280/olcaBASIC"
 Repository = "https://github.com/Below280/olcaBASIC"
 Issues = "https://github.com/Below280/olcaBASIC/issues"
+
+[tool.setuptools.packages.find]
+include = ["olcabasic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: needs openLCA with its IPC server on localhost:8080 (run with: pytest -m live)",
+    "slow: a live test that takes several minutes",
+]
