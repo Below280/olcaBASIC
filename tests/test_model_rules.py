@@ -601,3 +601,21 @@ def test_a_bridge_without_a_provider_is_not_given_one_silently(session,
     e = err(session.run(SETUP + f'BRIDGE "spare", kg\n  PROVIDER "{STEEL}"\n'
                                 f'END BRIDGE\n'))
     assert "passes on no provider" in e["message"]
+
+
+# ── found live: a new emission was made again on every run ───
+
+def test_a_new_emission_is_made_once_whatever_the_case_of_its_folder(client):
+    """openLCA puts a flow asked for in 'Elementary flows/emission to
+    air' into the folder that is there, 'Elementary flows/Emission to
+    air'. The look-up for an existing flow compared the two letter for
+    letter, found nothing, and every run made another flow of the same
+    name."""
+    for _ in range(3):
+        s = Session(client=client)
+        r = s.run(widget(extra=GAS))
+        assert r.ok, r.errors
+        s.close()
+    flows = client.by_name(o.Flow, "Mystery gas")
+    assert len(flows) == 1
+    assert flows[0].category.startswith("Elementary flows/Emission to air")

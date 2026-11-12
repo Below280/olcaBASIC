@@ -457,7 +457,12 @@ class BuildMixin:
         existing = self._get_descriptors(o.Flow)
         for f in existing:
             f_cat = getattr(f, "category", "") or ""
-            if f.name == name and (not category or category in f_cat):
+            # openLCA matches folder names whatever their case: a flow
+            # asked for in "Elementary flows/emission to air" lands in
+            # "Elementary flows/Emission to air". Compare the same way,
+            # or every run makes another flow of the same name.
+            if f.name == name and (not category
+                                   or category.lower() in f_cat.lower()):
                 return {
                     "flow_id": f.id,
                     "flow_name": f.name,
@@ -787,7 +792,8 @@ class BuildMixin:
             existing = [] if _build_only else self._get_descriptors(o.Process)
             for p in existing:
                 p_cat = getattr(p, "category", "") or ""
-                if p.name == name and (not category or category in p_cat):
+                if p.name == name and (not category
+                                       or category.lower() in p_cat.lower()):
                     return {
                         "process_id": p.id,
                         "process_name": p.name,
