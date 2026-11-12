@@ -63,8 +63,10 @@ LOCATION_SWITCH = "epd_location_based"
 # profile says otherwise
 DEFAULT_DIRECT_CONTROL = frozenset({"A3"})
 
-TYPE_GATE_CD = "Cradle to gate with modules C1 to C4 and module D"
-TYPE_OPTIONS_CD = ("Cradle to gate with options, modules C1 to C4 and "
+# The five EPD types, named as in EN 15804+A2 clause 5.2 (with a hyphen
+# for the module ranges).
+TYPE_GATE_CD = "Cradle to gate with modules C1-C4 and module D"
+TYPE_OPTIONS_CD = ("Cradle to gate with options, modules C1-C4, and "
                    "module D")
 TYPE_GRAVE = "Cradle to grave and module D"
 TYPE_GATE = "Cradle to gate"
@@ -1018,6 +1020,12 @@ class EpdWorkflow:
         systems = self._require_systems(line, "EPD CHECK")
         today = self.today().strftime("%d/%m/%Y")
         if skip:
+            if self.profile is not None:
+                raise BasicError(
+                    f"EPD CHECK SKIP is not allowed under PROGRAMME "
+                    f"\"{self.profile.name}\": an EPD for a programme is "
+                    f"checked, with no exceptions.", line,
+                    hint="Run EPD CHECK and fix what it finds.")
             if not reason.strip():
                 raise BasicError("EPD CHECK SKIP needs a reason.", line)
             self.check_state, self.check_reason = "skipped", reason.strip()
@@ -1097,10 +1105,11 @@ class EpdWorkflow:
         if self.check_state not in ("passed", "skipped"):
             why = ("failed" if self.check_state == "failed"
                    else "has not been run since the model last changed")
+            hint = ("Run EPD CHECK first." if self.profile is not None
+                    else "Run EPD CHECK first. To calculate without it, "
+                         "say why: EPD CHECK SKIP \"reason\".")
             raise BasicError(
-                f"EPD CALCULATE refused: EPD CHECK {why}.", line,
-                hint="Run EPD CHECK first. To calculate without it, say "
-                     "why: EPD CHECK SKIP \"reason\".")
+                f"EPD CALCULATE refused: EPD CHECK {why}.", line, hint=hint)
         systems = self._require_systems(line, "EPD CALCULATE")
         self.i._default("ALLOCATE")
         names = [c["name"] for c in self.categories]

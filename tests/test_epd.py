@@ -957,8 +957,25 @@ def test_check_needs_the_systems(session, client):
 def test_calculate_is_refused_before_check(session, client):
     build(session, client)
     session.run("EPD SYSTEMS")
-    refused(session.run("EPD CALCULATE"), "EPD CALCULATE refused",
-            "EPD CHECK", "SKIP")
+    e = refused(session.run("EPD CALCULATE"), "EPD CALCULATE refused",
+                "EPD CHECK")
+    assert "SKIP" not in e["hint"]       # not offered under a programme
+
+
+def test_calculate_refusal_offers_skip_without_a_programme(session, client):
+    r = session.run(epd_block(programme=False) + bridges(client) + MODULES)
+    assert r.ok, r.errors
+    session.run("EPD SYSTEMS")
+    refused(session.run("EPD CALCULATE"), "EPD CHECK", "SKIP")
+
+
+def test_check_skip_is_refused_under_a_programme(session, client):
+    build(session, client)
+    session.run("EPD SYSTEMS")
+    refused(session.run('EPD CHECK SKIP "Checked on 11/11/2026"'),
+            'not allowed under PROGRAMME "IES"', "no exceptions",
+            "Run EPD CHECK")
+    refused(session.run("EPD CALCULATE"), "EPD CALCULATE refused")
 
 
 def test_check_lists_what_is_missing_and_ends_with_the_caveat(session, client):
@@ -1000,10 +1017,12 @@ def test_check_skip_needs_a_reason():
 
 
 def test_check_skip_lets_calculate_run_and_is_reported(session, client, tmp_path):
-    build(session, client)
+    """Only outside a programme: see test_check_skip_is_refused_under_a_programme."""
+    r = session.run(epd_block(programme=False) + bridges(client) + MODULES)
+    assert r.ok, r.errors
     out = tmp_path / "r.csv"
     r = session.run('EPD SYSTEMS\nEPD CHECK SKIP "Checked on 11/11/2026"\n'
-                    f'EPD CALCULATE\nEPD DATA QUALITY\nEPD REPORT "{out}"')
+                    f'EPD CALCULATE\nEPD REPORT "{out}"')
     assert r.ok, r.errors
     rows = read_report(out)
     check = next(r for r in rows if r and r[0] == "Model check")

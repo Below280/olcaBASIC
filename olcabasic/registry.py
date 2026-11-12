@@ -742,9 +742,10 @@ END MODULE''',
               "pedigree scores or no description, and applies the "
               "programme's rules to the model as built. It checks "
               "structure and declarations only.\n"
-              "EPD CALCULATE is refused until this has passed. EPD CHECK "
-              "SKIP \"reason\" goes on without it, and the reason is "
-              "written into the report.",
+              "EPD CALCULATE is refused until this has passed. Without a "
+              "PROGRAMME, EPD CHECK SKIP \"reason\" goes on without it, "
+              "and the reason is written into the report. Under a "
+              "PROGRAMME there is no SKIP: the EPD is checked.",
         statements=("EpdCommandStmt",)),
     Command(
         name="EPD CALCULATE", topic="EPD",

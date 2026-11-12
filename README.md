@@ -879,7 +879,7 @@ What is enforced:
   `EXEMPT C AND D` block that justifies it; the exemption is refused
   for a product with biogenic carbon. `FUNCTIONAL UNIT` is refused for
   the cradle to gate types. The EPD type follows from the modules and
-  goes in the report.
+  goes in the report, named as in clause 5.2.
 - **Method.** It must be an EN 15804+A2 method with the full indicator
   set: 38 categories for `EN15804+A2 (EF 3.1)`. The 20-category method
   with the similar name is refused.
@@ -894,7 +894,8 @@ What is enforced:
   data for processes under direct control, no consumption-mix
   electricity in A1 to A3 processes under direct control, the grid
   region for countries with sub-national grids, cut-offs within the
-  limit, proxy data within the limit, data within its age limit.
+  limit, proxy data within the limit, data within its age limit. Under
+  a programme the model is always checked: there is no `EPD CHECK SKIP`.
   `EPD DATA QUALITY` works out the share of primary data and the rest
   of what the programme asks for. Every threshold is a named value in
   `olcabasic/workflows/programmes/ies.py`; another operator is another
