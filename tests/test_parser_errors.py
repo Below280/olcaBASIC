@@ -124,7 +124,10 @@ def test_compartment_must_be_known():
 
 def test_linking_must_be_known():
     e = error('SYSTEM "P"\n LINKING SOMETHING\nEND SYSTEM')
-    assert "LINKING must be PREFER_DEFAULTS or ONLY_DEFAULTS" in str(e)
+    # IGNORE_DEFAULTS and ONLY_LINK_PROVIDERS were added in the second
+    # rebuild, so the message lists four words now
+    assert "LINKING must be PREFER_DEFAULTS, ONLY_DEFAULTS" in str(e)
+    assert "IGNORE_DEFAULTS" in str(e)
 
 
 def test_update_needs_something_to_change():

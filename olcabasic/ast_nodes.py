@@ -89,9 +89,10 @@ class CommentStmt(Statement):
 
 @dataclass
 class LetStmt(Statement):
-    """LET name = expression"""
+    """LET name = expression [UNCERTAINTY distribution numbers]"""
     name: str = ""
     expr: Expr = None
+    uncertainty: Any = "unset"   # {"kind", "values"}; None removes it
 
 
 @dataclass
@@ -139,6 +140,7 @@ class FlowStmt(Statement):
     folder: Expr = None
     direction: str = ""  # AIR, WATER, SOIL, NATURE (for elementary)
     is_new: bool = False  # NEW marker: always create
+    fields: Dict = field(default_factory=dict)  # CAS, FORMULA, SYNONYMS...
 
 
 # ── Exchange (inside a process) ──────────────────────────
@@ -163,6 +165,8 @@ class ExchangeDef:
     location: Expr = None      # LOCATION "code" for disambiguation
     flow_folder: Expr = None   # FOLDER "path": USE FLOW looks only there
     line: int = 0              # source line of this exchange
+    extras: Dict = field(default_factory=dict)  # UNCERTAINTY, AVOIDED,
+                                                # COST, SITE, PROPERTY
 
 
 # ── Bridge ───────────────────────────────────────────────
@@ -200,6 +204,7 @@ class ProcessStmt(Statement):
     read_data: bool = False  # READ INPUTS FROM DATA
     provenance: Dict = None  # DATA PRIMARY|SECONDARY|PROXY ...
     control: str = ""        # CONTROL DIRECT|NONE
+    fields: Dict = field(default_factory=dict)  # ALLOCATION, DOCUMENT, ...
 
 
 # ── Edit process ─────────────────────────────────────────
@@ -219,6 +224,22 @@ class EditProcessStmt(Statement):
     provenance: Dict = None  # DATA PRIMARY|SECONDARY|PROXY ...
     control: str = ""        # CONTROL DIRECT|NONE
     update_param_lines: Dict[str, int] = field(default_factory=dict)
+    fields: Dict = field(default_factory=dict)  # ALLOCATION, DOCUMENT, ...
+    param_uncertainty: Dict = field(default_factory=dict)  # name -> spec
+    remove_allocation: List = field(default_factory=list)
+    remove_social: List = field(default_factory=list)
+
+
+@dataclass
+class EditSystemStmt(Statement):
+    """EDIT SYSTEM "name" ... END EDIT: parameter sets and analysis
+    groups stored on a product system."""
+    target: Expr = None
+    parameter_sets: List[Dict] = field(default_factory=list)
+    analysis_groups: List[Dict] = field(default_factory=list)
+    remove_parameter_sets: List = field(default_factory=list)
+    remove_analysis_groups: List = field(default_factory=list)
+    set_description: Expr = None
 
 
 # ── Edit flow / update parameter ─────────────────────
@@ -248,6 +269,10 @@ class SystemStmt(Statement):
     target_unit: str = ""
     target_property: Expr = None
     folder: Expr = None
+    parameter_sets: List[Dict] = field(default_factory=list)
+    analysis_groups: List[Dict] = field(default_factory=list)
+    prefer: str = ""            # UNIT or SYSTEM (PREFER ... PROCESSES)
+    cutoff: Expr = None
 
 
 # ── Calculation ──────────────────────────────────────────
@@ -342,6 +367,7 @@ class RunScenariosStmt(Statement):
     from_csv: Expr = None
     save_to: Expr = None
     allocation: str = ""
+    from_system: bool = False   # FROM SYSTEM: the stored parameter sets
 
 
 # ── Sensitivity ──────────────────────────────────────────

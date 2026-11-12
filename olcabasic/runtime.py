@@ -83,6 +83,11 @@ class Runtime:
         # name -> ("value", v) or ("formula", f)
         self.synced_globals: Dict[str, tuple] = {}
 
+        # UNCERTAINTY given on top-level LETs (name -> {"kind", "values"}
+        # or None), and what has been written to openLCA so far
+        self.var_uncertainty: Dict[str, Any] = {}
+        self.synced_uncertainty: Dict[str, Any] = {}
+
         # Scenario accumulator
         self.scenarios: Dict[str, Dict[str, float]] = {}
 
@@ -197,6 +202,8 @@ class Runtime:
         self.scenarios.clear()
         self.var_exprs.clear()
         self.synced_globals.clear()
+        self.var_uncertainty.clear()
+        self.synced_uncertainty.clear()
         self.confirm_delete = False
         self.validation.clear()
         self.defaults_shown.clear()

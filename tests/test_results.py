@@ -544,6 +544,9 @@ def test_result_scaling(calc):
     assert by[ELECTRICITY]["amount"] == pytest.approx(-9.0)  # MJ
     assert by[STEEL]["amount"] == pytest.approx(-0.8)
     r = query(calc, f'RESULT SCALING OF PROCESS "{ELECTRICITY}" UNSCALED')
+    # openLCA sends the whole column, zeros and all: only the entries
+    # that are not zero are shown
+    assert len(r["rows"]) == 1
     assert r["rows"][0]["amount"] == pytest.approx(3.6)
     r = query(calc, f'RESULT SCALING OF PROCESS "{ELECTRICITY}"')
     assert r["rows"][0]["amount"] == pytest.approx(9.0)

@@ -11,6 +11,7 @@ from .tokeniser import (Token, TokenType, TokeniseError,
                         tokenise, tokenise_line)
 from .ast_nodes import *
 from .parser_results import ResultsParserMixin, RESULT_HEADS
+from .parser_fields import FieldsParserMixin
 
 
 class ParseError(Exception):
@@ -25,7 +26,7 @@ class ParseError(Exception):
         super().__init__(f"Line {line}: {full}" if line else full)
 
 
-class Parser(ResultsParserMixin):
+class Parser(ResultsParserMixin, FieldsParserMixin):
     """Recursive descent parser for olcaBASIC."""
 
     def __init__(self, tokens: List[Token]):
@@ -93,6 +94,8 @@ class Parser(ResultsParserMixin):
         return float(tok.value)
 
     ALLOCATIONS = ("AS_DEFINED", "PHYSICAL", "ECONOMIC", "CAUSAL", "NONE")
+    LINKINGS = ("PREFER_DEFAULTS", "ONLY_DEFAULTS", "ONLY_LINK_PROVIDERS",
+                "IGNORE_DEFAULTS")
 
     def parse_allocation(self) -> str:
         """The word after ALLOCATE: one of ALLOCATIONS."""
@@ -438,6 +441,8 @@ class Parser(ResultsParserMixin):
         if kw == "EDIT":
             if self.peek_at(1).upper() == "FLOW":
                 return self.parse_edit_flow(line)
+            if self.peek_at(1).upper() == "SYSTEM":
+                return self.parse_edit_system(line)
             return self.parse_edit(line)
 
         if kw == "UPDATE":
@@ -633,8 +638,11 @@ class Parser(ResultsParserMixin):
             raise ParseError(f"Expected '=' after '{name}'", line)
         self.advance()  # consume =
         expr = self.parse_expr()
+        stmt = LetStmt(line=line, name=name, expr=expr)
+        if self.match_word("UNCERTAINTY"):
+            stmt.uncertainty = self.parse_uncertainty()
         self.expect_newline()
-        return LetStmt(line=line, name=name, expr=expr)
+        return stmt
 
     def parse_print(self, line: int) -> Statement:
         self.advance()  # consume PRINT
@@ -736,11 +744,20 @@ class Parser(ResultsParserMixin):
         flow_type = "PRODUCT"
         folder = None
         direction = ""
+        fields = {}
 
         # Parse type and modifiers
-        while self.peek().type == TokenType.KEYWORD:
+        while (self.peek().type == TokenType.KEYWORD
+               or self.at_word("CAS", "SYNONYMS", "INFRASTRUCTURE")):
             kw = self.peek().upper()
-            if kw in ("PRODUCT", "WASTE", "ELEMENTARY"):
+            if kw in ("CAS", "FORMULA", "SYNONYMS", "DESCRIPTION",
+                      "LOCATION"):
+                self.advance()
+                fields[kw.lower()] = self.parse_string_or_expr()
+            elif kw == "INFRASTRUCTURE":
+                self.advance()
+                fields["infrastructure"] = True
+            elif kw in ("PRODUCT", "WASTE", "ELEMENTARY"):
                 flow_type = self.advance().upper()
             elif kw == "TO":
                 self.advance()
@@ -775,7 +792,7 @@ class Parser(ResultsParserMixin):
         self.expect_newline()
         return FlowStmt(line=line, name=name, unit=unit,
                          flow_type=flow_type, folder=folder,
-                         direction=direction, is_new=is_new)
+                         direction=direction, is_new=is_new, fields=fields)
 
     def parse_bridge(self, line: int) -> BridgeStmt:
         self.advance()  # consume BRIDGE
@@ -894,6 +911,7 @@ class Parser(ResultsParserMixin):
         read_data = False
         provenance = None
         control = ""
+        fields = {}
 
         self._inside_process = True
 
@@ -931,6 +949,9 @@ class Parser(ResultsParserMixin):
                 process_schema = self.parse_string_or_expr()
                 self.expect_newline()
 
+            elif self.at_process_field():
+                self.parse_process_field(fields)
+
             elif kw in ("INPUT", "OUTPUT"):
                 ex = self.parse_exchange()
                 exchanges.append(ex)
@@ -963,7 +984,9 @@ class Parser(ResultsParserMixin):
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside PROCESS "
                     f"(expected INPUT, OUTPUT, LET, FOLDER, LOCATION, "
-                    f"DESCRIPTION, DATA, CONTROL or END PROCESS)", tok.line)
+                    f"DESCRIPTION, DATA, CONTROL, ALLOCATION, DEFAULT "
+                    f"ALLOCATION, DOCUMENT, SOCIAL, TYPE, INFRASTRUCTURE or "
+                    f"END PROCESS)", tok.line)
 
             self.skip_newlines()
 
@@ -979,7 +1002,7 @@ class Parser(ResultsParserMixin):
             description=description, flow_schema=flow_schema,
             process_schema=process_schema, exchanges=exchanges,
             local_params=local_params, read_data=read_data,
-            provenance=provenance, control=control)
+            provenance=provenance, control=control, fields=fields)
 
     def parse_pedigree(self):
         """PEDIGREE (1,2,1,1,3) or PEDIGREE "(1;2;1;1;3)" """
@@ -1059,14 +1082,21 @@ class Parser(ResultsParserMixin):
         flow_folder = None
         pedigree = None
         comment = None
+        extras = {}
 
         # Parse trailing modifiers
         # Allow optional comma before modifiers (e.g. "m3, PRODUCT")
         if self.peek().type == TokenType.COMMA:
             self.advance()
-        while self.peek().type == TokenType.KEYWORD:
+        while (self.peek().type == TokenType.KEYWORD
+               or self.at_exchange_extra()):
             kw = self.peek().upper()
-            if kw == "PRODUCT":
+            if self.at_exchange_extra():
+                self.parse_exchange_extra(extras)
+            elif kw == "PROPERTY":
+                self.advance()
+                extras["property"] = self.parse_string_or_expr()
+            elif kw == "PRODUCT":
                 is_product = True
                 self.advance()
             elif kw == "WASTE":
@@ -1118,7 +1148,7 @@ class Parser(ResultsParserMixin):
             pedigree=pedigree, comment=comment,
             direction_compartment=compartment, provider=provider,
             formula=formula, location=location, flow_folder=flow_folder,
-            line=ex_line)
+            line=ex_line, extras=extras)
 
     def parse_system(self, line: int) -> SystemStmt:
         self.advance()  # consume SYSTEM
@@ -1130,6 +1160,9 @@ class Parser(ResultsParserMixin):
         target_unit = ""
         target_property = None
         folder = None
+        sets, groups = [], []
+        prefer = ""
+        cutoff = None
 
         self.expect_newline()
         self.skip_newlines()
@@ -1137,17 +1170,34 @@ class Parser(ResultsParserMixin):
         # Block form only if the next line is a SYSTEM sub-command
         # or END SYSTEM. A bare END belongs to an enclosing block.
         if (self.at_keyword("LINKING", "TARGET", "FOLDER")
+                or self.at_word("PREFER", "CUTOFF")
+                or self.at_system_block()
                 or self.at_end_of("SYSTEM")):
             while not self.at_keyword("END"):
                 if self.peek().type == TokenType.EOF:
                     break
+                if self.at_system_block():
+                    self.parse_system_block(sets, groups)
+                    self.skip_newlines()
+                    continue
                 if self.match_keyword("LINKING"):
-                    if not self.at_keyword("PREFER_DEFAULTS", "ONLY_DEFAULTS"):
+                    if not self.at_word(*self.LINKINGS):
                         raise ParseError(
-                            "LINKING must be PREFER_DEFAULTS or "
-                            "ONLY_DEFAULTS", self.current_line())
+                            "LINKING must be PREFER_DEFAULTS, "
+                            "ONLY_DEFAULTS (also written "
+                            "ONLY_LINK_PROVIDERS) or IGNORE_DEFAULTS",
+                            self.current_line())
                     linking = self.advance().upper()
                     linking_given = True
+                elif self.match_word("PREFER"):
+                    if not self.at_word("UNIT", "SYSTEM"):
+                        raise ParseError(
+                            "Expected PREFER UNIT PROCESSES or PREFER "
+                            "SYSTEM PROCESSES", self.current_line())
+                    prefer = self.advance().upper()
+                    self.match_keyword("PROCESSES")
+                elif self.match_word("CUTOFF"):
+                    cutoff = self.parse_add_expr()
                 elif self.match_keyword("TARGET"):
                     target_amount = self.parse_expr()
                     if self.peek().type == TokenType.COMMA:
@@ -1160,7 +1210,8 @@ class Parser(ResultsParserMixin):
                 else:
                     raise ParseError(
                         f"'{self.peek().value}' is not allowed inside "
-                        f"SYSTEM (expected LINKING, TARGET, FOLDER or "
+                        f"SYSTEM (expected LINKING, PREFER, CUTOFF, TARGET, "
+                        f"FOLDER, PARAMETER SET, ANALYSIS GROUP or "
                         f"END SYSTEM)", self.current_line())
                 self.expect_newline()
                 self.skip_newlines()
@@ -1173,6 +1224,8 @@ class Parser(ResultsParserMixin):
             line=line, process_ref=process_ref, linking=linking,
             target_amount=target_amount, target_unit=target_unit,
             target_property=target_property, folder=folder,
+            parameter_sets=sets, analysis_groups=groups, prefer=prefer,
+            cutoff=cutoff,
             defaulted=self._defaulted(LINKING=linking_given,
                                       TARGET=target_amount is not None))
 
@@ -1382,11 +1435,25 @@ class Parser(ResultsParserMixin):
             allocation = ""
             from_csv = None
             save_to = None
+            from_system = False
 
-            if self.match_keyword("ALLOCATE"):
-                allocation = self.parse_allocation()
+            while True:
+                if self.match_keyword("ALLOCATE"):
+                    allocation = self.parse_allocation()
+                elif (self.at_keyword("FROM")
+                      and self.peek_at(1).upper() == "SYSTEM"):
+                    self.advance()
+                    self.advance()
+                    from_system = True
+                else:
+                    break
 
             self.expect_newline()
+            if from_system:
+                return RunScenariosStmt(
+                    line=line, system=system, method=method,
+                    allocation=allocation, from_system=True,
+                    defaulted=self._defaulted(ALLOCATE=allocation))
             self.skip_newlines()
 
             # Block form only for FROM / SAVE "file" / END RUN.
@@ -1714,9 +1781,10 @@ class Parser(ResultsParserMixin):
         limit = 0
         allowed = {
             "PROCESS": ("INPUTS", "OUTPUTS", "LOCATION", "DESCRIPTION",
-                        "PARAMS", "QUALITY"),
-            "FLOW": ("UNITS", "DESCRIPTION", "USAGE"),
-            "SYSTEM": ("PARAMS", "LINKS"),
+                        "PARAMS", "QUALITY", "DOCUMENT", "ALLOCATION",
+                        "SOCIAL", "FIELDS"),
+            "FLOW": ("UNITS", "DESCRIPTION", "USAGE", "FIELDS"),
+            "SYSTEM": ("PARAMS", "LINKS", "SETS", "GROUPS"),
             "PARAMETER": ("VALUE", "DESCRIPTION"),
         }[entity_type]
         if self.peek().type in (TokenType.KEYWORD, TokenType.IDENTIFIER):
@@ -2182,18 +2250,36 @@ class Parser(ResultsParserMixin):
                     "exchanges that use it would break, and openLCA's IPC "
                     "interface can't tell where a flow is used. Remove it "
                     "in openLCA's flow editor, which checks first.", ln)
+            elif self.at_keyword("SET") and self.peek_at(1).upper() in (
+                    "CAS", "FORMULA", "SYNONYMS", "DESCRIPTION", "LOCATION",
+                    "INFRASTRUCTURE"):
+                self.advance()
+                what = self.advance().upper().lower()
+                if what == "infrastructure":
+                    value = self._yes_no("SET INFRASTRUCTURE")
+                elif self.at_keyword("NONE"):
+                    self.advance()
+                    value = None
+                else:
+                    value = self.parse_string_or_expr()
+                stmt.operations.append({"op": "set", "field": what,
+                                        "value": value, "line": ln})
             elif self.at_keyword("SET"):
                 self.advance()
                 if not self.match_word("REFERENCE"):
-                    raise ParseError("Expected SET REFERENCE \"property\"", ln)
+                    raise ParseError(
+                        "Expected SET REFERENCE \"property\", or SET CAS, "
+                        "FORMULA, SYNONYMS, DESCRIPTION, LOCATION or "
+                        "INFRASTRUCTURE", ln)
                 prop = self.parse_string_or_expr()
                 stmt.operations.append({"op": "reference", "property": prop,
                                         "line": ln})
             else:
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside EDIT FLOW "
-                    f"(expected ADD PROPERTY, UPDATE PROPERTY, SET REFERENCE "
-                    f"or END EDIT)", ln)
+                    f"(expected ADD PROPERTY, UPDATE PROPERTY, SET REFERENCE, "
+                    f"SET CAS, SET FORMULA, SET SYNONYMS, SET DESCRIPTION, "
+                    f"SET LOCATION, SET INFRASTRUCTURE or END EDIT)", ln)
             self.expect_newline()
             self.skip_newlines()
 
@@ -2249,6 +2335,24 @@ class Parser(ResultsParserMixin):
                     raise ParseError("Expected INPUT, OUTPUT or PARAM "
                                      "after ADD", ln)
 
+            elif kw == "REMOVE" and self.peek_at(1).upper() == "ALLOCATION":
+                self.advance()
+                self.advance()
+                which = ""
+                if self.at_word("PHYSICAL", "ECONOMIC", "CAUSAL"):
+                    which = self.advance().upper()
+                stmt.remove_allocation.append((which, ln))
+                self.expect_newline()
+
+            elif kw == "REMOVE" and self.peek_at(1).upper() == "SOCIAL":
+                self.advance()
+                self.advance()
+                stmt.remove_social.append((self.parse_string_or_expr(), ln))
+                self.expect_newline()
+
+            elif self.at_process_field():
+                self.parse_process_field(stmt.fields)
+
             elif kw == "REMOVE":
                 self.advance()
                 d = direction()
@@ -2273,11 +2377,21 @@ class Parser(ResultsParserMixin):
                 self.advance()
                 if self.match_word("PARAM"):
                     name = self.advance().value
+                    if self.match_word("UNCERTAINTY"):
+                        # UPDATE PARAM name UNCERTAINTY ...: only that
+                        stmt.param_uncertainty[name] = (
+                            self.parse_uncertainty(), ln)
+                        self.expect_newline()
+                        self.skip_newlines()
+                        continue
                     if self.peek().type != TokenType.EQUALS:
                         raise ParseError(f"Expected '=' after {name}", ln)
                     self.advance()
                     stmt.update_params[name] = self.parse_expr()
                     stmt.update_param_lines[name] = ln
+                    if self.match_word("UNCERTAINTY"):
+                        stmt.param_uncertainty[name] = (
+                            self.parse_uncertainty(), ln)
                     self.expect_newline()
                 else:
                     d = direction()
@@ -2307,12 +2421,19 @@ class Parser(ResultsParserMixin):
                             upd["pedigree"] = self.parse_pedigree()
                         elif self.match_keyword("COMMENT"):
                             upd["comment"] = self.parse_string_or_expr()
+                        elif self.at_exchange_extra():
+                            self.parse_exchange_extra(
+                                upd.setdefault("extras", {}))
+                        elif self.match_keyword("PROPERTY"):
+                            upd.setdefault("extras", {})["property"] = \
+                                self.parse_string_or_expr()
                         else:
                             break
                     if len(upd) - ("index" in upd) == 3:
                         raise ParseError(
                             "UPDATE needs an amount, PROVIDER, LOCATION, "
-                            "PEDIGREE or COMMENT", ln)
+                            "PEDIGREE, COMMENT, UNCERTAINTY, AVOIDED, COST "
+                            "or SITE", ln)
                     stmt.update_exchanges.append(upd)
                     self.expect_newline()
 
@@ -2346,8 +2467,9 @@ class Parser(ResultsParserMixin):
             else:
                 raise ParseError(
                     f"'{tok.value}' is not allowed inside EDIT "
-                    f"(expected ADD, REMOVE, UPDATE, SET, DATA, CONTROL or "
-                    f"END EDIT)", ln)
+                    f"(expected ADD, REMOVE, UPDATE, SET, DATA, CONTROL, "
+                    f"ALLOCATION, DEFAULT ALLOCATION, DOCUMENT, SOCIAL, "
+                    f"TYPE, INFRASTRUCTURE or END EDIT)", ln)
             self.skip_newlines()
 
         self.expect_keyword("END")

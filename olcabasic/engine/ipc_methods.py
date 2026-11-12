@@ -50,9 +50,13 @@ IPC_METHODS: Dict[str, IpcMethod] = {
     # ── results ─────────────────────────────────────────────
     "result/calculate": IpcMethod("calculate"),
     "result/cost-contributions": IpcMethod("get_cost_contributions"),
-    "result/cost-intensities-of": IpcMethod("get_cost_intensities_of"),
+    "result/cost-intensities-of": IpcMethod(
+        "get_cost_intensities_of", note="the server answers with a bare number, which the "
+        "client's wrapper cannot read; the engine calls it directly"),
     "result/demand": IpcMethod("get_demand"),
-    "result/direct-costs-of": IpcMethod("get_direct_costs_of"),
+    "result/direct-costs-of": IpcMethod(
+        "get_direct_costs_of", note="the server answers with a bare number, which the "
+        "client's wrapper cannot read; the engine calls it directly"),
     "result/direct-impact-of": IpcMethod("get_direct_impact_of"),
     "result/direct-impacts-of": IpcMethod("get_direct_impacts_of"),
     "result/direct-intervention-of": IpcMethod("get_direct_intervention_of"),
@@ -91,7 +95,9 @@ IPC_METHODS: Dict[str, IpcMethod] = {
         None, "2.7", "results by process tag; not in the client"),
     "result/tech-flows": IpcMethod("get_tech_flows"),
     "result/total-costs": IpcMethod("get_total_costs"),
-    "result/total-costs-of": IpcMethod("get_total_costs_of"),
+    "result/total-costs-of": IpcMethod(
+        "get_total_costs_of", note="the server answers with a bare number, which the "
+        "client's wrapper cannot read; the engine calls it directly"),
     "result/total-flow-value-of": IpcMethod("get_total_flow_value_of"),
     "result/total-flows": IpcMethod("get_total_flows"),
     "result/total-impact-of": IpcMethod("get_total_impact_of"),

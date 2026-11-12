@@ -19,6 +19,7 @@ from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
 from .interp_results import ResultsInterpMixin
+from .interp_fields import FieldsInterpMixin
 from .workflows.epd import (
     EpdWorkflow, TAG_PREFIX, LOCATION_SWITCH, provenance_tags,
     provenance_documentation, tag_value,
@@ -29,6 +30,7 @@ from .formatting import (
     format_process_details, format_database_info, format_params,
     format_generic, format_flows, format_table, format_tree, results_to_csv,
     format_dq_systems, exchange_amount, param_values_of, format_flow_details,
+    process_extras_summary,
 )
 
 
@@ -92,7 +94,7 @@ def _command_word(stmt) -> str:
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
 
 
-class Interpreter(ResultsInterpMixin, EnforcementMixin):
+class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EnforcementMixin):
     """Executes olcaBASIC AST nodes."""
 
     def __init__(self, bridge: Optional[LCABridge] = None,
@@ -409,6 +411,9 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
         elif isinstance(stmt, EditFlowStmt):
             self._exec_edit_flow(stmt)
 
+        elif isinstance(stmt, EditSystemStmt):
+            self._exec_edit_system(stmt)
+
         elif isinstance(stmt, UpdateParamStmt):
             self._exec_update_param(stmt)
 
@@ -653,6 +658,7 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 self.runtime.var_exprs[stmt.name] = stmt.expr
             else:
                 self.runtime.var_exprs.pop(stmt.name, None)
+        self._let_uncertainty(stmt)
 
     def _exec_data(self, stmt: DataStmt):
         for val_expr in stmt.values:
@@ -833,6 +839,7 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
             existed = result.get("already_existed", False)
             status = "exists" if existed else "created"
             self.out.write(f"  Flow {status}: {name} ({stmt.unit}, {ft})")
+            self._flow_fields(stmt, result.get("flow_id"), existed)
         else:
             # Default: find existing
             found = self.bridge.find_flow(
@@ -847,6 +854,28 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 if "error" in result:
                     raise BasicError(result["error"], stmt.line)
                 self.out.write(f"  Flow created: {name} ({stmt.unit}, {ft})")
+                self._flow_fields(stmt, result.get("flow_id"), False)
+
+    def _flow_fields(self, stmt, flow_id, existed: bool):
+        """CAS, FORMULA, SYNONYMS, DESCRIPTION, LOCATION and
+        INFRASTRUCTURE on a MAKE FLOW line."""
+        if not stmt.fields or not flow_id:
+            return
+        if existed:
+            self.out.write(
+                "  NOTE: the flow existed already, so the CAS, FORMULA, "
+                "SYNONYMS, DESCRIPTION, LOCATION and INFRASTRUCTURE on "
+                "this line were not written. EDIT FLOW changes them.")
+            return
+        values = {k: (v if isinstance(v, bool) else self._eval_str(v))
+                  for k, v in stmt.fields.items()}
+        done = self.bridge.set_flow_fields(flow_id, values)
+        self._emit("set_flow_fields", done)
+        if "error" in done:
+            raise BasicError(done["error"], stmt.line,
+                             hint=done.get("hint", ""))
+        for c in done.get("changes", []):
+            self.out.write(f"    {c}")
 
     def _exec_bridge(self, stmt: BridgeStmt):
         self._require_bridge(stmt.line)
@@ -1033,7 +1062,11 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 self._at(let_stmt.line)
                 self.runtime.set_var(let_stmt.name,
                                      self._eval(let_stmt.expr))
-            exchanges = self._build_exchanges(stmt, folder, ex_list)
+            plan = {}
+            exchanges = self._build_exchanges(
+                stmt, folder, ex_list,
+                fields_check=lambda checked: plan.update(
+                    self._make_process_fields(stmt, ex_list, checked)))
             local_values = {n: self.runtime.get_var(n) for n in
                             (l.name for l in stmt.local_params)}
         finally:
@@ -1066,10 +1099,15 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                         self._sync_global(var_name, ex_line)
         self._at(stmt.line)
 
-        return self._create_process(
+        done = self._create_process(
             stmt, name, folder, exchanges, parameters, description,
             location, flow_schema, process_schema, ex_lines=ex_lines,
             param_lines=[l.line or stmt.line for l in stmt.local_params])
+        created = self._last_created
+        if plan and created and not created.get("already_existed"):
+            self._write_process_fields(created["process_id"], plan,
+                                       stmt.line)
+        return done
 
     def _referenced_globals(self, formula: str) -> list:
         """Top-level variables named in a formula (whole words only,
@@ -1105,6 +1143,7 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
 
         previous = self.runtime.synced_globals.get(name)
         if previous == desired and not force:
+            self._sync_uncertainty(name, line)
             return
 
         if desired[0] == "formula":
@@ -1135,6 +1174,7 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                   f"(was {was}) and has been updated. Other models in "
                   f"this database that use it will change too.")
         self.runtime.synced_globals[name] = desired
+        self._sync_uncertainty(name, line)
 
     def _check_overridable(self, names, what: str, line: int):
         """Derived variables are calculated by openLCA; point users at
@@ -1149,16 +1189,24 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                     f"{' or '.join(deps)} instead.", line)
 
     def _build_exchanges(self, stmt: ProcessStmt, folder: str,
-                         ex_list: list) -> list:
+                         ex_list: list, fields_check=None) -> list:
         """Resolve the exchanges of a PROCESS or EDIT block.
 
         Done twice: a first pass that looks everything up but creates
         nothing, so a wrong name on any line stops the block before a
-        single flow is written; then the real pass."""
-        if any(ex.is_new or not ex.direction_compartment for ex in ex_list):
+        single flow is written; then the real pass. fields_check is
+        called between the two with the exchanges as the first pass
+        found them, to check the block's other lines (uncertainty,
+        costs, allocation and so on) before anything is written."""
+        if (fields_check is not None
+                or any(ex.is_new or not ex.direction_compartment
+                       for ex in ex_list)):
             real_out, self.out = self.out, _QuietSink(self.out)
             try:
-                self._resolve_exchanges(stmt, folder, ex_list, check_only=True)
+                checked = self._resolve_exchanges(stmt, folder, ex_list,
+                                                  check_only=True)
+                if fields_check is not None:
+                    fields_check(checked)
             finally:
                 self.out = real_out
         return self._resolve_exchanges(stmt, folder, ex_list)
@@ -1352,6 +1400,13 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 "is_input": ex.direction == "INPUT",
                 "is_qref": ex.is_product,
             }
+            if check_only:
+                # the kind of flow, for the checks on the block's
+                # other lines: a flow that exists says so itself
+                known = (self.bridge.flow_info(flow_id)
+                         if flow_id and flow_id != "(to be created)" else {})
+                ex_dict["flow_type"] = known.get("type") or flow_type
+                ex_dict["view_name"] = known.get("name") or flow_name
 
             # Set provider if we found a matching process
             if provider_id:
@@ -1681,9 +1736,21 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
 
         self._defaults(stmt)
         self.out.write(f"  Creating product system from: {proc_ref}...")
+        sets, groups = self._system_specs(stmt.parameter_sets,
+                                          stmt.analysis_groups)
+        cutoff = None
+        if stmt.cutoff is not None:
+            cutoff = self._number(stmt.cutoff, "CUTOFF", stmt.line)
+            if not 0 <= cutoff < 1:
+                raise BasicError(
+                    f"CUTOFF is a fraction from 0 to below 1 (got "
+                    f"{cutoff:g}).", stmt.line,
+                    hint="For example CUTOFF 0.001 leaves out supply "
+                         "chains that give less than 0.1% of the product.")
         result = self.bridge.create_system(
             proc_ref, linking, target_amount, target_unit,
-            target_prop, folder)
+            target_prop, folder, prefer=stmt.prefer.lower() or None,
+            cutoff=cutoff)
         self._emit("create_system", result)
 
         if "error" in result:
@@ -1712,6 +1779,20 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
         if result.get("warnings"):
             for w in result["warnings"]:
                 self.out.write(f"  WARNING: {w}")
+        if sets or groups:
+            try:
+                self._write_system_fields(
+                    result.get("system_id") or sys_name, stmt.line,
+                    parameter_sets=sets or None,
+                    analysis_groups=groups or None)
+            except BasicError as e:
+                raise BasicError(
+                    e.message, e.line,
+                    hint=(f"{e.hint} The product system '{sys_name}' "
+                          f"exists; its parameter sets and analysis groups "
+                          f"were not written. Correct the block and put "
+                          f"them in EDIT SYSTEM \"{sys_name}\" ... END "
+                          f"EDIT.").strip()) from None
 
     def _exec_contribution(self, stmt: ContributionStmt):
         self._require_bridge(stmt.line)
@@ -1782,6 +1863,10 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
         method = self._method(self._eval_str(stmt.method), stmt.line)
         self._require_valid(system, stmt.line, "RUN SCENARIOS")
         self._defaults(stmt)
+
+        if stmt.from_system:
+            self._run_stored_scenarios(stmt, system, method)
+            return
 
         if stmt.from_csv:
             # CSV-based scenarios
@@ -2215,7 +2300,14 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                              f"Give the exact name of the one you mean.",
                              stmt.line)
         ops = []
+        sets = {}
         for op in stmt.operations:
+            if op["op"] == "set":
+                value = op["value"]
+                sets[op["field"]] = (value if value is None
+                                     or isinstance(value, bool)
+                                     else self._eval_str(value))
+                continue
             entry = {"op": op["op"], "property": self._eval_str(op["property"])}
             if op["op"] in ("add", "update"):
                 amount = self._eval(op["amount"])
@@ -2226,13 +2318,25 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                              per_unit=op["per_unit"])
             ops.append(entry)
 
-        result = self.bridge.edit_flow(found["flow_id"], ops)
-        self._emit("edit_flow", result)
-        if "error" in result:
-            raise BasicError(result["error"], stmt.line)
+        if ops or not sets:
+            result = self.bridge.edit_flow(found["flow_id"], ops)
+            self._emit("edit_flow", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+        else:
+            result = {"flow_name": found.get("flow_name", target),
+                      "changes": []}
         self.out.write(f"  Edited flow: {result.get('flow_name', target)}")
         for c in result.get("changes", []):
             self.out.write(f"    {c}")
+        if sets:
+            done = self.bridge.set_flow_fields(found["flow_id"], sets)
+            self._emit("set_flow_fields", done)
+            if "error" in done:
+                raise BasicError(done["error"], stmt.line,
+                                 hint=done.get("hint", ""))
+            for c in done.get("changes", []):
+                self.out.write(f"    {c}")
         # A flow outside your own folders is shared with other models
         cat = (result.get("category") or found.get("category") or "").lower()
         mine = [f.lower().rstrip("/") for f in (self.runtime.flow_folder,
@@ -2349,8 +2453,10 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
         # Removals. The engine removes by flow, so a flow that appears
         # more than once can't be removed on its own.
         remove_ids = []
+        removed_internal = set()
         for spec in stmt.remove_exchanges:
             name, ex, line = find_exchange(spec, "remove")
+            removed_internal.add(ex.internal_id)
             if getattr(ex, "is_quantitative_reference", False):
                 raise BasicError(
                     f"'{name}' is the reference product of '{target}' and "
@@ -2364,8 +2470,13 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
 
         # Updates
         updates = []
+        field_exchanges = []
         for spec in stmt.update_exchanges:
             name, ex, line = find_exchange(spec, "update")
+            extras = self._exchange_extras(spec.get("extras") or {}, line)
+            if extras:
+                field_exchanges.append(dict(
+                    extras, internal_id=ex.internal_id, where=line))
             upd = {"flow_id": ex.flow.id}
             if is_repeated(ex):
                 upd["internal_id"] = ex.internal_id
@@ -2410,11 +2521,64 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                         f"different product, so it can't supply '{name}'",
                         line)
                 upd["provider_id"] = match["process_id"]
-            updates.append(upd)
+            if len(upd) > 1 + ("internal_id" in upd):
+                updates.append(upd)
+
+        # The block's other lines (uncertainty, costs, allocation,
+        # documentation and so on) are checked against the exchanges
+        # the process will have, before anything is written.
+        fields = self._process_fields(stmt.fields)
+        for name, (spec, ln) in stmt.param_uncertainty.items():
+            fields.setdefault("parameters", {})[name] = {
+                "uncertainty": self._uncertainty(spec, ln), "where": ln}
+        for let_stmt in stmt.add_params:
+            if let_stmt.uncertainty != "unset":
+                ln = let_stmt.line or stmt.line
+                fields.setdefault("parameters", {})[let_stmt.name] = {
+                    "uncertainty": self._uncertainty(let_stmt.uncertainty,
+                                                     ln), "where": ln}
+        for which, ln in stmt.remove_allocation:
+            for kind in ([which] if which else
+                         ["PHYSICAL", "ECONOMIC", "CAUSAL"]):
+                fields.setdefault("allocation", {}).setdefault(kind, [])
+        if stmt.remove_social:
+            fields["remove_social"] = [self._eval_str(e)
+                                       for e, _ in stmt.remove_social]
+
+        def check_fields(checked):
+            views = [v for v in self.bridge.exchange_views(proc_id)
+                     if v["internal_id"] not in removed_internal]
+            next_id = max([proc.last_internal_id or 0]
+                          + [e.internal_id or 0 for e in current])
+            for ex_def, ex_dict in zip(stmt.add_exchanges, checked):
+                next_id += 1
+                ln = ex_def.line or stmt.line
+                self._at(ln)
+                views.append({
+                    "internal_id": next_id,
+                    "flow_id": ex_dict.get("flow_id"),
+                    "flow_name": ex_dict.get("view_name", ""),
+                    "aliases": [ex_dict.get("flow_name", "")],
+                    "is_input": ex_dict.get("is_input", True),
+                    "is_qref": False,
+                    "flow_type": ex_dict.get("flow_type", "product"),
+                    "avoided": False})
+                extras = self._exchange_extras(ex_def.extras, ln)
+                if extras:
+                    field_exchanges.append(dict(
+                        extras, internal_id=next_id, where=ln))
+            if field_exchanges:
+                fields["exchanges"] = field_exchanges
+            if fields:
+                self._at(stmt.line)
+                done = self.bridge.check_process_fields(fields, views)
+                if "error" in done:
+                    self._fields_error(done, stmt.line)
 
         # Additions use exactly the same resolution as PROCESS
         folder = self.runtime.process_folder
-        added = self._build_exchanges(stmt, folder, stmt.add_exchanges)
+        added = self._build_exchanges(stmt, folder, stmt.add_exchanges,
+                                      fields_check=check_fields)
         add_lines = [ex.line or stmt.line for ex in stmt.add_exchanges]
         for ex_dict, ex_line in zip(added, add_lines):
             for var_name in self._referenced_globals(ex_dict.get("formula", "")):
@@ -2450,7 +2614,7 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
             kwargs["category"] = self._eval_str(stmt.set_category)
         if stmt.set_location is not None:
             kwargs["location"] = self._eval_str(stmt.set_location)
-        if not kwargs:
+        if not kwargs and not fields:
             if self._declare(proc_id, stmt):
                 self.out.write(f"  Edited process: {target}")
                 self.out.write("    data declaration updated")
@@ -2460,16 +2624,20 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 self.out.write(f"  Nothing to change in '{target}'.")
             return
 
-        result = self.bridge.edit_process(proc_id, **kwargs)
-        self._emit("edit_process", result)
-        if "error" in result:
-            raise BasicError(result["error"], stmt.line)
+        if kwargs:
+            result = self.bridge.edit_process(proc_id, **kwargs)
+            self._emit("edit_process", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+        else:
+            result = {"changes": []}
         changes = result.get("changes", [])
         warnings = [c for c in changes if str(c).startswith("WARNING")]
         self.out.write(f"  Edited process: {target}")
         for c in changes:
             if c not in warnings:
                 self.out.write(f"    {c}")
+        self._write_process_fields(proc_id, fields, stmt.line)
         if self._declare(proc_id, stmt):
             self.out.write("    data declaration updated")
         if self.runtime.epd is not None:
@@ -2513,6 +2681,8 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 if "error" in result:
                     raise BasicError(result["error"], stmt.line)
                 self.out.write(format_params(result))
+            elif sub in ("SETS", "GROUPS"):
+                self._show_system_fields(ref, sub, stmt.line)
             else:
                 desc = self.bridge.find_system(ref)
                 if desc is None:
@@ -2529,8 +2699,9 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                                f"{getattr(desc, 'category', '') or '(root)'}")
                 self.out.write(f"  UUID:      {desc.id}")
                 self.out.write(f"  Validated: {state}")
-                self.out.write(f"  SHOW SYSTEM \"{desc.name}\" PARAMS and "
-                               f"... LINKS [\"text\"] show more.")
+                self.out.write(f"  SHOW SYSTEM \"{desc.name}\" PARAMS, "
+                               f"... LINKS [\"text\"], ... SETS and "
+                               f"... GROUPS show more.")
             return
 
         if etype == "PROCESS" and sub == "QUALITY":
@@ -2550,8 +2721,17 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
             if "error" in result:
                 raise BasicError(result["error"], stmt.line)
 
-            if not sub:
+            if sub in ("DOCUMENT", "ALLOCATION", "SOCIAL", "FIELDS"):
+                self._show_process_fields(proc["process_id"], sub, stmt.line)
+            elif not sub:
                 self.out.write(format_process_details(result))
+                extra = self.bridge.get_process_fields(proc["process_id"])
+                summary = ("" if "error" in extra
+                           else process_extras_summary(extra))
+                if summary:
+                    self.out.write(
+                        f"  Also set: {summary}. SHOW PROCESS "
+                        f"\"{result.get('name', ref)}\" FIELDS shows them.")
             elif sub == "INPUTS":
                 exchanges = result.get("exchanges", [])
                 inputs = [e for e in exchanges if e.get("is_input")]
@@ -2656,6 +2836,21 @@ class Interpreter(ResultsInterpMixin, EnforcementMixin):
                 raise BasicError(flow["error"], stmt.line)
             if sub == "DESCRIPTION":
                 self.out.write(f"  {flow['description'] or '(none)'}")
+            elif sub == "FIELDS":
+                extra = self.bridge.get_flow_fields(found["flow_id"])
+                self._emit("get_flow_fields", extra)
+                if "error" in extra:
+                    raise BasicError(extra["error"], stmt.line)
+                self.out.write(f"  {extra['flow_name']}")
+                for label, key in (("CAS", "cas"), ("FORMULA", "formula"),
+                                   ("SYNONYMS", "synonyms"),
+                                   ("LOCATION", "location"),
+                                   ("DESCRIPTION", "description")):
+                    self.out.write(f"    {label:<14} "
+                                   f"{extra[key] or '(none)'}")
+                self.out.write(
+                    f"    {'INFRASTRUCTURE':<14} "
+                    f"{'YES' if extra['infrastructure'] else 'NO'}")
             else:
                 self.out.write(format_flow_details(flow, units_only=(sub == "UNITS")))
 

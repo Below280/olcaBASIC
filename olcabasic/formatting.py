@@ -687,3 +687,218 @@ def query_to_csv(result: Dict) -> str:
         writer.writerow(["" if row.get(c) is None else row.get(c)
                          for c in columns])
     return output.getvalue()
+
+
+# ── the wider fields of a process and a system (SHOW ...) ────
+
+_DOC_LABELS = {
+    "completeness_description": "COMPLETENESS",
+    "compliance_declarations": "COMPLIANCE",
+    "creation_date": "CREATED",
+    "data_collection_description": "DATA COLLECTION",
+    "data_documentor": "DOCUMENTOR",
+    "data_generator": "GENERATOR",
+    "data_selection_description": "DATA SELECTION",
+    "data_set_owner": "OWNER",
+    "data_treatment_description": "DATA TREATMENT",
+    "flow_completeness": "FLOW COMPLETENESS",
+    "geography_description": "GEOGRAPHY",
+    "intended_application": "INTENDED APPLICATION",
+    "inventory_method_description": "INVENTORY METHOD",
+    "is_copyright_protected": "COPYRIGHT",
+    "modeling_constants_description": "MODELLING CONSTANTS",
+    "project_description": "PROJECT",
+    "publication": "PUBLICATION",
+    "restrictions_description": "RESTRICTIONS",
+    "reviews": "REVIEW",
+    "sampling_description": "SAMPLING",
+    "sources": "SOURCE",
+    "technology_description": "TECHNOLOGY",
+    "time_description": "TIME",
+    "use_advice": "USE ADVICE",
+    "valid_from": "VALID FROM",
+    "valid_until": "VALID UNTIL",
+}
+
+
+def _document_lines(document: Dict) -> List[str]:
+    lines = []
+    for field_name, label in _DOC_LABELS.items():
+        if field_name not in document:
+            continue
+        value = document[field_name]
+        if field_name == "is_copyright_protected":
+            lines.append(f"    {label} {'YES' if value else 'NO'}")
+        elif field_name == "sources":
+            lines.extend(f"    {label} \"{v}\"" for v in value)
+        elif field_name == "flow_completeness":
+            lines.extend(f"    {label} \"{a['aspect']}\" \"{a['value']}\""
+                         for a in value)
+        elif field_name == "reviews":
+            for r in value:
+                text = f"    {label} \"{r['type']}\""
+                text += "".join(f" REVIEWER \"{a}\"" for a in r["reviewers"])
+                if r["details"]:
+                    text += f" DETAILS \"{r['details']}\""
+                if r["report"]:
+                    text += f" REPORT \"{r['report']}\""
+                for sc in r["scopes"]:
+                    text += f" SCOPE \"{sc['name']}\""
+                    text += "".join(f" METHOD \"{m}\"" for m in sc["methods"])
+                text += "".join(f" ASSESSMENT \"{a['aspect']}\" "
+                                f"\"{a['value']}\"" for a in r["assessment"])
+                lines.append(text)
+        elif field_name == "compliance_declarations":
+            for c in value:
+                text = f"    {label} \"{c['system']}\""
+                if c["comment"]:
+                    text += f" COMMENT \"{c['comment']}\""
+                text += "".join(f" ASPECT \"{a['aspect']}\" "
+                                f"\"{a['value']}\"" for a in c["aspects"])
+                lines.append(text)
+        else:
+            lines.append(f"    {label} \"{value}\"")
+    return lines
+
+
+def process_extras_summary(fields: Dict) -> str:
+    """One line saying which of the wider fields a process carries,
+    or '' if it has none."""
+    ex = fields.get("exchanges", [])
+    parts = []
+    n = sum(1 for e in ex if e.get("uncertainty"))
+    n += len(fields.get("parameters") or {})
+    if n:
+        parts.append(f"uncertainty on {n} amount{'s' if n != 1 else ''}")
+    n = sum(1 for e in ex if e.get("cost"))
+    if n:
+        parts.append(f"{n} cost{'s' if n != 1 else ''}")
+    n = sum(1 for e in ex if e.get("avoided"))
+    if n:
+        parts.append(f"{n} avoided product{'s' if n != 1 else ''}")
+    n = sum(1 for e in ex if e.get("site"))
+    if n:
+        parts.append(f"{n} exchange site{'s' if n != 1 else ''}")
+    if fields.get("allocation"):
+        parts.append("allocation factors ("
+                     + ", ".join(k.lower() for k in fields["allocation"]) + ")")
+    if fields.get("document"):
+        n = len(fields["document"])
+        parts.append(f"{n} documentation field{'s' if n != 1 else ''}")
+    if fields.get("social"):
+        n = len(fields["social"])
+        parts.append(f"{n} social aspect{'s' if n != 1 else ''}")
+    if fields.get("type") == "LCI RESULT":
+        parts.append("type LCI RESULT")
+    if fields.get("infrastructure"):
+        parts.append("infrastructure process")
+    return ", ".join(parts)
+
+
+def format_process_fields(fields: Dict, part: str = "FIELDS") -> str:
+    """SHOW PROCESS "x" FIELDS | DOCUMENT | ALLOCATION | SOCIAL."""
+    name = fields.get("process_name", "?")
+    lines = []
+    part = (part or "FIELDS").upper()
+    everything = part == "FIELDS"
+    if everything:
+        lines.append(f"  {name}")
+        lines.append(f"    TYPE {fields.get('type', 'UNIT')}"
+                     + ("   INFRASTRUCTURE" if fields.get("infrastructure")
+                        else ""))
+        if fields.get("default_allocation"):
+            lines.append(f"    DEFAULT ALLOCATION "
+                         f"{fields['default_allocation']}")
+        if fields.get("process_pedigree"):
+            lines.append(f"    PROCESS PEDIGREE {fields['process_pedigree']}")
+        rows = []
+        for e in fields.get("exchanges", []):
+            notes = []
+            if e.get("avoided"):
+                notes.append("AVOIDED")
+            if e.get("uncertainty"):
+                notes.append("UNCERTAINTY " + e["uncertainty"]["text"])
+            if e.get("base_uncertainty") is not None:
+                notes.append(f"BASE UNCERTAINTY {e['base_uncertainty']:g}")
+            if e.get("cost"):
+                c = e["cost"]
+                shown = (f"FORMULA \"{c['formula']}\"" if c.get("formula")
+                         else format_number(c.get("value") or 0.0))
+                notes.append(f"COST {shown} CURRENCY \"{c['currency']}\"")
+            if e.get("site"):
+                notes.append(f"SITE \"{e['site']}\"")
+            if notes:
+                rows.append([("INPUT" if e["is_input"] else "OUTPUT"),
+                             e["flow"], "  ".join(notes)])
+        if rows:
+            lines.append("")
+            lines.append(format_table(["", "Exchange", "Set on it"], rows,
+                                      max_widths=[6, 45, 80]))
+        for pname, unc in (fields.get("parameters") or {}).items():
+            lines.append(f"    LET {pname} UNCERTAINTY {unc['text']}")
+    if everything or part == "ALLOCATION":
+        allocation = fields.get("allocation") or {}
+        if not allocation and not everything:
+            lines.append(f"  {name}: no allocation factors")
+        for kind, factors in allocation.items():
+            lines.append(f"    ALLOCATION {kind}")
+            for f in factors:
+                share = (f"FORMULA \"{f['formula']}\"" if f.get("formula")
+                         else f"{f['value']:g}")
+                tail = f" FOR \"{f['exchange']}\"" if f.get("exchange") else ""
+                lines.append(f"      \"{f['product']}\", {share}{tail}")
+            lines.append("    END ALLOCATION")
+    if everything or part == "DOCUMENT":
+        doc = _document_lines(fields.get("document") or {})
+        if doc:
+            lines.append("    DOCUMENT")
+            lines.extend("  " + d for d in doc)
+            lines.append("    END DOCUMENT")
+        elif not everything:
+            lines.append(f"  {name}: no documentation fields are set")
+    if everything or part == "SOCIAL":
+        social = fields.get("social") or []
+        if not social and not everything:
+            lines.append(f"  {name}: no social aspects")
+        if fields.get("social_schema"):
+            lines.append(f"    SOCIAL SCHEMA \"{fields['social_schema']}\"")
+        for a in social:
+            text = (f"    SOCIAL \"{a['indicator']}\", \"{a['raw']}\", "
+                    f"{a['risk'].replace('_', ' ')}")
+            if a.get("activity") is not None:
+                text += f" ACTIVITY {a['activity']:g}"
+            if a.get("comment"):
+                text += f" COMMENT \"{a['comment']}\""
+            if a.get("source"):
+                text += f" SOURCE \"{a['source']}\""
+            if a.get("quality"):
+                text += f" QUALITY \"{a['quality']}\""
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def format_system_fields(fields: Dict, part: str = "") -> str:
+    """SHOW SYSTEM "x" SETS | GROUPS."""
+    name = fields.get("system", "?")
+    lines = []
+    part = (part or "").upper()
+    if part in ("", "SETS"):
+        sets = fields.get("parameter_sets") or []
+        if not sets:
+            lines.append(f"  {name}: no parameter sets")
+        for s in sets:
+            lines.append(f"    PARAMETER SET \"{s['name']}\""
+                         + (" BASELINE" if s["baseline"] else ""))
+            for v in s["values"]:
+                tail = f" IN PROCESS \"{v['process']}\"" if v["process"] else ""
+                lines.append(f"      {v['name']} = {v['value']:g}{tail}")
+            lines.append("    END PARAMETER SET")
+    if part in ("", "GROUPS"):
+        groups = fields.get("analysis_groups") or []
+        if not groups:
+            lines.append(f"  {name}: no analysis groups")
+        for g in groups:
+            lines.append(f"    ANALYSIS GROUP \"{g['name']}\"")
+            lines.extend(f"      \"{p}\"" for p in g["processes"])
+            lines.append("    END ANALYSIS GROUP")
+    return "\n".join(lines)

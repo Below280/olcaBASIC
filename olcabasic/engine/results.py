@@ -886,6 +886,9 @@ class ResultsMixin:
         tf = self._process(r, process, location, product)
         values = (r.result.get_unscaled_tech_flows_of(tf) if unscaled
                   else r.result.get_scaled_tech_flows_of(tf))
+        # openLCA answers with the whole column of the technology
+        # matrix: an entry per process of the system, nearly all zero
+        values = [v for v in values if v.amount]
         what = ("as written in the process" if unscaled
                 else "scaled to this calculation")
         return {"title": f"Product and waste flows of {tf.provider.name} "
@@ -1062,23 +1065,36 @@ class ResultsMixin:
         if process is not None:
             tf = self._process(r, process, location, product)
             if intensity:
-                v = res.get_cost_intensities_of(tf)
+                amount = self._cost_number(r, "result/cost-intensities-of", tf)
                 what = (f"per unit of {tf.flow.name if tf.flow else 'product'}"
                         f", with its supply chain")
             elif direct:
-                v = res.get_direct_costs_of(tf)
+                amount = self._cost_number(r, "result/direct-costs-of", tf)
                 what = "its own exchanges"
             else:
-                v = res.get_total_costs_of(tf)
+                amount = self._cost_number(r, "result/total-costs-of", tf)
                 what = "itself and its supply chain"
             return {"title": f"Net costs of {tf.provider.name} ({what})",
                     "currency": currency, "note": note,
                     "columns": ["process", "location", "amount"],
-                    "rows": [dict(self._tf(tf), amount=v.amount)]}
+                    "rows": [dict(self._tf(tf), amount=amount)]}
         return {"title": "Total net costs", "currency": currency,
                 "note": note, "columns": ["system", "amount", "currency"],
                 "rows": [{"system": r.system.name, "amount": total.amount,
                           "currency": currency}]}
+
+    def _cost_number(self, r, method: str, tf) -> float:
+        """The server answers the per-process cost methods with a bare
+        number, which the client's wrappers cannot read (they expect an
+        object), so these go through rpc_call."""
+        data, err = self.client.rpc_call(
+            method, {"@id": r.result.uid, "techFlow": tf.to_dict()})
+        if err:
+            raise _QueryError({"error": f"openLCA could not give the "
+                                        f"costs: {err}"})
+        if isinstance(data, dict):
+            return float(data.get("amount") or 0.0)
+        return float(data or 0.0)
 
     # analysis groups and tags
 

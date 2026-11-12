@@ -469,9 +469,9 @@ SET FLOW FOLDER "path"
 | `FIND METHOD` | olcaBASIC | Search impact methods by name |
 | `FIND UNIT` | olcaBASIC | Look up a unit and the flow property it belongs to |
 | `FIND CHEMICAL` | olcaBASIC | Look up a chemical's synonyms on PubChem |
-| `SHOW PROCESS` | olcaBASIC | Show a process: exchanges, parameters, data quality, location |
+| `SHOW PROCESS` | olcaBASIC | Show a process: exchanges, parameters, data quality, and its other fields |
 | `SHOW FLOW` | olcaBASIC | Show a flow: type, folder, units, or where it is used |
-| `SHOW SYSTEM` | olcaBASIC | Show a product system, its parameters or its provider links |
+| `SHOW SYSTEM` | olcaBASIC | Show a product system, its parameters, links, parameter sets or groups |
 | `SHOW GLOBAL PARAMS` | olcaBASIC | List global parameters, optionally those whose name contains a text |
 | `SHOW PARAMETER` | olcaBASIC | Show a global parameter |
 | `DATABASE INFO` / `PRINT DATABASE` / `DATABASE` | olcaBASIC | Count what is in the database and name its family |
@@ -494,9 +494,10 @@ FIND SYSTEM "text"
 FIND METHOD "text"
 FIND UNIT "unit"
 FIND CHEMICAL "name or CAS number"
-SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|DESCRIPTION]
-SHOW FLOW "name" [UNITS|DESCRIPTION|USAGE [LIMIT n]]
-SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"]]
+SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|DESCRIPTION|
+                     FIELDS|DOCUMENT|ALLOCATION|SOCIAL]
+SHOW FLOW "name" [UNITS|DESCRIPTION|FIELDS|USAGE [LIMIT n]]
+SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"] | SETS | GROUPS]
 SHOW GLOBAL PARAMS ["text"]
 SHOW PARAMETER "name" [VALUE|DESCRIPTION]
 DATABASE INFO
@@ -541,10 +542,34 @@ MAKE PROCESS "name" [LOCATION "code"]
   INPUT "resource", amount, unit FROM NATURE
   OUTPUT MAKE FLOW "waste", amount, unit, WASTE
   [... PEDIGREE (1,2,1,1,3)] [COMMENT "text"] [FORMULA "expression"]
+  [... UNCERTAINTY LOGNORMAL gm, gsd | NORMAL mean, sd |
+       TRIANGLE min, mode, max | UNIFORM min, max] [BASE UNCERTAINTY n]
+  [... AVOIDED] [COST value [FORMULA "x"] CURRENCY "code"]
+  [... SITE "location code"] [PROPERTY "flow property"]
+  [LET name = value UNCERTAINTY ...]
+  [TYPE UNIT | TYPE LCI RESULT] [INFRASTRUCTURE]
+  [PROCESS PEDIGREE (1,2,1,1)]
+  [DEFAULT ALLOCATION PHYSICAL|ECONOMIC|CAUSAL|NONE]
+  [ALLOCATION PHYSICAL|ECONOMIC
+     "product", share
+   END ALLOCATION]
+  [ALLOCATION CAUSAL
+     "product", share FOR INPUT|OUTPUT "flow"
+   END ALLOCATION]
+  [DOCUMENT
+     TIME "text" | GEOGRAPHY "text" | TECHNOLOGY "text" | ...
+   END DOCUMENT]
+  [SOCIAL "indicator", "raw value", risk level [ACTIVITY n]
+          [COMMENT "text"] [SOURCE "name"] [QUALITY (scores)]]
+  [SOCIAL SCHEMA "data quality system"]
   [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
   [CONTROL DIRECT|NONE]
 END PROCESS
 MAKE FLOW "name", unit, PRODUCT|WASTE|ELEMENTARY [FOLDER "path"]
+  [CAS "number"] [FORMULA "chemical formula"] [SYNONYMS "a; b"]
+  [DESCRIPTION "text"] [LOCATION "code"] [INFRASTRUCTURE]
+MAKE FLOW "name", unit TO AIR|WATER|SOIL
+MAKE FLOW "name", unit FROM NATURE
 BRIDGE "BRIDGE | name | unit", unit [WASTE]
   FOLDER "path"
   PROVIDER "process name or uuid"
@@ -554,9 +579,17 @@ BRIDGE "BRIDGE | name | unit", unit [WASTE]
   [LOCATION BASED PROVIDER "process name or uuid"]
 END BRIDGE
 SYSTEM "process name"
-  [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS]
+  [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS|IGNORE_DEFAULTS]
+  [PREFER UNIT PROCESSES | PREFER SYSTEM PROCESSES]
+  [CUTOFF fraction]
   [TARGET amount, unit [PROPERTY "flow property"]]
   [FOLDER "path"]
+  [PARAMETER SET "name" [BASELINE]
+     name = value [IN PROCESS "process"]
+   END PARAMETER SET]
+  [ANALYSIS GROUP "name"
+     "process" [LOCATION "code"]
+   END ANALYSIS GROUP]
 END SYSTEM
 LINK PROCESS "source" TO PROCESS "target" WITH amount, unit
 MOVE PROCESS|FLOW|SYSTEM "name" TO "folder"
@@ -569,7 +602,8 @@ CONFIRM DELETE ON|OFF
 | Command | Dialect | What it does |
 |---|---|---|
 | `EDIT PROCESS` | olcaBASIC | Add, remove or update exchanges and parameters of a process |
-| `EDIT FLOW` | olcaBASIC | Add or update a flow property, or set the reference property |
+| `EDIT FLOW` | olcaBASIC | Change a flow: its properties, CAS number, formula, synonyms, location |
+| `EDIT SYSTEM` | olcaBASIC | Change the parameter sets and analysis groups of a product system |
 | `PARAMETERISE PROCESS` / `PARAMETERIZE PROCESS` | olcaBASIC | Replace the fixed amounts of a process with parameters |
 
 ```basic
@@ -581,13 +615,38 @@ EDIT PROCESS "name or uuid"
   UPDATE INPUT|OUTPUT "name" [INDEX n], amount [, unit]
   UPDATE INPUT|OUTPUT "name" [LOCATION "code"] [PROVIDER "uuid"]
                              [PEDIGREE (1,2,1,1,3)] [COMMENT "text"]
-  UPDATE PARAM name = value
+  UPDATE INPUT|OUTPUT "name" [UNCERTAINTY ... | UNCERTAINTY NONE]
+                             [AVOIDED | NOT AVOIDED] [SITE "code" | NO SITE]
+                             [COST value CURRENCY "code" | NO COST]
+  UPDATE PARAM name = value [UNCERTAINTY ...]
+  UPDATE PARAM name UNCERTAINTY ... | UNCERTAINTY NONE
   SET DESCRIPTION|FOLDER|LOCATION "value"
+  ALLOCATION ... END ALLOCATION        (replaces that method's factors)
+  REMOVE ALLOCATION [PHYSICAL|ECONOMIC|CAUSAL]
+  DEFAULT ALLOCATION PHYSICAL|ECONOMIC|CAUSAL|NONE
+  DOCUMENT ... END DOCUMENT            (sets the fields it names)
+  SOCIAL "indicator", "raw value", risk level ...
+  REMOVE SOCIAL "indicator"
+  TYPE UNIT | TYPE LCI RESULT
+  INFRASTRUCTURE [YES|NO]
 END EDIT
 EDIT FLOW "name"
   ADD PROPERTY "Mass" AS 2400 kg PER m3
   UPDATE PROPERTY "Mass" AS 2350 kg PER m3
   SET REFERENCE "Mass"
+  SET CAS|FORMULA|SYNONYMS|DESCRIPTION|LOCATION "value" | NONE
+  SET INFRASTRUCTURE YES|NO
+END EDIT
+EDIT SYSTEM "name"
+  PARAMETER SET "name" [BASELINE] [DESCRIPTION "text"]
+    name = value [IN PROCESS "process"]
+  END PARAMETER SET
+  ANALYSIS GROUP "name" [COLOUR "#rrggbb"]
+    "process" [LOCATION "code"]
+  END ANALYSIS GROUP
+  REMOVE PARAMETER SET "name"
+  REMOVE ANALYSIS GROUP "name"
+  SET DESCRIPTION "text"
 END EDIT
 PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM
 ```
@@ -601,6 +660,8 @@ PARAMETERISE PROCESS "name" [LOCATION "code"] [ALL] CONFIRM
 
 ```basic
 LET name = expression
+  [UNCERTAINTY LOGNORMAL gm, gsd | NORMAL mean, sd |
+               TRIANGLE min, mode, max | UNIFORM min, max | NONE]
 UPDATE PARAMETER name = expression
 ```
 
@@ -702,6 +763,7 @@ RUN SCENARIOS ON "system" USING "method" [ALLOCATE method]
   [FROM CSV "scenarios.csv"]
   [SAVE "results.csv"]
 END RUN
+RUN SCENARIOS ON "system" USING "method" FROM SYSTEM
 SENSITIVITY ON "system" USING "method" BY n% [ALLOCATE method]
   VARY parameter [, parameter]
   [FROM "parameters.csv"]

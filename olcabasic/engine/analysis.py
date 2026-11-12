@@ -137,6 +137,51 @@ class AnalysisMixin:
             result["warning"] = ". ".join(warnings)
         return result
 
+    def run_parameter_sets(self, system_ref: str, method_ref: str,
+                           allocation: Optional[str] = None,
+                           names: Optional[List[str]] = None) -> Dict:
+        """
+        Run the parameter sets stored on a product system (openLCA's
+        own scenarios), one calculation each. names limits the run to
+        some of them. The result has the shape of run_scenarios.
+        """
+        system = self._resolve_system(system_ref)
+        if not system:
+            return {"error": f"Product system not found: {system_ref}"}
+        method = self._resolve_method(method_ref)
+        if not method:
+            return {"error": f"Impact method not found: {method_ref}"}
+        full = self.client.get(o.ProductSystem, system.id)
+        sets = list(getattr(full, "parameter_sets", None) or [])
+        if not sets:
+            return {"error": f"'{system.name}' has no parameter sets stored "
+                             f"on it. Add them with EDIT SYSTEM ... "
+                             f"PARAMETER SET \"name\" ... END PARAMETER SET."}
+        if names:
+            known = {s.name for s in sets}
+            missing = [n for n in names if n not in known]
+            if missing:
+                return {"error": f"'{system.name}' has no parameter set "
+                                 f"called: {', '.join(missing)}. Its sets: "
+                                 f"{', '.join(sorted(known))}."}
+            sets = [s for s in sets if s.name in names]
+        results = {}
+        for s in sets:
+            setup = o.CalculationSetup(
+                target=system, impact_method=method,
+                parameters=list(s.parameters or []),
+                allocation=self._resolve_allocation(allocation))
+            result = self.client.calculate(setup)
+            result.wait_until_ready()
+            try:
+                results[s.name] = self._impacts_to_list(
+                    result.get_total_impacts())
+            finally:
+                result.dispose()
+        return {"system": system.name, "method": method.name,
+                "scenario_count": len(results), "results": results,
+                "baseline": next((s.name for s in sets if s.is_baseline), "")}
+
     # ── CSV-based scenarios (mirrors B280_olca_scenarios.py) ──
 
     def read_scenarios_csv(self, csv_path: str) -> Dict:

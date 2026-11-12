@@ -15,6 +15,8 @@ BLOCK_OPENERS = {
     "PROCESS", "SENSITIVITY",
     "SCENARIO", "IF", "FOR", "WHILE", "SUB", "FUNCTION",
     "EDIT",
+    # blocks inside a PROCESS, SYSTEM or EDIT block
+    "ALLOCATION", "DOCUMENT", "ANALYSIS",
 }
 
 # Keywords that close a block
@@ -69,6 +71,10 @@ class REPL:
             # MAKE opens a block only for MAKE PROCESS; MAKE FLOW is one line
             if first_word == "MAKE" and len(words) > 1 and words[1] == "PROCESS":
                 first_word = "PROCESS"
+            # PARAMETER SET "name" opens a block; DEFAULT ALLOCATION and
+            # REMOVE ALLOCATION are single lines
+            if first_word == "PARAMETER" and len(words) > 1 and words[1] == "SET":
+                first_word = "ALLOCATION"
 
             if self._accumulating:
                 self._accumulated_lines.append(line)

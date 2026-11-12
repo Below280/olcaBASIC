@@ -200,13 +200,20 @@ COMMANDS: List[Command] = [
         statements=("FindStmt",)),
     Command(
         name="SHOW PROCESS", topic="EXPLORE",
-        usage='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|DESCRIPTION]',
-        summary="Show a process: exchanges, parameters, data quality, location",
+        usage='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|FIELDS|DOCUMENT|ALLOCATION|SOCIAL]',
+        summary="Show a process: exchanges, parameters, data quality, and its other fields",
+        syntax='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|'
+               'DESCRIPTION|\n                     FIELDS|DOCUMENT|ALLOCATION|SOCIAL]',
         example='SHOW PROCESS "Concrete block"\nSHOW PROCESS "Concrete block" INPUTS',
+        notes="FIELDS shows what MAKE PROCESS can set besides the "
+              "exchanges: type, uncertainty, avoided products, costs, "
+              "sites, allocation factors, documentation and social "
+              "aspects, in the form they are typed. DOCUMENT, ALLOCATION "
+              "and SOCIAL show one of those.",
         statements=("ShowStmt",)),
     Command(
         name="SHOW FLOW", topic="EXPLORE",
-        usage='SHOW FLOW "name" [UNITS|DESCRIPTION|USAGE [LIMIT n]]',
+        usage='SHOW FLOW "name" [UNITS|DESCRIPTION|FIELDS|USAGE [LIMIT n]]',
         summary="Show a flow: type, folder, units, or where it is used",
         example='SHOW FLOW "Concrete block" UNITS\nSHOW FLOW "Concrete block" USAGE LIMIT 5',
         notes="USAGE lists the processes and impact categories that use "
@@ -216,8 +223,8 @@ COMMANDS: List[Command] = [
         statements=("ShowStmt",)),
     Command(
         name="SHOW SYSTEM", topic="EXPLORE",
-        usage='SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"]]',
-        summary="Show a product system, its parameters or its provider links",
+        usage='SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"] | SETS | GROUPS]',
+        summary="Show a product system, its parameters, links, parameter sets or groups",
         example='SHOW SYSTEM "Concrete block"\nSHOW SYSTEM "Concrete block" LINKS "electricity"',
         notes="Without a sub-command it shows the folder, the UUID and "
               "whether the system passed VALIDATE in this session.",
@@ -330,6 +337,26 @@ COMMANDS: List[Command] = [
   INPUT "resource", amount, unit FROM NATURE
   OUTPUT MAKE FLOW "waste", amount, unit, WASTE
   [... PEDIGREE (1,2,1,1,3)] [COMMENT "text"] [FORMULA "expression"]
+  [... UNCERTAINTY LOGNORMAL gm, gsd | NORMAL mean, sd |
+       TRIANGLE min, mode, max | UNIFORM min, max] [BASE UNCERTAINTY n]
+  [... AVOIDED] [COST value [FORMULA "x"] CURRENCY "code"]
+  [... SITE "location code"] [PROPERTY "flow property"]
+  [LET name = value UNCERTAINTY ...]
+  [TYPE UNIT | TYPE LCI RESULT] [INFRASTRUCTURE]
+  [PROCESS PEDIGREE (1,2,1,1)]
+  [DEFAULT ALLOCATION PHYSICAL|ECONOMIC|CAUSAL|NONE]
+  [ALLOCATION PHYSICAL|ECONOMIC
+     "product", share
+   END ALLOCATION]
+  [ALLOCATION CAUSAL
+     "product", share FOR INPUT|OUTPUT "flow"
+   END ALLOCATION]
+  [DOCUMENT
+     TIME "text" | GEOGRAPHY "text" | TECHNOLOGY "text" | ...
+   END DOCUMENT]
+  [SOCIAL "indicator", "raw value", risk level [ACTIVITY n]
+          [COMMENT "text"] [SOURCE "name"] [QUALITY (scores)]]
+  [SOCIAL SCHEMA "data quality system"]
   [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
   [CONTROL DIRECT|NONE]
 END PROCESS''',
@@ -349,6 +376,30 @@ END PROCESS''',
               "An amount written as a number becomes a process parameter. "
               "An amount written with a variable stays a formula, and the "
               "variable becomes a global parameter.\n"
+              "UNCERTAINTY puts a distribution on an amount, for MONTECARLO. "
+              "The numbers are checked: a geometric standard deviation "
+              "above 1, a standard deviation above 0, minimum <= mode <= "
+              "maximum.\n"
+              "AVOIDED marks a co-product as an avoided product (never the "
+              "reference product). COST needs a currency that exists "
+              "(FIND CURRENCY). SITE gives the exchange its own location, "
+              "for regionalised calculation; LOCATION on the same line "
+              "still picks the provider.\n"
+              "ALLOCATION blocks hold the factors of one method: one line "
+              "per product, shares between 0 and 1 that add up to 1. "
+              "Causal factors are given per exchange (FOR INPUT \"flow\").\n"
+              "DOCUMENT holds openLCA's process documentation, one field "
+              "per line: COMPLETENESS, COMPLIANCE, COPYRIGHT YES|NO, "
+              "CREATED, DATA COLLECTION, DATA SELECTION, DATA TREATMENT, "
+              "DOCUMENTOR, FLOW COMPLETENESS, GENERATOR, GEOGRAPHY, "
+              "INTENDED APPLICATION, INVENTORY METHOD, MODELLING "
+              "CONSTANTS, OWNER, PROJECT, PUBLICATION, RESTRICTIONS, "
+              "REVIEW, SAMPLING, SOURCE, TECHNOLOGY, TIME, USE ADVICE, "
+              "VALID FROM, VALID UNTIL. Dates are DD/MM/YYYY or "
+              "YYYY-MM-DD. Actors and sources are named, and must exist "
+              "(MAKE ACTOR, MAKE SOURCE).\n"
+              "Every line of the block is checked before anything is "
+              "written. SHOW PROCESS \"name\" FIELDS reads these back.\n"
               "Running the block twice does not create a second process: "
               "it warns and leaves the first one alone.\n"
               "DATA and CONTROL declare where the data comes from and "
@@ -358,8 +409,16 @@ END PROCESS''',
         name="MAKE FLOW", aliases=("FLOW",), topic="BUILD",
         usage='MAKE FLOW "name", unit, PRODUCT|WASTE|ELEMENTARY [FOLDER "path"]',
         summary="Create a flow (or reuse the one that already has that name)",
+        syntax='''MAKE FLOW "name", unit, PRODUCT|WASTE|ELEMENTARY [FOLDER "path"]
+  [CAS "number"] [FORMULA "chemical formula"] [SYNONYMS "a; b"]
+  [DESCRIPTION "text"] [LOCATION "code"] [INFRASTRUCTURE]
+MAKE FLOW "name", unit TO AIR|WATER|SOIL
+MAKE FLOW "name", unit FROM NATURE''',
         example='MAKE FLOW "Concrete block", m3, PRODUCT',
-        notes="FLOW without MAKE looks for an existing flow first.",
+        notes="FLOW without MAKE looks for an existing flow first. The "
+              "extra fields are written when the flow is created; on a "
+              "flow that exists already they are left alone (EDIT FLOW "
+              "changes them).",
         statements=("FlowStmt",)),
     Command(
         name="BRIDGE", aliases=("MAKE BRIDGE",), topic="BUILD",
@@ -393,12 +452,32 @@ END BRIDGE''',
         usage='SYSTEM "process" ... END SYSTEM',
         summary="Create the product system for a process",
         syntax='''SYSTEM "process name"
-  [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS]
+  [LINKING PREFER_DEFAULTS|ONLY_DEFAULTS|IGNORE_DEFAULTS]
+  [PREFER UNIT PROCESSES | PREFER SYSTEM PROCESSES]
+  [CUTOFF fraction]
   [TARGET amount, unit [PROPERTY "flow property"]]
   [FOLDER "path"]
+  [PARAMETER SET "name" [BASELINE]
+     name = value [IN PROCESS "process"]
+   END PARAMETER SET]
+  [ANALYSIS GROUP "name"
+     "process" [LOCATION "code"]
+   END ANALYSIS GROUP]
 END SYSTEM''',
         example='SYSTEM "Concrete block"',
-        notes="Linking defaults to PREFER_DEFAULTS. One system is built "
+        notes="LINKING says what openLCA does with default providers: "
+              "PREFER_DEFAULTS uses them where they are set, ONLY_DEFAULTS "
+              "links nothing else (ONLY_LINK_PROVIDERS is the same, in "
+              "the words of openLCA's own dialogue), IGNORE_DEFAULTS lets "
+              "openLCA choose every provider itself. PREFER decides "
+              "between unit and system processes where no default "
+              "settles it; CUTOFF leaves out supply chains below that "
+              "fraction.\n"
+              "PARAMETER SET stores a scenario on the system; the one "
+              "marked BASELINE is what a plain CALCULATE uses. ANALYSIS "
+              "GROUP names processes whose results RESULT ... BY GROUP "
+              "adds up. EDIT SYSTEM changes both later.\n"
+              "Linking defaults to PREFER_DEFAULTS. One system is built "
               "at a time. If the system already exists it is reused: "
               "DELETE SYSTEM first to rebuild it after changing a process.",
         statements=("SystemStmt",)),
@@ -452,8 +531,20 @@ END SYSTEM''',
   UPDATE INPUT|OUTPUT "name" [INDEX n], amount [, unit]
   UPDATE INPUT|OUTPUT "name" [LOCATION "code"] [PROVIDER "uuid"]
                              [PEDIGREE (1,2,1,1,3)] [COMMENT "text"]
-  UPDATE PARAM name = value
+  UPDATE INPUT|OUTPUT "name" [UNCERTAINTY ... | UNCERTAINTY NONE]
+                             [AVOIDED | NOT AVOIDED] [SITE "code" | NO SITE]
+                             [COST value CURRENCY "code" | NO COST]
+  UPDATE PARAM name = value [UNCERTAINTY ...]
+  UPDATE PARAM name UNCERTAINTY ... | UNCERTAINTY NONE
   SET DESCRIPTION|FOLDER|LOCATION "value"
+  ALLOCATION ... END ALLOCATION        (replaces that method's factors)
+  REMOVE ALLOCATION [PHYSICAL|ECONOMIC|CAUSAL]
+  DEFAULT ALLOCATION PHYSICAL|ECONOMIC|CAUSAL|NONE
+  DOCUMENT ... END DOCUMENT            (sets the fields it names)
+  SOCIAL "indicator", "raw value", risk level ...
+  REMOVE SOCIAL "indicator"
+  TYPE UNIT | TYPE LCI RESULT
+  INFRASTRUCTURE [YES|NO]
 END EDIT''',
         example='''EDIT PROCESS "Concrete block"
   UPDATE INPUT "BRIDGE | Cement | kg", 320, kg
@@ -469,16 +560,56 @@ END EDIT''',
     Command(
         name="EDIT FLOW", topic="EDIT",
         usage='EDIT FLOW "name" ... END EDIT',
-        summary="Add or update a flow property, or set the reference property",
+        summary="Change a flow: its properties, CAS number, formula, synonyms, location",
         syntax='''EDIT FLOW "name"
   ADD PROPERTY "Mass" AS 2400 kg PER m3
   UPDATE PROPERTY "Mass" AS 2350 kg PER m3
   SET REFERENCE "Mass"
+  SET CAS|FORMULA|SYNONYMS|DESCRIPTION|LOCATION "value" | NONE
+  SET INFRASTRUCTURE YES|NO
 END EDIT''',
         example='''EDIT FLOW "Concrete block"
   ADD PROPERTY "Mass" AS 2400 kg PER m3
 END EDIT''',
         statements=("EditFlowStmt",)),
+    Command(
+        name="EDIT SYSTEM", topic="EDIT",
+        usage='EDIT SYSTEM "name" ... END EDIT',
+        summary="Change the parameter sets and analysis groups of a product system",
+        syntax='''EDIT SYSTEM "name"
+  PARAMETER SET "name" [BASELINE] [DESCRIPTION "text"]
+    name = value [IN PROCESS "process"]
+  END PARAMETER SET
+  ANALYSIS GROUP "name" [COLOUR "#rrggbb"]
+    "process" [LOCATION "code"]
+  END ANALYSIS GROUP
+  REMOVE PARAMETER SET "name"
+  REMOVE ANALYSIS GROUP "name"
+  SET DESCRIPTION "text"
+END EDIT''',
+        example='''EDIT SYSTEM "Concrete block"
+  PARAMETER SET "Low cement"
+    cement_mass = 250
+  END PARAMETER SET
+  ANALYSIS GROUP "Binder"
+    "BRIDGE | Cement | kg"
+  END ANALYSIS GROUP
+END EDIT''',
+        notes="A parameter set is one of openLCA's stored scenarios: "
+              "values for parameters of the system. A value without IN "
+              "PROCESS sets every input parameter of that name (the "
+              "global one and each process's own). The set marked "
+              "BASELINE is what a plain CALCULATE uses; CALCULATE ... "
+              "PARAMETER SET \"name\" uses another, and RUN SCENARIOS "
+              "... FROM SYSTEM runs them all.\n"
+              "An analysis group names processes of the system. RESULT "
+              "IMPACTS BY GROUP then adds up the results per group; a "
+              "process in no group counts with what it supplies. A "
+              "process can be in one group only.\n"
+              "A block with the name of a stored set or group replaces "
+              "it. SHOW SYSTEM \"name\" SETS and ... GROUPS read them "
+              "back.",
+        statements=("EditSystemStmt",)),
     Command(
         name="PARAMETERISE PROCESS", aliases=("PARAMETERIZE PROCESS",),
         topic="EDIT",
@@ -510,13 +641,19 @@ END EDIT''',
     # ── PARAMETERS ───────────────────────────────────────────
     Command(
         name="LET", dialect=BASIC, topic="PARAMETERS",
-        usage="LET name = expression",
+        usage="LET name = expression [UNCERTAINTY ...]",
+        syntax="LET name = expression\n"
+               "  [UNCERTAINTY LOGNORMAL gm, gsd | NORMAL mean, sd |\n"
+               "               TRIANGLE min, mode, max | UNIFORM min, max | NONE]",
         summary="Set a variable (LET may be left out: name = expression)",
         example="LET cement_mass = 300\nLET water_mass = cement_mass * 0.5",
         notes="A top-level variable used as an exchange amount becomes a "
               "global parameter in openLCA. A variable defined from other "
               "variables becomes a formula parameter, so it follows them "
-              "in scenarios. Text variables end in $: LET folder$ = \"00: X\".",
+              "in scenarios. Text variables end in $: LET folder$ = \"00: X\".\n"
+              "UNCERTAINTY gives the parameter a distribution for "
+              "MONTECARLO (HELP MAKE PROCESS has the rules for the "
+              "numbers); UNCERTAINTY NONE takes it away again.",
         statements=("LetStmt",)),
     Command(
         name="UPDATE PARAMETER", topic="PARAMETERS",
@@ -805,9 +942,12 @@ END SCENARIO''',
         syntax='''RUN SCENARIOS ON "system" USING "method" [ALLOCATE method]
   [FROM CSV "scenarios.csv"]
   [SAVE "results.csv"]
-END RUN''',
+END RUN
+RUN SCENARIOS ON "system" USING "method" FROM SYSTEM''',
         example='RUN SCENARIOS ON "Concrete block" USING "EF v3.1"',
-        notes="With FROM CSV the scenarios come from a file whose first "
+        notes="FROM SYSTEM runs the parameter sets stored on the product "
+              "system (SYSTEM ... PARAMETER SET, EDIT SYSTEM).\n"
+              "With FROM CSV the scenarios come from a file whose first "
               "column is Parameter and whose other columns are scenarios. "
               "The scenarios are cleared after the run.",
         statements=("RunScenariosStmt",)),
@@ -1285,6 +1425,7 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "DELETE": _READ + ("data/delete",),
     "EDIT PROCESS": _READ + ("data/put",),
     "EDIT FLOW": _READ + ("data/put",),
+    "EDIT SYSTEM": _READ + ("data/get/parameters", "data/put"),
     "PARAMETERISE PROCESS": _READ + ("data/put",),
     "LET": ("data/put",),
     "UPDATE PARAMETER": ("data/get/all", "data/put"),

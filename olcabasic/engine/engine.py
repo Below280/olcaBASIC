@@ -22,6 +22,8 @@ The class is put together from one module per kind of work:
     analysis.py   scenarios and sensitivity
     resolve.py    name resolution for the language (strict look-ups)
     results.py    results that stay open, and every query on one
+    fields.py     uncertainty, costs, allocation, documentation, social
+                  aspects, parameter sets, analysis groups
 """
 
 import logging
@@ -32,6 +34,7 @@ from .build import BuildMixin
 from .calculate import CalculateMixin
 from .core import CoreMixin
 from .explore import ExploreMixin
+from .fields import FieldsMixin
 from .resolve import ResolveMixin
 from .results import ResultsMixin
 
@@ -39,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class Engine(CoreMixin, ExploreMixin, BuildMixin, AuditMixin, CalculateMixin,
-             AnalysisMixin, ResolveMixin, ResultsMixin):
+             AnalysisMixin, ResolveMixin, ResultsMixin, FieldsMixin):
     """One connection's worth of openLCA operations.
 
     Methods return plain dictionaries. A failure is reported as

@@ -1043,6 +1043,7 @@ class BuildMixin:
                 return {"error": f"Process not found: {process_id}"}
 
             changes = []
+            added_ids = []
 
             # Update description
             if description is not None:
@@ -1303,6 +1304,7 @@ class BuildMixin:
                         x.dq_entry = ex_def["dq_entry"]
 
                     process.exchanges.append(x)
+                    added_ids.append(max_id)
                     changes.append(f"exchange '{flow_name}' added")
 
                 process.last_internal_id = max_id
@@ -1315,6 +1317,7 @@ class BuildMixin:
                 "process_id": process.id,
                 "process_name": process.name,
                 "changes": changes,
+                "added_internal_ids": added_ids,
                 "exchange_count": len(process.exchanges) if process.exchanges else 0,
                 "parameter_count": len(process.parameters) if process.parameters else 0,
             }
@@ -1737,13 +1740,24 @@ class BuildMixin:
                               target_amount: Optional[float] = None,
                               target_unit: Optional[str] = None,
                               target_flow_property: Optional[str] = None,
-                              category: Optional[str] = None) -> Dict:
+                              category: Optional[str] = None,
+                              prefer: Optional[str] = None,
+                              cutoff: Optional[float] = None) -> Dict:
         """
         Create a product system from a process.
 
         linking options:
           'prefer_defaults' - use default providers where set (recommended)
           'only_defaults'   - only link where default providers exist
+                              ('only_link_providers' is the same thing,
+                              in the words of openLCA's dialogue)
+          'ignore_defaults' - ignore default providers; openLCA picks a
+                              provider for every input itself
+
+        prefer: 'unit' (default) or 'system': which kind of process
+        openLCA takes when several can supply an input and no default
+        provider decides. cutoff: leave out supply chains whose
+        contribution to the product is below this fraction.
 
         Optional: set target_amount, target_unit (e.g. 'm3', 'kg'),
         target_flow_property (e.g. 'Volume', 'Mass'), and category
@@ -1825,15 +1839,28 @@ class BuildMixin:
             pass  # proceed and let openLCA report the error if any
 
         # Set up linking config
-        if linking == "only_defaults":
-            provider = o.ProviderLinking.ONLY_DEFAULTS
-        else:
-            provider = o.ProviderLinking.PREFER_DEFAULTS
+        modes = {"prefer_defaults": o.ProviderLinking.PREFER_DEFAULTS,
+                 "only_defaults": o.ProviderLinking.ONLY_DEFAULTS,
+                 "only_link_providers": o.ProviderLinking.ONLY_DEFAULTS,
+                 "ignore_defaults": o.ProviderLinking.IGNORE_DEFAULTS}
+        provider = modes.get((linking or "prefer_defaults").lower())
+        if provider is None:
+            return {"error": f"Unknown linking option '{linking}'. Use "
+                             f"prefer_defaults, only_defaults or "
+                             f"ignore_defaults."}
+        if prefer is not None and prefer.lower() not in ("unit", "system"):
+            return {"error": f"prefer must be 'unit' or 'system', not "
+                             f"'{prefer}'."}
+        if cutoff is not None and not 0 <= cutoff < 1:
+            return {"error": f"cutoff must be a fraction from 0 to below 1 "
+                             f"(got {cutoff})."}
 
         config = o.LinkingConfig(
-            prefer_unit_processes=True,
+            prefer_unit_processes=(prefer or "unit").lower() == "unit",
             provider_linking=provider,
         )
+        if cutoff:
+            config.cutoff = float(cutoff)
 
         system_id = None
         warnings = []
