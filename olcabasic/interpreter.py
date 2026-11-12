@@ -460,6 +460,9 @@ class Interpreter(EnforcementMixin):
         elif isinstance(stmt, NewFromTemplateStmt):
             self._exec_new_from_template(stmt)
 
+        elif isinstance(stmt, ParameteriseStmt):
+            self._exec_parameterise(stmt)
+
         elif isinstance(stmt, ClearStmt):
             self.out.clear_screen()
 
@@ -1473,6 +1476,73 @@ class Interpreter(EnforcementMixin):
                        stmt.location_based)
         elif command == "STATUS":
             epd.status()
+
+    BACKUP_WARNING = (
+        "This changes the process in the database for good. It cannot be "
+        "undone without restoring a backup of the database.")
+
+    def _exec_parameterise(self, stmt):
+        """PARAMETERISE PROCESS "name" CONFIRM: turn the fixed amounts
+        of a process into parameters. Refused without CONFIRM."""
+        self._require_bridge(stmt.line)
+        ref = self._eval_str(stmt.target)
+        location = self._eval_str(stmt.location) if stmt.location else ""
+        candidates = self.bridge.process_candidates(ref, location)
+        if len(candidates) > 1:
+            self._ambiguous_process(ref, location, stmt.line, candidates)
+        if candidates:
+            process_id, name = candidates[0]["id"], candidates[0]["name"]
+        else:
+            found = self.bridge.describe_process(ref)       # a UUID
+            if found is None:
+                where = f" at LOCATION \"{location}\"" if location else ""
+                raise BasicError(
+                    f"No process is called '{ref}'{where}.", stmt.line,
+                    hint=f"Give the full name or the UUID. FIND PROCESS "
+                         f"\"{ref}\" lists what matches.")
+            process_id, name = found["id"], found["name"]
+
+        plan = self.bridge.parameterise_process(process_id, True)
+        if "error" in plan:
+            raise BasicError(plan["error"], stmt.line)
+        n = plan["parameterised"]
+        if n == 0:
+            self.out.write(f"  Nothing to parameterise in '{name}': it has no "
+                           f"product or waste exchange with a fixed amount.")
+            return
+        amounts = f"{n} fixed amount{'s' if n != 1 else ''}"
+        if not stmt.confirm:
+            location_part = f' LOCATION "{location}"' if location else ""
+            raise BasicError(
+                f"PARAMETERISE PROCESS refused without CONFIRM. It would "
+                f"replace {amounts} in '{name}' with parameters. "
+                f"{self.BACKUP_WARNING}", stmt.line,
+                hint=f"Back up the database in openLCA first. Then: "
+                     f"PARAMETERISE PROCESS \"{ref}\"{location_part} CONFIRM")
+        self.out.write(f"  WARNING: {self.BACKUP_WARNING}")
+        result = self.bridge.parameterise_process(process_id, False)
+        self._emit("parameterise_process", result)
+        if "error" in result:
+            raise BasicError(result["error"], stmt.line)
+        self.out.write(f"  Parameterised: {name}")
+        self.out.write(f"  {amounts} replaced with parameters. Each "
+                       f"parameter holds the amount it replaced, so results "
+                       f"are unchanged until one is varied.")
+        for p in result["parameters"][:20]:
+            self.out.write(f"    {p['name']} = {_fmt_num(p['value'])} "
+                           f"({p['flow']}, {p['unit']})")
+        if n > 20:
+            self.out.write(f"    ... and {n - 20} more (SHOW PROCESS "
+                           f"\"{name}\" PARAMS lists them all)")
+        left = []
+        if result["already_formula"]:
+            left.append(f"{result['already_formula']} already had a formula")
+        if result["elementary_left"]:
+            left.append(f"{result['elementary_left']} elementary flows are "
+                        f"left as fixed amounts")
+        if left:
+            self.out.write("  Not changed: " + "; ".join(left) + ".")
+        self.bridge.refresh_caches()
 
     def _exec_new_from_template(self, stmt):
         """NEW FROM TEMPLATE "name" AS "file": copy a template that

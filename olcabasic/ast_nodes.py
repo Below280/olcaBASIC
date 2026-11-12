@@ -612,6 +612,14 @@ class NewFromTemplateStmt(Statement):
 
 
 @dataclass
+class ParameteriseStmt(Statement):
+    """PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM"""
+    target: Expr = None
+    location: Expr = None
+    confirm: bool = False
+
+
+@dataclass
 class MkdirStmt(Statement):
     """MKDIR "name": create a folder without entering it (Linux form)"""
     name: Expr = None

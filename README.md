@@ -552,6 +552,7 @@ CONFIRM DELETE ON|OFF
 |---|---|---|
 | `EDIT PROCESS` | olcaBASIC | Add, remove or update exchanges and parameters of a process |
 | `EDIT FLOW` | olcaBASIC | Add or update a flow property, or set the reference property |
+| `PARAMETERISE PROCESS` / `PARAMETERIZE PROCESS` | olcaBASIC | Replace the fixed amounts of a process with parameters |
 
 ```basic
 EDIT PROCESS "name or uuid"
@@ -570,6 +571,7 @@ EDIT FLOW "name"
   UPDATE PROPERTY "Mass" AS 2350 kg PER m3
   SET REFERENCE "Mass"
 END EDIT
+PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM
 ```
 
 ### Parameters: variables that become openlca parameters

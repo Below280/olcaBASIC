@@ -14,7 +14,7 @@ Most methods return a dictionary, and report a failure as `{"error": "..."}` and
 
 For most uses `olcabasic.Session` is the better entry point: it runs programs, serialises access to openLCA and applies the language's rules. The engine applies none of them: it will, for example, accept part of a method name.
 
-## Public methods (66)
+## Public methods (67)
 
 This list is generated from the code: `python docs/make_engine_doc.py`.
 
@@ -65,6 +65,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `list_product_systems(search_term: str = '')` | List product systems, optionally those whose name contains search_term |
 | `monte_carlo(system_ref: str, method_ref: str, iterations: int = 1000, allocation: Optional[str] = None)` | Run Monte Carlo uncertainty simulation |
 | `move_entity(entity_type: str, entity_id: str, category: str)` | Move a process, flow or product system to another folder |
+| `parameterise_process(process_id: str, dry_run: bool = False)` | Replace the fixed amounts of a process with parameters |
 | `process_candidates(name: str, location: str = '')` | Every process called exactly this (optionally at one location code), as [{"id", "name", "location", "category"}], sorted by location |
 | `process_contributions(system_ref: str, method_ref: str, direct: Optional[List[str]] = None, upstream: Optional[List[str]] = None, allocation: Optional[str] = None, parameters: Optional[Dict[str, float]] = None)` | One calculation, then the contribution of named processes to every impact category |
 | `process_structure(process_id: str)` | How a process is wired, from one read |

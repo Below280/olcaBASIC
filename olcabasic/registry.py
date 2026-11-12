@@ -470,6 +470,27 @@ END EDIT''',
   ADD PROPERTY "Mass" AS 2400 kg PER m3
 END EDIT''',
         statements=("EditFlowStmt",)),
+    Command(
+        name="PARAMETERISE PROCESS", aliases=("PARAMETERIZE PROCESS",),
+        topic="EDIT",
+        usage='PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM',
+        summary="Replace the fixed amounts of a process with parameters",
+        example='PARAMETERISE PROCESS "Grid mix, test" CONFIRM',
+        notes="For a process of the background database whose amounts you "
+              "want to vary: the shares of a market mix, say. Every product "
+              "and waste exchange with a fixed amount gets a process "
+              "parameter holding that amount, and the exchange takes the "
+              "parameter as its formula. Results do not change until a "
+              "scenario or a sensitivity analysis varies a parameter. "
+              "Elementary flows and exchanges that already have a formula "
+              "are left alone.\n"
+              "This changes the process for good. It cannot be undone "
+              "without restoring a backup of the database, so back the "
+              "database up in openLCA first. Without CONFIRM the command is "
+              "refused and says how many amounts it would change.\n"
+              "A name that several processes share needs LOCATION \"code\" "
+              "or the UUID.",
+        statements=("ParameteriseStmt",)),
 
     # ── PARAMETERS ───────────────────────────────────────────
     Command(

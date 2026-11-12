@@ -358,6 +358,11 @@ class Parser:
                 and self.peek_at(1).type == TokenType.EQUALS):
             return self.parse_let(line, implicit=True)
 
+        if (tok.type == TokenType.IDENTIFIER
+                and tok.upper() in ("PARAMETERISE", "PARAMETERIZE")
+                and self.peek_at(1).upper() == "PROCESS"):
+            return self.parse_parameterise(line)
+
         # EPD workflow. EPD and MODULE are not reserved words (so they
         # stay usable as variable names); they are recognised here.
         if tok.type == TokenType.IDENTIFIER and tok.upper() == "EPD":
@@ -2652,6 +2657,23 @@ class Parser:
             self.skip_newlines()
         self.advance()
         self.advance()                                    # END MODULE
+        self.expect_newline()
+        return stmt
+
+    def parse_parameterise(self, line: int) -> ParameteriseStmt:
+        """PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM"""
+        self.advance()                                    # PARAMETERISE
+        self.advance()                                    # PROCESS
+        if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                TokenType.COMMENT):
+            raise ParseError(
+                "PARAMETERISE PROCESS needs the name or UUID of a process.",
+                line, hint='PARAMETERISE PROCESS "process name" CONFIRM')
+        stmt = ParameteriseStmt(line=line, target=self.parse_string_or_expr())
+        if self.match_keyword("LOCATION"):
+            stmt.location = self.parse_string_or_expr()
+        if self.match_word("CONFIRM"):
+            stmt.confirm = True
         self.expect_newline()
         return stmt
 

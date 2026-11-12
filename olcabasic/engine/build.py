@@ -311,6 +311,75 @@ class BuildMixin:
                     return ref
         return fp_ref
 
+    def parameterise_process(self, process_id: str,
+                             dry_run: bool = False) -> Dict:
+        """Replace the fixed amounts of a process with parameters.
+
+        Each product or waste exchange that has a fixed amount (no
+        formula) and is not the reference exchange gets a process
+        parameter holding that amount, and the exchange gets the
+        parameter's name as its formula. Results do not change; the
+        amounts can then be varied by scenarios and sensitivity.
+        Elementary flows are left as they are.
+
+        This changes the process for good: there is no undo short of
+        restoring a backup of the database. dry_run=True reports what
+        would change and writes nothing.
+
+        Returns {"process_id", "process_name", "parameters": [{"name",
+        "value", "flow", "unit", "is_input"}], "parameterised",
+        "already_formula", "elementary_left", "written"}."""
+        try:
+            process = self.client.get(o.Process, process_id)
+            if not process:
+                return {"error": f"Process not found: {process_id}"}
+            used = {p.name for p in process.parameters or []}
+            made, new_params = [], []
+            already = elementary = 0
+            flow_types: Dict[str, Any] = {}
+            for index, ex in enumerate(process.exchanges or []):
+                if getattr(ex, "is_quantitative_reference", False) or not ex.flow:
+                    continue
+                if ex.amount_formula:
+                    already += 1
+                    continue
+                flow_type = getattr(ex.flow, "flow_type", None)
+                if flow_type is None:
+                    if ex.flow.id not in flow_types:
+                        flow = self.client.get(o.Flow, ex.flow.id)
+                        flow_types[ex.flow.id] = getattr(flow, "flow_type", None)
+                    flow_type = flow_types[ex.flow.id]
+                if flow_type == o.FlowType.ELEMENTARY_FLOW:
+                    elementary += 1
+                    continue
+                unit = ex.unit.name if ex.unit else ""
+                name = self._make_param_name(
+                    index, process.name, ex.flow.name or "", unit, used)
+                made.append({"name": name, "value": ex.amount,
+                             "flow": ex.flow.name or "", "unit": unit,
+                             "is_input": bool(ex.is_input)})
+                if dry_run:
+                    continue
+                param = o.Parameter()
+                param.id = str(uuid.uuid4())
+                param.name = name
+                param.value = ex.amount
+                param.parameter_scope = o.ParameterScope.PROCESS_SCOPE
+                param.is_input_parameter = True
+                new_params.append(param)
+                ex.amount_formula = name
+            written = False
+            if new_params:
+                process.parameters = list(process.parameters or []) + new_params
+                self.client.put(process)
+                written = True
+            return {"process_id": process.id, "process_name": process.name,
+                    "parameters": made, "parameterised": len(made),
+                    "already_formula": already, "elementary_left": elementary,
+                    "written": written}
+        except Exception as ex:
+            return {"error": str(ex)}
+
     def create_flow(self, name: str, unit_name: str,
                     category: str = "",
                     flow_type: str = "product") -> Dict:

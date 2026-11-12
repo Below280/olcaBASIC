@@ -375,6 +375,17 @@ def check(statements, runtime, connected: bool = True,
             elif stmt.command == "CLOSE":
                 epd_defined, epd_modules = False, None
 
+        elif isinstance(stmt, ast.ParameteriseStmt):
+            name = _literal(stmt.target) or "?"
+            if not stmt.confirm:
+                report.error(
+                    line, "PARAMETERISE PROCESS refused without CONFIRM. It "
+                          "changes the process in the database for good.",
+                    "Back up the database in openLCA first. Then add "
+                    f"CONFIRM: PARAMETERISE PROCESS \"{name}\" CONFIRM")
+            else:
+                report.writes.append(f"PARAMETERISE PROCESS \"{name}\"")
+
         elif isinstance(stmt, ast.NewFromTemplateStmt):
             from . import templates
             name = _literal(stmt.template)

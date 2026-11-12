@@ -72,6 +72,7 @@ Variables, folders, scenarios and the latest results persist between `run` calls
 - `EDIT PROCESS`: when a flow appears more than once in a process, `REMOVE INPUT "name" INDEX 2` (or `PROVIDER`, `LOCATION`, `AMOUNT`) removes one of them, and `UPDATE INPUT "name" INDEX 2, ...` updates one.
 - `SAVE PROGRAM "file.baslca"`: writes out every program that has run without error in the session, as the record of the work.
 - `MAX(a, b)` works (it was a reserved word and could not be called).
+- `PARAMETERISE PROCESS "name" [LOCATION "code"] CONFIRM`: replaces the fixed amounts of the product and waste exchanges of a process with parameters, so a background process (the shares of a market mix, say) can be varied by scenarios and sensitivity. It changes the process for good, so it is refused without `CONFIRM`, says how many amounts it would change, and tells you to back up the database first.
 
 **EPDs to EN 15804+A2.** New commands that enforce the rules as the model is built:
 
@@ -87,7 +88,7 @@ Variables, folders, scenarios and the latest results persist between `run` calls
 
 Clause numbers are given throughout; none of the text of EN 15804, the programme instructions or a PCR is in the package.
 
-**Engine.** `olcabasic.engine.Engine` is the class that was `b280_olca_mcp.functions.LCAFunctions`, with the same methods and return shapes (`LCAFunctions` is kept as an alias). Additions: `find_process`, `find_system`, `find_method`, `get_descriptors`, `clear_caches`, `move_entity`, `process_candidates`, `describe_process`, `find_method_strict`, `processes_in_folder`, `get_process_tags`, `set_process_tags`, `get_method_categories`, `process_structure`, `process_contributions`, `set_switched_provider`.
+**Engine.** `olcabasic.engine.Engine` is the class that was `b280_olca_mcp.functions.LCAFunctions`, with the same methods and return shapes (`LCAFunctions` is kept as an alias). Additions: `find_process`, `find_system`, `find_method`, `get_descriptors`, `clear_caches`, `move_entity`, `process_candidates`, `describe_process`, `find_method_strict`, `processes_in_folder`, `get_process_tags`, `set_process_tags`, `get_method_categories`, `process_structure`, `process_contributions`, `set_switched_provider`, `parameterise_process`. The class is now put together from six modules (`core`, `explore`, `build`, `audit`, `calculate`, `analysis`); `olcabasic.engine.Engine` is the one name to import.
 
 ## Fixed
 
