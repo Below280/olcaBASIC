@@ -1310,3 +1310,44 @@ END PROPERTY
                                 "Test method").nw_sets] == ["Test world",
                                                             "Test second"]
     assert one(client, o.FlowProperty, "Test quantity")
+
+
+# ── what the live server taught (0.4.0) ──────────────────────
+
+def test_an_activity_unit_alone_brings_its_quantity(session, client):
+    """openLCA keeps the unit of a social indicator only with its flow
+    property, so the unit's own property is written with it."""
+    ok(session, '''
+MAKE SOCIAL INDICATOR "Unit only"
+    ACTIVITY UNIT "h"
+END SOCIAL INDICATOR''')
+    si = one(client, o.SocialIndicator, "Unit only")
+    assert si.activity_unit is not None and si.activity_unit.name == "h"
+    assert si.activity_quantity is not None
+
+
+def test_a_method_source_the_server_drops_is_reported(session, client):
+    client.drops_method_source = True
+    ok(session, 'MAKE SOURCE "Synthetic paper"\nEND SOURCE')
+    r = ok(session, '''
+MAKE METHOD "Sourced method"
+    SOURCE "Synthetic paper"
+    CATEGORY "Sourced climate" UNIT "kg CO2 eq"
+        FACTOR "Methane, fossil", 29.8
+    END CATEGORY
+END METHOD''')
+    assert "did not keep the SOURCE" in r.text
+    assert one(client, o.ImpactMethod, "Sourced method").source is None
+
+
+def test_a_method_source_that_is_kept_is_not_mentioned(session, client):
+    ok(session, 'MAKE SOURCE "Synthetic paper"\nEND SOURCE')
+    r = ok(session, '''
+MAKE METHOD "Sourced method"
+    SOURCE "Synthetic paper"
+    CATEGORY "Sourced climate" UNIT "kg CO2 eq"
+        FACTOR "Methane, fossil", 29.8
+    END CATEGORY
+END METHOD''')
+    assert "did not keep" not in r.text
+    assert one(client, o.ImpactMethod, "Sourced method").source.name == "Synthetic paper"

@@ -856,6 +856,11 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
                             provider_flow = self.parse_string_or_expr()
                         else:
                             provider = self.parse_string_or_expr()
+                            if (self.at_keyword("LOCATION")
+                                    and self.peek_at(1).upper() != "BASED"):
+                                self.advance()
+                                extra["provider_location"] = \
+                                    self.parse_string_or_expr()
                     elif self.match_keyword("WASTE"):
                         is_waste = True
                     elif self.at_keyword("DATA"):

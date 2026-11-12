@@ -35,22 +35,35 @@ END PROCESS'''))
     assert "LOCATION" in e["hint"] and "PROVIDER" in e["hint"]
 
 
-def test_location_resolves_the_ambiguity(session):
-    r = session.run(SETUP + f'''MAKE PROCESS "A"
-  OUTPUT MAKE FLOW "A", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh LOCATION "DE"
-END PROCESS''')
+def test_location_resolves_the_ambiguity(session, client):
+    # 0.4.0: a background process is named in a bridge, so that is where
+    # the ambiguity is resolved.
+    r = session.run(SETUP + f'''BRIDGE "power", kWh
+  PROVIDER "{ELECTRICITY}" LOCATION "DE"
+END BRIDGE''')
     assert r.ok and not any(w["level"] == "warning" for w in r.warnings)
+    ex = [e for e in client.by_name(o.Process, "BRIDGE | power | kWh")[0].exchanges
+          if e.is_input][0]
+    assert client._location_code(
+        client.get(o.Process, ex.default_provider.id).location) == "DE"
+
+
+def test_an_ambiguous_bridge_provider_is_refused(session):
+    e = err(session.run(SETUP + f'''BRIDGE "power", kWh
+  PROVIDER "{ELECTRICITY}"
+END BRIDGE'''))
+    assert "matches 3 processes" in e["message"]
+    assert "LOCATION" in e["hint"]
 
 
 def test_provider_resolves_the_ambiguity(session, client):
     row = client.by_name(o.Process, ELECTRICITY)[1]
-    r = session.run(SETUP + f'''MAKE PROCESS "A"
-  OUTPUT MAKE FLOW "A", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh PROVIDER "{row.id}"
-END PROCESS''')
+    r = session.run(SETUP + f'''BRIDGE "power", kWh
+  PROVIDER "{row.id}"
+END BRIDGE''')
     assert r.ok, r.errors
-    ex = [e for e in client.by_name(o.Process, "A")[0].exchanges if e.is_input][0]
+    ex = [e for e in client.by_name(o.Process, "BRIDGE | power | kWh")[0].exchanges
+          if e.is_input][0]
     assert ex.default_provider.id == row.id
 
 
@@ -422,11 +435,57 @@ def test_bridge_without_provider_says_so(session):
     assert any("no provider yet" in w["message"] for w in r.warnings)
 
 
-def test_using_a_background_process_directly_is_noted(session):
-    r = session.run(WIDGET)
-    notes = [w["message"] for w in r.warnings if "background process" in w["message"]]
-    assert len(notes) == 1 and "2 inputs use a background process directly" in notes[0]
-    assert "BRIDGE" in notes[0]
+def test_using_a_background_process_directly_is_an_error(session, client):
+    # 0.4.0 (design 3.1, rule 1): this was a note; it is an error now, in
+    # every program and with no way to switch it off.
+    e = err(session.run(SETUP + f'''MAKE PROCESS "Direct"
+  OUTPUT MAKE FLOW "Direct", 1, kg, PRODUCT
+  INPUT USE PROCESS "{STEEL}", 0.8, kg
+END PROCESS'''))
+    assert e["line"] == 7
+    assert "is a background process" in e["message"]
+    assert STEEL in e["message"]
+    assert 'BRIDGE "' in e["hint"] and "PROVIDER" in e["hint"]
+    assert "END BRIDGE" in e["hint"]
+    assert client.by_name(o.Process, "Direct") == []
+
+
+def test_no_process_folder_does_not_switch_the_rule_off(session):
+    e = err(session.run(f'''SET FLOW FOLDER "00: Test"
+MAKE PROCESS "Direct"
+  FOLDER "00: Test"
+  OUTPUT MAKE FLOW "Direct", 1, kg, PRODUCT
+  INPUT USE PROCESS "{STEEL}", 0.8, kg
+END PROCESS'''))
+    assert "is a background process" in e["message"]
+
+
+def test_edit_cannot_add_a_background_process(session, client):
+    session.run(WIDGET)
+    e = err(session.run(f'''EDIT PROCESS "Widget"
+  ADD INPUT USE PROCESS "{PLASTIC}", 1, kg LOCATION "RER"
+END EDIT'''))
+    assert e["line"] == 2 and "is a background process" in e["message"]
+    widget = client.by_name(o.Process, "Widget")[0]
+    assert not any("plastic" in client._flow_name(x.flow.id) for x in widget.exchanges)
+
+
+def test_link_cannot_point_at_a_background_process(session):
+    session.run(WIDGET)
+    e = err(session.run(f'LINK PROCESS "{STEEL}" TO PROCESS "Widget" WITH 1, kg'))
+    assert "is a background process" in e["message"]
+
+
+def test_a_process_built_by_the_program_is_not_background(session):
+    r = session.run(SETUP + '''MAKE PROCESS "Part"
+  FOLDER "Somewhere else"
+  OUTPUT MAKE FLOW "Part", 1, kg, PRODUCT
+END PROCESS
+MAKE PROCESS "Whole"
+  OUTPUT MAKE FLOW "Whole", 1, kg, PRODUCT
+  INPUT USE PROCESS "Part", 2, kg
+END PROCESS''')
+    assert r.ok, r.errors
 
 
 def test_using_bridges_gives_no_lint_note(session, client):
@@ -467,10 +526,11 @@ def test_show_system_forms(session):
     assert "passed VALIDATE" in session.run('SHOW SYSTEM "Widget"').text
     params = session.run('SHOW SYSTEM "Widget" PARAMS').data[0]["result"]
     assert {p["name"] for p in params["parameters"]} >= {"elec"}
-    filtered = session.run('SHOW SYSTEM "Widget" PARAMS "market"').data[0]["result"]
+    filtered = session.run('SHOW SYSTEM "Widget" PARAMS "elec"').data[0]["result"]
     assert filtered["count"] == 1
     links = session.run('SHOW SYSTEM "Widget" LINKS "steel"').data[0]["result"]
-    assert links["total_matching"] == 1
+    # Widget to the steel bridge, and the bridge to its provider.
+    assert links["total_matching"] == 2
     assert "Product system not found" in err(session.run('SHOW SYSTEM "zz"'))["message"]
 
 
@@ -493,7 +553,7 @@ def test_show_flow_usage(session):
     r = session.run('SHOW FLOW "test steel, low-alloyed" USAGE')
     usage = r.data[0]["result"]
     assert r.ok and usage["in_use"]
-    assert "[P]    Widget" in r.text and "use(s) found" in r.text
+    assert "[P]    BRIDGE | steel | kg" in r.text and "use(s) found" in r.text
     assert any("LIMIT 10" in w["message"] for w in r.warnings)
 
 
@@ -581,8 +641,12 @@ def test_delete_flow_with_a_shared_name_is_refused(session):
 
 # ── EDIT PROCESS with repeated flows ─────────────────────────
 
+# 0.4.0: the two background processes sit in a bridge, the one place a
+# program may name them; the selectors are tested there.
+MIX = "BRIDGE | mix | kg"
 TWO_WATERS = WIDGET + f'''
-EDIT PROCESS "Widget"
+BRIDGE "mix", kg
+EDIT PROCESS "{MIX}"
   ADD INPUT USE PROCESS "{WATER}", 3, kg LOCATION "RER"
   ADD INPUT USE PROCESS "{WATER}", 7, kg LOCATION "RoW"
 END EDIT
@@ -590,7 +654,7 @@ END EDIT
 
 
 def waters(client):
-    proc = client.by_name(o.Process, "Widget")[0]
+    proc = client.by_name(o.Process, MIX)[0]
     values = {p.name: p.value for p in proc.parameters}
     return sorted(values[ex.amount_formula] for ex in proc.exchanges
                   if client._flow_name(ex.flow.id) == "test water")
@@ -598,8 +662,8 @@ def waters(client):
 
 def test_removing_a_repeated_flow_needs_a_selector(session, client):
     session.run(TWO_WATERS)
-    e = err(session.run('EDIT PROCESS "Widget"\n  REMOVE INPUT "test water"\nEND EDIT'))
-    assert "'test water' appears 2 times in 'Widget'" in e["message"]
+    e = err(session.run(f'EDIT PROCESS "{MIX}"\n  REMOVE INPUT "test water"\nEND EDIT'))
+    assert f"'test water' appears 2 times in '{MIX}'" in e["message"]
     assert "INDEX 1" in e["message"] and "INDEX 2" in e["message"]
     assert "[RER]" in e["message"] and "[RoW]" in e["message"]
     assert "INDEX n" in e["hint"] and "PROVIDER, LOCATION or AMOUNT" in e["hint"]
@@ -613,7 +677,7 @@ def test_removing_a_repeated_flow_needs_a_selector(session, client):
 ])
 def test_remove_one_of_several_same_flow_exchanges(session, client, selector, left):
     session.run(TWO_WATERS)
-    r = session.run(f'EDIT PROCESS "Widget"\n  REMOVE INPUT "test water" '
+    r = session.run(f'EDIT PROCESS "{MIX}"\n  REMOVE INPUT "test water" '
                     f'{selector}\nEND EDIT')
     assert r.ok, r.errors
     assert waters(client) == left
@@ -624,30 +688,30 @@ def test_remove_by_provider_uuid(session, client):
     session.run(TWO_WATERS)
     row = next(p for p in client.by_name(o.Process, WATER)
                if client._location_code(p.location) == "RoW")
-    r = session.run(f'EDIT PROCESS "Widget"\n  REMOVE INPUT "test water" '
+    r = session.run(f'EDIT PROCESS "{MIX}"\n  REMOVE INPUT "test water" '
                     f'PROVIDER "{row.id}"\nEND EDIT')
     assert r.ok and waters(client) == [3.0]
 
 
 def test_selector_that_matches_nothing_lists_the_choices(session):
     session.run(TWO_WATERS)
-    e = err(session.run('EDIT PROCESS "Widget"\n  REMOVE INPUT "test water" '
+    e = err(session.run(f'EDIT PROCESS "{MIX}"\n  REMOVE INPUT "test water" '
                         'AMOUNT 99\nEND EDIT'))
     assert "None of the 2 exchanges called 'test water'" in e["message"]
-    e = err(session.run('EDIT PROCESS "Widget"\n  REMOVE INPUT "test water" '
+    e = err(session.run(f'EDIT PROCESS "{MIX}"\n  REMOVE INPUT "test water" '
                         'INDEX 5\nEND EDIT'))
     assert "INDEX 5 is out of range" in e["message"]
 
 
 def test_update_one_of_several_same_flow_exchanges(session, client):
     session.run(TWO_WATERS)
-    e = err(session.run('EDIT PROCESS "Widget"\n  UPDATE INPUT "test water", 9, kg\n'
+    e = err(session.run(f'EDIT PROCESS "{MIX}"\n  UPDATE INPUT "test water", 9, kg\n'
                         'END EDIT'))
     assert "appears 2 times" in e["message"]
-    r = session.run('EDIT PROCESS "Widget"\n  UPDATE INPUT "test water" INDEX 2, 9, kg\n'
+    r = session.run(f'EDIT PROCESS "{MIX}"\n  UPDATE INPUT "test water" INDEX 2, 9, kg\n'
                     'END EDIT')
     assert r.ok, r.errors
-    proc = client.by_name(o.Process, "Widget")[0]
+    proc = client.by_name(o.Process, MIX)[0]
     amounts = [ex.amount for ex in proc.exchanges
                if client._flow_name(ex.flow.id) == "test water"]
     assert amounts == [0.0, 9.0]
@@ -657,7 +721,7 @@ def test_engine_remove_by_flow_id_still_removes_every_copy(engine, client):
     """v1 behaviour of the engine (and the legacy MCP tool) is kept."""
     session = Session(engine=engine)
     session.run(TWO_WATERS)
-    proc = client.by_name(o.Process, "Widget")[0]
+    proc = client.by_name(o.Process, MIX)[0]
     water = client.by_name(o.Flow, "test water")[0]
     r = engine.edit_process(proc.id, remove_exchanges=[water.id])
     assert r["changes"] == ["2 exchange(s) removed"]

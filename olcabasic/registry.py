@@ -428,7 +428,7 @@ MAKE FLOW "name", unit FROM NATURE''',
         summary="Create a bridge process between your model and a background process",
         syntax='''BRIDGE "BRIDGE | name | unit", unit [WASTE]
   FOLDER "path"
-  PROVIDER "process name or uuid"
+  PROVIDER "process name or uuid" [LOCATION "code"]
   [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
   [ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION]
   [COUNTRY "code"] [REGION "grid region"] [ENERGY SOURCE "text"]
@@ -444,7 +444,13 @@ END BRIDGE''',
               "place.\n"
               "Bridges are always named BRIDGE | what | unit. A plain name "
               "(BRIDGE \"Cement\", kg) is given that form. PROVIDER takes "
-              "a UUID or a name that only one process has.\n"
+              "a UUID, a name that only one process has, or a name with "
+              "LOCATION \"code\" when several locations share it.\n"
+              "Every background input goes through a bridge: a process "
+              "outside the folders the program builds in cannot be named "
+              "in MAKE PROCESS, EDIT PROCESS or LINK. EDIT PROCESS on a "
+              "bridge may name background processes, which is how a "
+              "bridge with several providers (a mix) is made.\n"
               "While an EPD is active a bridge with no FOLDER line goes "
               "into the EPD's Bridges folder. DATA and ELECTRICITY are "
               "described under HELP DATA PRIMARY and HELP ELECTRICITY.",

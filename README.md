@@ -76,10 +76,18 @@ LET sand_mass = cement_mass * aggregate_ratio
 SET PROCESS FOLDER "00: My Project"
 SET FLOW FOLDER "00: My Project/Flows"
 
+REM One bridge per background dataset: the choice sits in one place
+BRIDGE "Cement", kg
+  PROVIDER "Portland cement; at plant"
+END BRIDGE
+BRIDGE "Sand", kg
+  PROVIDER "Construction sand and gravel; at mine"
+END BRIDGE
+
 MAKE PROCESS "Concrete block; at plant"
   OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT
-  INPUT USE PROCESS "Portland cement; at plant", cement_mass, kg
-  INPUT USE PROCESS "Construction sand and gravel; at mine", sand_mass, kg
+  INPUT USE PROCESS "BRIDGE | Cement | kg", cement_mass, kg
+  INPUT USE PROCESS "BRIDGE | Sand | kg", sand_mass, kg
 END PROCESS
 
 SYSTEM "Concrete block; at plant"
@@ -99,6 +107,26 @@ RUN SCENARIOS ON "Concrete block; at plant" USING "IPCC"
 In the 'Low cement' scenario the sand follows the cement, because
 `sand_mass` is defined from `cement_mass`. See [Parameters](#parameters).
 
+### Bridges
+
+A background process is one the program did not build: anything outside
+the folders it builds in, such as a dataset of the database you bought.
+A process of your own never uses one directly. It uses a bridge, a
+one-line process of yours that passes the background dataset through:
+
+```basic
+BRIDGE "Cement", kg
+  PROVIDER "market for cement, Portland" LOCATION "RoW"
+END BRIDGE
+```
+
+The bridge is called `BRIDGE | Cement | kg`, and that is the name your
+processes use. Swapping the dataset later is one change in one place,
+and every process that uses the bridge follows. Naming a background
+process straight in `MAKE PROCESS`, `EDIT PROCESS` or `LINK` is an
+error, and the error gives the bridge to write. There is no setting
+that turns this off.
+
 ## Building processes
 
 Every exchange line says what it works with:
@@ -106,7 +134,7 @@ Every exchange line says what it works with:
 ```basic
 MAKE PROCESS "My product; at plant"
   OUTPUT MAKE FLOW "My product", 1, kg, PRODUCT        ' creates your product
-  INPUT USE PROCESS "Portland cement; at plant", 300, kg  ' links a provider
+  INPUT USE PROCESS "BRIDGE | Cement | kg", 300, kg     ' links a provider
   INPUT USE FLOW "Water, deionised", 50, kg             ' links a flow only
   INPUT MAKE FLOW "Custom blend", 5, kg                 ' creates a new flow
 END PROCESS
@@ -133,7 +161,9 @@ error listing each one's location and UUID, and `LOCATION` picks the
 one you want:
 
 ```basic
-INPUT USE PROCESS "market for cement, Portland", 300, kg LOCATION "RoW"
+BRIDGE "Cement", kg
+  PROVIDER "market for cement, Portland" LOCATION "RoW"
+END BRIDGE
 ```
 
 If the code doesn't match, the error lists the locations that exist.
@@ -179,7 +209,7 @@ optional:
 MAKE PROCESS "Concrete block; at plant"
   FLOW SCHEMA "US EPA - Flow Pedigree Matrix"
   OUTPUT MAKE FLOW "Concrete block", 1, m3, PRODUCT
-  INPUT USE PROCESS "Portland cement; at plant", 300, kg _
+  INPUT USE PROCESS "BRIDGE | Cement | kg", 300, kg _
     PEDIGREE (1,2,4,1,3) COMMENT "Supplier EPD, 2025"
 END PROCESS
 ```
@@ -204,10 +234,10 @@ in the order `PRINT DQ SYSTEMS` lists them:
 
 ```basic
 EDIT PROCESS "Concrete block; at plant"
-  ADD INPUT USE PROCESS "Construction sand and gravel; at mine", 10, kg
+  ADD INPUT USE PROCESS "BRIDGE | Sand | kg", 10, kg
   REMOVE INPUT "Water, deionised"
-  UPDATE INPUT "Portland cement; at plant", cement_mass * 0.06, kg
-  UPDATE INPUT "Portland cement; at plant" PEDIGREE (2,2,2,2,2)
+  UPDATE INPUT "BRIDGE | Cement | kg", cement_mass * 0.06, kg
+  UPDATE INPUT "BRIDGE | Cement | kg" PEDIGREE (2,2,2,2,2)
   ADD PARAM curing_days = 28
   SET DESCRIPTION "Updated mix"
 END EDIT
@@ -572,7 +602,7 @@ MAKE FLOW "name", unit TO AIR|WATER|SOIL
 MAKE FLOW "name", unit FROM NATURE
 BRIDGE "BRIDGE | name | unit", unit [WASTE]
   FOLDER "path"
-  PROVIDER "process name or uuid"
+  PROVIDER "process name or uuid" [LOCATION "code"]
   [DATA PRIMARY|SECONDARY|PROXY SOURCE "type" PROVIDER "who" YEAR n]
   [ELECTRICITY CONTRACT|RESIDUAL|CONSUMPTION]
   [COUNTRY "code"] [REGION "grid region"] [ENERGY SOURCE "text"]

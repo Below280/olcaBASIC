@@ -828,6 +828,19 @@ class EntitiesMixin:
                         hint=f"FIND UNIT \"{unit}\" shows the units there "
                              f"are.")
                 e.activity_unit = ref
+                # openLCA keeps the unit only with its quantity, so a
+                # unit given alone brings the flow property it belongs to.
+                if e.activity_quantity is None:
+                    fp = self._get_fp_ref(str(unit))
+                    if fp is None:
+                        raise _Refused(
+                            f"The flow property of unit '{unit}' is not "
+                            f"known, and openLCA keeps an activity unit "
+                            f"only with its quantity.", "activity_unit",
+                            hint="Add ACTIVITY QUANTITY \"flow property\".")
+                    e.activity_quantity = o.Ref(
+                        id=fp.id, name=fp.name,
+                        ref_type=o.RefType.FlowProperty)
         elif word == "DQ SYSTEM":
             source = f.pop("source", None)
             if source is not None:
@@ -1171,11 +1184,18 @@ class EntitiesMixin:
             self.client.put(method)
             self._cache.pop("ImpactMethod", None)
             self._cache.pop("ImpactCategory", None)
-            return {"id": method.id, "name": name, "created": True,
-                    "type": "METHOD", "categories": len(made),
-                    "factors": sum(len(c.impact_factors or [])
-                                   for c in made),
-                    "nw_sets": len(method.nw_sets)}
+            result = {"id": method.id, "name": name, "created": True,
+                      "type": "METHOD", "categories": len(made),
+                      "factors": sum(len(c.impact_factors or [])
+                                     for c in made),
+                      "nw_sets": len(method.nw_sets)}
+            if source:
+                # openLCA's server (2.6, and its current source) reads a
+                # method's source as text and so drops the reference.
+                stored = self.client.get(o.ImpactMethod, method.id)
+                if stored is None or stored.source is None:
+                    result["source_dropped"] = True
+            return result
         except _Refused as e:
             return {"error": e.message, "where": e.where, "hint": e.hint}
         except Exception as ex:

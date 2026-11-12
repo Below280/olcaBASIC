@@ -1284,11 +1284,17 @@ CONFIRM DELETE ON
 SET PROCESS FOLDER "00: Test"
 SET FLOW FOLDER "00: Test"
 LET shared = 3
+BRIDGE "electricity", kWh
+  PROVIDER "{ELECTRICITY}" LOCATION "GB"
+END BRIDGE
+BRIDGE "steel", kg
+  PROVIDER "{STEEL}"
+END BRIDGE
 SUB build_one(pname, kwh)
   MAKE PROCESS pname
     OUTPUT MAKE FLOW pname, 1, kg, PRODUCT
-    INPUT USE PROCESS "{ELECTRICITY}", kwh * 2, kWh LOCATION "GB"
-    INPUT USE PROCESS "{STEEL}", shared, kg
+    INPUT USE PROCESS "BRIDGE | electricity | kWh", kwh * 2, kWh
+    INPUT USE PROCESS "BRIDGE | steel | kg", shared, kg
   END PROCESS
 END SUB
 build_one "Thing one", 2
@@ -1319,14 +1325,17 @@ def test_a_system_is_found_by_its_process_not_its_name(session, client):
     r = session.run(f'''
 SET FLOW FOLDER "00: Test"
 SET PROCESS FOLDER "00: Test/one"
+BRIDGE "steel", kg
+  PROVIDER "{STEEL}"
+END BRIDGE
 MAKE PROCESS "Same name"
   OUTPUT MAKE FLOW "Product one", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 1, kg
+  INPUT USE PROCESS "BRIDGE | steel | kg", 1, kg
 END PROCESS
 SET PROCESS FOLDER "00: Test/two"
 MAKE PROCESS "Same name"
   OUTPUT MAKE FLOW "Product two", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 3, kg
+  INPUT USE PROCESS "BRIDGE | steel | kg", 3, kg
 END PROCESS''')
     assert r.ok, f"{r.errors}\n{r.text}"
     one, two = sorted(client.by_name(o.Process, "Same name"),
@@ -1348,14 +1357,17 @@ def test_a_same_named_system_of_another_process_is_not_reused(session,
     r = session.run(f'''
 SET FLOW FOLDER "00: Test"
 SET PROCESS FOLDER "00: Test/one"
+BRIDGE "steel", kg
+  PROVIDER "{STEEL}"
+END BRIDGE
 MAKE PROCESS "Same name"
   OUTPUT MAKE FLOW "Product one", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 1, kg
+  INPUT USE PROCESS "BRIDGE | steel | kg", 1, kg
 END PROCESS
 SET PROCESS FOLDER "00: Test/two"
 MAKE PROCESS "Same name"
   OUTPUT MAKE FLOW "Product two", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 3, kg
+  INPUT USE PROCESS "BRIDGE | steel | kg", 3, kg
 END PROCESS''')
     assert r.ok, r.errors
     one, two = sorted(client.by_name(o.Process, "Same name"),

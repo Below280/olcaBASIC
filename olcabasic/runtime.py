@@ -109,6 +109,9 @@ class Runtime:
         # Folders created with CDIR or MKDIR that hold nothing yet
         # (openLCA only knows a folder once something is in it)
         self.pending_folders: set = set()
+        # Processes this session built (or found already built by an
+        # identical block): they are the program's own, wherever they sit
+        self.built_processes: set = set()
 
         # Source of every program run without error, for SAVE PROGRAM
         self.program_history: List[str] = []
@@ -223,6 +226,7 @@ class Runtime:
         self.defaults_shown.clear()
         self.deprecation_shown.clear()
         self.pending_folders.clear()
+        self.built_processes.clear()
         self.program_history.clear()
         self.epd = None
         self.epd_module = ""

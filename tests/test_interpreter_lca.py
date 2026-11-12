@@ -3,7 +3,7 @@
 import pytest
 import olca_schema as o
 
-from fake_client import ELECTRICITY, STEEL, WATER, PLASTIC
+from fake_client import ELECTRICITY, STEEL, WATER, PLASTIC, bg_id
 from olcabasic.interpreter import BasicError
 
 SETUP = '''
@@ -12,12 +12,39 @@ SET PROCESS FOLDER "00: Test"
 SET FLOW FOLDER "00: Test"
 '''
 
-WIDGET = SETUP + f'''
+# Every background input goes through a bridge (0.4.0). These are the
+# bridges the tests use; a program names them B_ELEC, B_STEEL and so on.
+# (Lower-case names, so that a test can find an exchange by "electricity"
+# or "steel" in its flow name as before.)
+B_ELEC = "BRIDGE | electricity | kWh"            # United Kingdom
+B_ELEC_DE = "BRIDGE | electricity DE | kWh"
+B_STEEL = "BRIDGE | steel | kg"
+B_WATER = "BRIDGE | water | kg"                  # RER
+B_PLASTIC = "BRIDGE | plastic | kg"              # RER
+BRIDGES = f'''
+BRIDGE "electricity", kWh
+  PROVIDER "{ELECTRICITY}" LOCATION "GB"
+END BRIDGE
+BRIDGE "electricity DE", kWh
+  PROVIDER "{ELECTRICITY}" LOCATION "DE"
+END BRIDGE
+BRIDGE "steel", kg
+  PROVIDER "{STEEL}"
+END BRIDGE
+BRIDGE "water", kg
+  PROVIDER "{WATER}" LOCATION "RER"
+END BRIDGE
+BRIDGE "plastic", kg
+  PROVIDER "{PLASTIC}" LOCATION "RER"
+END BRIDGE
+'''
+
+WIDGET = SETUP + BRIDGES + f'''
 LET elec = 2.5
 MAKE PROCESS "Widget"
   OUTPUT MAKE FLOW "Widget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", elec, kWh LOCATION "GB"
-  INPUT USE PROCESS "{STEEL}", 0.8, kg
+  INPUT USE PROCESS "{B_ELEC}", elec, kWh
+  INPUT USE PROCESS "{B_STEEL}", 0.8, kg
   OUTPUT "Carbon dioxide, fossil", 0.5, kg TO AIR
 END PROCESS
 SYSTEM "Widget"
@@ -84,10 +111,14 @@ def test_use_process_sets_the_provider_at_the_location(run, client):
     run(WIDGET)
     proc = process(client, "Widget")
     ex = next(e for e in proc.exchanges
-              if client._flow_name(e.flow.id) == "test electricity, medium voltage")
-    provider = client.store["Process"][ex.default_provider.id]
-    assert client._location_code(provider.location) == "GB"
+              if client._flow_name(e.flow.id) == B_ELEC)
     assert ex.unit.name == "kWh"
+    assert client.store["Process"][ex.default_provider.id].name == B_ELEC
+    # the bridge names the background process, at the location asked for
+    behind = next(e for e in process(client, B_ELEC).exchanges if e.is_input)
+    provider = client.store["Process"][behind.default_provider.id]
+    assert provider.name == ELECTRICITY
+    assert client._location_code(provider.location) == "GB"
 
 
 def test_variable_amount_becomes_a_global_parameter(run, client):
@@ -105,17 +136,17 @@ def test_bare_amounts_become_process_parameters(run, client):
     proc = process(client, "Widget")
     names = sorted(p.name for p in proc.parameters)
     assert names == ["p00_Widget__Widget_kg",
-                     "p02_Widget__market_for_test_stee_kg",
+                     "p02_Widget__BRIDGE_steel_kg_kg",
                      "p03_Widget__Carbon_dioxide_fossi_kg"]
 
 
 def test_formula_parameter_from_derived_variable(run, client):
-    run(SETUP + f'''
+    run(SETUP + BRIDGES + f'''
 LET base = 2
 LET double = base * 2
 MAKE PROCESS "Derived"
   OUTPUT MAKE FLOW "Derived", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", double, kg
+  INPUT USE PROCESS "{B_STEEL}", double, kg
 END PROCESS''')
     double = client.by_name(o.Parameter, "double")[0]
     assert double.formula == "(base * 2.0)" and not double.is_input_parameter
@@ -123,11 +154,11 @@ END PROCESS''')
 
 
 def test_local_let_stays_a_process_parameter(run, client):
-    run(SETUP + f'''
+    run(SETUP + BRIDGES + f'''
 MAKE PROCESS "Local"
   LET mass = 3
   OUTPUT MAKE FLOW "Local", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", mass, kg
+  INPUT USE PROCESS "{B_STEEL}", mass, kg
 END PROCESS''')
     proc = process(client, "Local")
     assert any(p.name == "mass" and p.value == 3.0 for p in proc.parameters)
@@ -202,12 +233,19 @@ def test_provider_by_uuid(run, client):
     row = next(p for p in client.by_name(o.Process, ELECTRICITY)
                if client._location_code(p.location) == "DE")
     run(SETUP + f'''
+BRIDGE "by uuid", kWh
+  PROVIDER "{row.id}"
+END BRIDGE
 MAKE PROCESS "ByUuid"
   OUTPUT MAKE FLOW "ByUuid", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh PROVIDER "{row.id}"
-END PROCESS''')
+  INPUT USE PROCESS "{B_ELEC}", 1, kWh PROVIDER "BRIDGE | by uuid | kWh"
+END PROCESS'''.replace(B_ELEC, "BRIDGE | by uuid | kWh"))
+    behind = [e for e in process(client, "BRIDGE | by uuid | kWh").exchanges
+              if e.is_input][0]
+    assert behind.default_provider.id == row.id
     ex = [e for e in process(client, "ByUuid").exchanges if e.is_input][0]
-    assert ex.default_provider.id == row.id
+    assert ex.default_provider.id == process(client,
+                                             "BRIDGE | by uuid | kWh").id
 
 
 def test_legacy_input_new_prints_a_deprecation_note_once(run):
@@ -244,22 +282,22 @@ def test_edit_process_update_amount_and_add_input(run, client):
     run(WIDGET)
     out = run(f'''
 EDIT PROCESS "Widget"
-  UPDATE INPUT "test steel, low-alloyed", 1.5, kg
-  ADD INPUT USE PROCESS "{WATER}", 10, kg LOCATION "RER"
+  UPDATE INPUT "{B_STEEL}", 1.5, kg
+  ADD INPUT USE PROCESS "{B_WATER}", 10, kg
   SET DESCRIPTION "Edited"
 END EDIT''')
     assert "Edited process: Widget" in out
     assert "keep their old links" in out
     proc = process(client, "Widget")
     steel = next(e for e in proc.exchanges
-                 if client._flow_name(e.flow.id) == "test steel, low-alloyed")
+                 if client._flow_name(e.flow.id) == B_STEEL)
     assert steel.amount == 1.5 and steel.amount_formula is None
     assert len(proc.exchanges) == 5 and proc.description == "Edited"
 
 
 def test_edit_process_remove_input(run, client):
     run(WIDGET)
-    run('EDIT PROCESS "Widget"\n  REMOVE INPUT "test steel, low-alloyed"\nEND EDIT')
+    run(f'EDIT PROCESS "Widget"\n  REMOVE INPUT "{B_STEEL}"\nEND EDIT')
     assert len(process(client, "Widget").exchanges) == 3
 
 
@@ -275,17 +313,22 @@ def test_edit_process_unknown_exchange_lists_what_exists(run, interp):
     with pytest.raises(BasicError) as e:
         interp.run_program('EDIT PROCESS "Widget"\n  REMOVE INPUT "nothing"\nEND EDIT')
     assert "has no input called 'nothing'" in str(e.value)
-    assert "test steel, low-alloyed" in str(e.value)
+    assert B_STEEL in str(e.value)
 
 
 def test_edit_process_relink_by_location(run, client):
     run(WIDGET)
-    run('EDIT PROCESS "Widget"\n  UPDATE INPUT "test electricity, medium voltage" '
-        'LOCATION "DE"\nEND EDIT')
-    proc = process(client, "Widget")
-    ex = next(e for e in proc.exchanges if e.amount_formula == "elec")
-    provider = client.store["Process"][ex.default_provider.id]
+    # the choice of background process sits in the bridge, so that is
+    # what is relinked: one edit, and every process that uses the bridge
+    # follows
+    run(f'EDIT PROCESS "{B_ELEC}"\n  UPDATE INPUT "test electricity, medium '
+        f'voltage" LOCATION "DE"\nEND EDIT')
+    behind = next(e for e in process(client, B_ELEC).exchanges if e.is_input)
+    provider = client.store["Process"][behind.default_provider.id]
     assert client._location_code(provider.location) == "DE"
+    ex = next(e for e in process(client, "Widget").exchanges
+              if e.amount_formula == "elec")
+    assert client.store["Process"][ex.default_provider.id].name == B_ELEC
 
 
 def test_edit_process_set_folder_and_parameter(run, client):
@@ -417,15 +460,15 @@ def test_sensitivity(run, interp):
     run(WIDGET + '''
 SENSITIVITY ON "Widget" USING "IPCC 2021" BY 10%
   VARY elec
-  VARY p02_Widget__market_for_test_stee_kg
+  VARY p02_Widget__BRIDGE_steel_kg_kg
 END SENSITIVITY''')
     res = interp.runtime.last_results
     name = "Climate change: fossil - Global warming potential (GWP100)"
-    assert res["tested"] == ["elec", "p02_Widget__market_for_test_stee_kg"]
+    assert res["tested"] == ["elec", "p02_Widget__BRIDGE_steel_kg_kg"]
     assert res["baseline"][name]["amount"] == pytest.approx(WIDGET_FOSSIL)
     assert res["sensitivity"]["elec"]["plus"][name] == pytest.approx(
         WIDGET_FOSSIL + 0.25 * 0.25)
-    assert res["sensitivity"]["p02_Widget__market_for_test_stee_kg"]["minus"][name] \
+    assert res["sensitivity"]["p02_Widget__BRIDGE_steel_kg_kg"]["minus"][name] \
         == pytest.approx(WIDGET_FOSSIL - 0.08 * 2.0)
 
 

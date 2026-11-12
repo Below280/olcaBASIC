@@ -22,8 +22,11 @@ parameters have no folder and olcaBASIC has no command to delete one.
 """
 
 import os
+import re
 
 import pytest
+
+from live_support import see_through
 
 pytestmark = pytest.mark.live
 
@@ -50,7 +53,12 @@ def rename(text, baseline, names):
 def test_process_matches_the_baseline(live, baseline, names):
     found = live.engine.search_processes(names["name"])["processes"]
     assert len(found) == 1
-    got = live.engine.get_process_details(found[0]["id"])
+    # The baseline was captured before bridges were required: each
+    # input is compared with what its bridge passes on.
+    got = see_through(live.engine,
+                      live.engine.get_process_details(found[0]["id"]))
+    assert len(live.bridges) == sum(
+        1 for ex in got["exchanges"] if ex["is_input"])
     want = baseline["process_details"]
     assert got["category"] == names["folder"]
 
@@ -85,11 +93,16 @@ def test_system_validates_like_the_baseline(live, baseline, names):
     # The number of process links must be the same. The parameter count
     # is not compared: openLCA lists every global parameter in the
     # database with each system, and the test model adds one.
-    def links(result):
-        return [f["message"] for f in result["findings"]
-                if f["check"] in ("links_present", "no_links")]
+    # 0.4.0: the model has one more link for each bridge (the bridge to
+    # its provider), and nothing else may differ.
+    def links(result, extra=0):
+        found = [f["message"] for f in result["findings"]
+                 if f["check"] in ("links_present", "no_links")]
+        assert len(found) == 1
+        number = int(re.search(r"has (\d+) process links", found[0]).group(1))
+        return number + extra
 
-    assert links(got) == links(want)
+    assert links(got) == links(want, extra=len(live.bridges))
 
 
 def test_flow_in_use_cannot_be_deleted(live, names):

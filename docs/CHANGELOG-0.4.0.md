@@ -19,6 +19,7 @@ Programs written for 0.3.0 keep working, except in the cases below. Each one use
 | `SENSITIVITY` without `BY` | Varied by 20% | Parse error | Say the range: `BY 10%` |
 | `SENSITIVITY` with nothing to vary | Ran and reported no matching parameters | Parse error | Add a `VARY` line or `FROM "file.csv"` |
 | `ALLOCATE` with an unknown word | Reached openLCA and failed there | Parse error listing the valid words | `AS_DEFINED`, `PHYSICAL`, `ECONOMIC`, `CAUSAL` or `NONE` |
+| A background process named straight in `MAKE PROCESS`, `EDIT PROCESS` or `LINK` (one outside the folders the program builds in) | A note, and nothing at all when no process folder was set; an error only inside an EPD `MODULE` | Error in every program, naming the process and giving the `BRIDGE` block to write. No setting turns it off | Write a bridge and use it: `BRIDGE "Cement", kg` / `PROVIDER "name" LOCATION "code"` / `END BRIDGE`, then `INPUT USE PROCESS "BRIDGE \| Cement \| kg", 300, kg`. `EDIT PROCESS` on a bridge may still name background processes |
 | `BRIDGE "Cement", kg` | Bridge named `Cement` | Bridge named `BRIDGE \| Cement \| kg` | Nothing. A bridge that already exists under the plain name is reused |
 | `DELETE FLOW` | Refused by the parser | Allowed, after checking that nothing uses the flow | Nothing |
 | `SAVE "file.baslca"` | Wrote the latest results as CSV into that file | Writes the program in memory | For results use a name that does not end in `.baslca` or `.bas`, or `SAVE RESULTS` |
@@ -95,6 +96,5 @@ Clause numbers are given throughout; none of the text of EN 15804, the programme
 
 ## Fixed
 
-- A note is printed when a `PROCESS` block uses a background process directly instead of through a bridge.
 - A failed product system creation that left a system behind now says so and names the commands to inspect or remove it.
 - The `DATA` example in `HELP` quoted the name but not the unit, which parsed and then failed when run. Units in `DATA` go in quotes: `DATA "BRIDGE | Cement | kg", 300, "kg"`.

@@ -9,7 +9,13 @@ import olca_schema as o
 
 from fake_client import ELECTRICITY, STEEL, seed_ecoinvent_like
 from olcabasic import RunResult, Session
-from test_interpreter_lca import SETUP, WIDGET, WIDGET_FOSSIL
+from test_interpreter_lca import (B_STEEL, BRIDGES, SETUP, WIDGET,
+                                  WIDGET_FOSSIL)
+
+
+def line_of(program: str, text: str) -> int:
+    """The line a piece of text is on (1-based)."""
+    return program[:program.index(text)].count("\n") + 1
 
 
 @pytest.fixture
@@ -45,7 +51,8 @@ def test_data_holds_structured_results(session):
     assert ("PROCESS", "create_process") in calls
     assert ("SYSTEM", "create_system") in calls
     calc = r.data[-1]
-    assert calc["command"] == "CALCULATE" and calc["line"] == 14
+    assert calc["command"] == "CALCULATE"
+    assert calc["line"] == WIDGET.count("\n") + 1
     fossil = next(i for i in calc["result"]["impacts"]
                   if i["category"] == "Climate change: fossil")
     assert fossil["amount"] == pytest.approx(WIDGET_FOSSIL)
@@ -80,7 +87,7 @@ def test_warnings_and_notes_are_structured(session):
     r = session.run(WIDGET)
     warning = next(w for w in r.warnings if w["level"] == "warning")
     assert "process 'Widget' already exists" in warning["message"]
-    assert warning["line"] == 7
+    assert warning["line"] == line_of(WIDGET, 'MAKE PROCESS "Widget"')
     assert any(w["level"] == "note" for w in r.warnings)
     assert "WARNING: process 'Widget' already exists" in r.text
 
@@ -236,12 +243,14 @@ def test_program_stops_at_the_first_error(session):
 
 
 def test_error_inside_process_block_reports_its_own_line(session):
-    r = session.run(SETUP + f'''MAKE PROCESS "Lines"
+    program = SETUP + BRIDGES + f'''MAKE PROCESS "Lines"
   OUTPUT MAKE FLOW "Lines", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 1, kg
+  INPUT USE PROCESS "{B_STEEL}", 1, kg
   INPUT USE PROCESS "no such process", 1, kg
-END PROCESS''')
-    assert r.errors[0]["line"] == 8          # the INPUT line, not line 5
+END PROCESS'''
+    r = session.run(program)
+    # the INPUT line, not the line the block starts on
+    assert r.errors[0]["line"] == line_of(program, "no such process")
     assert "No process found matching 'no such process'" in r.errors[0]["message"]
     assert "FIND PROCESS" in r.errors[0]["hint"]
 
@@ -256,11 +265,12 @@ END PROCESS''')
 
 
 def test_engine_refusal_in_a_block_names_the_exchange_line(session, client):
-    r = session.run(SETUP + f'''MAKE PROCESS "Units"
+    program = SETUP + BRIDGES + f'''MAKE PROCESS "Units"
   OUTPUT MAKE FLOW "Units", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 1, kWh
-END PROCESS''')
-    assert r.errors[0]["line"] == 7
+  INPUT USE PROCESS "{B_STEEL}", 1, kWh
+END PROCESS'''
+    r = session.run(program)
+    assert r.errors[0]["line"] == line_of(program, "1, kWh")
     assert "unit 'kWh' isn't available" in r.errors[0]["message"]
     # the flow made on line 6 is still there, and the error says so
     assert len(client.by_name(o.Flow, "Units")) == 1
@@ -268,11 +278,12 @@ END PROCESS''')
 
 
 def test_undefined_variable_inside_a_block_reports_its_line(session):
-    r = session.run(SETUP + f'''MAKE PROCESS "Vars"
+    program = SETUP + BRIDGES + f'''MAKE PROCESS "Vars"
   OUTPUT MAKE FLOW "Vars", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", undefined_amount, kg
-END PROCESS''')
-    assert r.errors[0]["line"] == 7
+  INPUT USE PROCESS "{B_STEEL}", undefined_amount, kg
+END PROCESS'''
+    r = session.run(program)
+    assert r.errors[0]["line"] == line_of(program, "undefined_amount")
     assert "'undefined_amount' is not a defined variable" in r.errors[0]["message"]
 
 
@@ -368,8 +379,10 @@ def test_dry_run_summary(session):
     r = session.run(WIDGET + 'CALCULATE "Widget" USING "EF v3.1"', dry_run=True)
     summary = r.data[0]["result"]
     assert r.data[0]["command"] == "DRY RUN"
-    assert summary["statements"] == 7
-    assert summary["would_write"] == ['MAKE PROCESS "Widget"', 'SYSTEM "Widget"']
+    assert summary["statements"] == 12      # five of them are bridges
+    assert summary["would_write"][-2:] == ['MAKE PROCESS "Widget"',
+                                           'SYSTEM "Widget"']
+    assert len(summary["would_write"]) == 7
     assert summary["would_calculate"] == ["CALCULATE"]
     assert "Nothing was sent to openLCA" in r.text
 

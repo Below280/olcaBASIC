@@ -270,7 +270,7 @@ def method(made, live, baseline, names):
     live.run(f'CALCULATE "{system}" USING "{first}"')
     row = live.run("RESULT FLOWS TOP 1")["rows"][0]
     live.run("CLOSE RESULT ALL")
-    live.run(f'''
+    made = live.session.run(f'''
 MAKE METHOD "{METHOD}" FOLDER "{FOLDER}"
     DESCRIPTION "Made by the olcaBASIC live tests"
     SOURCE "{SOURCE}"
@@ -284,7 +284,8 @@ MAKE METHOD "{METHOD}" FOLDER "{FOLDER}"
         "{OTHER}", 10, 0.5
     END NW SET
 END METHOD''')
-    yield {"live": live, "system": system, "flow": row}
+    assert made.ok, f"{made.errors}\n{made.text}"
+    yield {"live": live, "system": system, "flow": row, "text": made.text}
     live.session.run(f'''CLOSE RESULT ALL
 CONFIRM DELETE ON
 DELETE RESULT "{STORED}"
@@ -298,7 +299,12 @@ def test_the_method_is_tagged_and_read_back(method):
     assert "olcaBASIC" in (m.tags or [])
     assert sorted(c.name for c in m.impact_categories) == sorted(
         [CATEGORY, OTHER])
-    assert m.source is not None and m.source.name == SOURCE
+    # openLCA 2.6 reads a method's source as text and drops the
+    # reference; olcaBASIC must then say so (found live, 12/11/2026).
+    if m.source is None:
+        assert "did not keep the SOURCE" in method["text"]
+    else:
+        assert m.source.name == SOURCE
     cat = get(live, o.ImpactCategory, CATEGORY)
     assert len(cat.impact_factors) == 1
     assert cat.impact_factors[0].flow.id == method["flow"]["flow_id"]

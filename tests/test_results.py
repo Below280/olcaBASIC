@@ -3,7 +3,12 @@
 The model is the Widget of test_interpreter_lca: 1 kg of product from
 2.5 kWh of electricity (GB: 0.25 kg CO2-eq fossil per kWh), 0.8 kg of
 steel (2.0 per kg) and 0.5 kg of CO2 emitted by the process itself.
-Every expected number below is worked out by hand from that.
+Electricity and steel each come through a bridge (B_ELEC, B_STEEL), so
+the system has five processes: the widget, two bridges and the two
+background processes behind them. A bridge passes its input straight
+through: its direct impacts are zero and its upstream impacts are those
+of what stands behind it. Every expected number below is worked out by
+hand from that.
 """
 
 import csv
@@ -15,7 +20,8 @@ import olca_schema as o
 from fake_client import ELECTRICITY, STEEL, FakeResult
 from olcabasic import Session
 from olcabasic.engine.results import MAX_OPEN_RESULTS
-from test_interpreter_lca import WIDGET, WIDGET_FOSSIL, process
+from test_interpreter_lca import (B_ELEC, B_ELEC_DE, B_STEEL, WIDGET,
+                                  WIDGET_FOSSIL, process)
 
 EF = "EF v3.1"
 FOSSIL = "Climate change: fossil"
@@ -355,7 +361,7 @@ def test_result_categories_processes_demand(calc):
     assert len(cats["rows"]) == 6 and cats["rows"][0]["unit"]
     procs = query(calc, "RESULT PROCESSES")
     names = {row["process"] for row in procs["rows"]}
-    assert names == {"Widget", ELECTRICITY, STEEL}
+    assert names == {"Widget", B_ELEC, B_STEEL, ELECTRICITY, STEEL}
     assert rows_by(procs, "process")[ELECTRICITY]["location"] == "GB"
     demand = query(calc, "RESULT DEMAND")
     assert demand["rows"][0]["process"] == "Widget"
@@ -423,8 +429,8 @@ def test_process_by_location(session, client):
     assert session.run(f'''
 MAKE PROCESS "Two grids"
   OUTPUT MAKE FLOW "Two grids", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh LOCATION "GB"
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh LOCATION "DE"
+  INPUT USE PROCESS "{B_ELEC}", 1, kWh
+  INPUT USE PROCESS "{B_ELEC_DE}", 1, kWh
 END PROCESS
 SYSTEM "Two grids"
 CALCULATE "Two grids" USING "{EF}"''').ok
@@ -445,8 +451,10 @@ def test_contribution_by_process_direct_one_category(calc):
     assert by["Widget"]["amount"] == pytest.approx(0.5)
     assert by[ELECTRICITY]["amount"] == pytest.approx(0.625)
     assert by[STEEL]["amount"] == pytest.approx(1.6)
+    assert by[B_ELEC]["amount"] == 0 and by[B_STEEL]["amount"] == 0
     assert sum(row["share_pct"] for row in r["rows"]) == pytest.approx(100.0)
-    assert [row["process"] for row in r["rows"]] == [STEEL, ELECTRICITY, "Widget"]
+    assert [row["process"] for row in r["rows"]][:3] == [
+        STEEL, ELECTRICITY, "Widget"]
 
 
 def test_contribution_by_process_with_supply_chain(calc):
@@ -465,7 +473,7 @@ def test_contribution_by_process_every_category(calc):
     fossil = next(row for row in r["rows"] if row["category"] == FOSSIL)
     assert fossil["process"] == STEEL
     r = query(calc, "RESULT CONTRIBUTION BY PROCESS")
-    assert len(r["rows"]) == 18
+    assert len(r["rows"]) == 30         # six categories, five processes
 
 
 def test_contribution_of_one_process(calc):
@@ -541,8 +549,8 @@ def test_result_scaling(calc):
     r = query(calc, 'RESULT SCALING OF PROCESS "Widget"')
     by = rows_by(r, "process")
     assert by["Widget"]["amount"] == pytest.approx(1.0)
-    assert by[ELECTRICITY]["amount"] == pytest.approx(-9.0)  # MJ
-    assert by[STEEL]["amount"] == pytest.approx(-0.8)
+    assert by[B_ELEC]["amount"] == pytest.approx(-9.0)       # MJ
+    assert by[B_STEEL]["amount"] == pytest.approx(-0.8)
     r = query(calc, f'RESULT SCALING OF PROCESS "{ELECTRICITY}" UNSCALED')
     # openLCA sends the whole column, zeros and all: only the entries
     # that are not zero are shown
@@ -578,17 +586,21 @@ def test_result_tree_of_a_category(calc):
     assert root["amount"] == pytest.approx(2.725)
     assert root["direct"] == pytest.approx(0.5)
     kids = {k["process"]: k for k in root["children"]}
-    assert kids[STEEL]["amount"] == pytest.approx(1.6)
-    assert kids[STEEL]["share_pct"] == pytest.approx(1.6 / 2.725 * 100)
-    assert kids[ELECTRICITY]["amount"] == pytest.approx(0.625)
+    assert kids[B_STEEL]["amount"] == pytest.approx(1.6)
+    assert kids[B_STEEL]["share_pct"] == pytest.approx(1.6 / 2.725 * 100)
+    assert kids[B_ELEC]["amount"] == pytest.approx(0.625)
+    # the widget, each bridge, and what stands behind each bridge
+    assert [row["level"] for row in r["rows"]] == [0, 1, 2, 1, 2]
+    assert r["rows"][1]["process"] == B_STEEL      # largest branch first
+    assert r["rows"][2]["process"] == STEEL
+    r = query(calc, f'RESULT TREE CATEGORY "{FOSSIL}" LEVELS 1')
     assert [row["level"] for row in r["rows"]] == [0, 1, 1]
-    assert r["rows"][1]["process"] == STEEL        # largest branch first
 
 
 def test_result_tree_top_limits_each_level(calc):
     r = query(calc, f'RESULT TREE CATEGORY "{FOSSIL}" TOP 1 LEVELS 2')
     root = r["root"]
-    assert [k["process"] for k in root["children"]] == [STEEL]
+    assert [k["process"] for k in root["children"]] == [B_STEEL]
     assert root["other"]["count"] == 1
     assert root["other"]["amount"] == pytest.approx(0.625)
     assert r["rows"][-1]["process"] == "(1 others)"
@@ -797,17 +809,21 @@ def test_result_sankey(calc, tmp_path):
     assert nodes["Widget"]["amount"] == pytest.approx(2.725)
     assert nodes["Widget"]["direct"] == pytest.approx(0.5)
     assert nodes[STEEL]["amount"] == pytest.approx(1.6)
+    assert nodes[B_STEEL]["amount"] == pytest.approx(1.6)
+    assert nodes[B_STEEL]["direct"] == 0
     root = r["root_index"]
     assert r["nodes"][root]["process"] == "Widget"
     links = {(e["from"], e["to"]): e["share"] for e in r["edges"]}
-    assert links[(nodes[STEEL]["index"], root)] == pytest.approx(1.6 / 2.725)
+    assert links[(nodes[B_STEEL]["index"], root)] == pytest.approx(
+        1.6 / 2.725)
+    assert (nodes[STEEL]["index"], nodes[B_STEEL]["index"]) in links
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert len(saved["nodes"]) == 3 and len(saved["edges"]) == 2
+    assert len(saved["nodes"]) == 5 and len(saved["edges"]) == 4
 
 
 def test_sankey_min_share_and_max_nodes(calc):
     r = query(calc, f'RESULT SANKEY CATEGORY "{FOSSIL}" MIN SHARE 30%')
-    assert {n["process"] for n in r["nodes"]} == {"Widget", STEEL}
+    assert {n["process"] for n in r["nodes"]} == {"Widget", B_STEEL, STEEL}
     r = query(calc, f'RESULT SANKEY CATEGORY "{FOSSIL}" MAX NODES 1')
     assert len(r["nodes"]) == 1
     r = query(calc, f'RESULT SANKEY FLOW "{CO2}"')
@@ -826,10 +842,10 @@ def test_top_keeps_the_largest_rows(calc):
     r = query(calc, f'RESULT CONTRIBUTION BY PROCESS DIRECT '
                     f'CATEGORY "{FOSSIL}" TOP 2')
     assert [row["process"] for row in r["rows"]] == [STEEL, ELECTRICITY]
-    assert r["row_count"] == 3 and r["top"] == 2
+    assert r["row_count"] == 5 and r["top"] == 2
     text = calc.run(f'RESULT CONTRIBUTION BY PROCESS DIRECT '
                     f'CATEGORY "{FOSSIL}" TOP 2').text
-    assert "Showing 2 of 3 rows (TOP 2)" in text
+    assert "Showing 2 of 5 rows (TOP 2)" in text
 
 
 def test_impacts_keep_the_method_order(calc):
@@ -853,7 +869,7 @@ def test_top_and_save_together(calc, tmp_path):
     path = tmp_path / "top.csv"
     calc.run(f'RESULT SCALING SAVE "{path}" TOP 1')
     rows = list(csv.reader(path.open(encoding="utf-8")))
-    assert len(rows) == 2 and rows[1][0] == ELECTRICITY
+    assert len(rows) == 2 and rows[1][0] in (ELECTRICITY, B_ELEC)
 
 
 def test_save_results_after_a_query(calc, tmp_path):

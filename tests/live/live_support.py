@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -56,3 +57,73 @@ def matching_baseline(engine):
     # of failing.
     pytest.skip("no baseline was captured from the open database ("
                 + "; ".join(reasons) + ")")
+
+
+# ── the baseline program and the bridge rule ─────────────────
+#
+# The baselines were captured with programs that name background
+# processes straight in MAKE PROCESS. From 0.4.0 every background input
+# goes through a bridge and there is no way round that, so the program
+# is rewritten here: each such input gets a bridge of its own, and the
+# process uses the bridge. A bridge passes its provider through one for
+# one, so every result must still match the baseline to its tolerance.
+# The comparisons of structure look through the bridges (see_through).
+
+BRIDGE_SHORT = "olcaBASIC live test input"
+_OPTION = re.compile(r'\s(LOCATION|PROVIDER)\s+"([^"]+)"')
+_INPUT = re.compile(r'^(\s*)INPUT USE PROCESS "([^"]+)",\s*(.*)$')
+_KEYWORD = re.compile(r'\s(LOCATION|PROVIDER|UNCERTAINTY|PEDIGREE|COMMENT|'
+                      r'COST|SITE|BASE|FORMULA)\b')
+
+
+def bridged(program):
+    """(program with every background input behind a bridge, the names
+    of the bridges). Bridges are written just before the first MAKE
+    PROCESS line, so they land in the program's own process folder."""
+    lines, bridges, names = [], [], []
+    for line in program.splitlines():
+        m = _INPUT.match(line)
+        if not m or m.group(2).startswith("BRIDGE |"):
+            lines.append(line)
+            continue
+        indent, provider, rest = m.groups()
+        cut = _KEYWORD.search(" " + rest)
+        head = rest if not cut else rest[:cut.start() - 1 if cut.start() else 0]
+        unit = head.rsplit(",", 1)[1].strip()
+        options = dict(_OPTION.findall(" " + rest))
+        tail = _OPTION.sub("", " " + rest).strip()
+        short = f"{BRIDGE_SHORT} {len(names) + 1}"
+        name = f"BRIDGE | {short} | {unit}"
+        names.append(name)
+        target = options.get("PROVIDER", provider)
+        where = (f' LOCATION "{options["LOCATION"]}"'
+                 if "LOCATION" in options and "PROVIDER" not in options else "")
+        bridges += [f'BRIDGE "{short}", {unit}',
+                    f'  PROVIDER "{target}"{where}', "END BRIDGE"]
+        lines.append(f'{indent}INPUT USE PROCESS "{name}", {tail}')
+    at = next((i for i, l in enumerate(lines)
+               if l.lstrip().startswith("MAKE PROCESS")), len(lines))
+    return "\n".join(lines[:at] + bridges + lines[at:]), names
+
+
+def see_through(engine, details):
+    """Process details with each input from a bridge replaced by what
+    the bridge passes on: the flow and the provider behind it."""
+    out = dict(details)
+    rows = []
+    for ex in details["exchanges"]:
+        ex = dict(ex)
+        provider = ex.get("provider") or ""
+        if ex.get("is_input") and provider.startswith("BRIDGE |"):
+            found = engine.search_processes(provider)["processes"]
+            found = [p for p in found if p["name"] == provider]
+            assert len(found) == 1, provider
+            inner = [e for e in engine.get_process_details(
+                found[0]["id"])["exchanges"] if e["is_input"]]
+            assert len(inner) == 1, provider
+            assert inner[0]["amount"] == 1.0 and not inner[0]["formula"]
+            ex["flow"] = inner[0]["flow"]
+            ex["provider"] = inner[0]["provider"]
+        rows.append(ex)
+    out["exchanges"] = rows
+    return out

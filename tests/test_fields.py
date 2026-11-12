@@ -11,7 +11,8 @@ from fake_client import ELECTRICITY, STEEL
 from olcabasic import Session
 from olcabasic.engine.fields import (DOCUMENT_FIELDS, make_uncertainty,
                                      parse_date)
-from test_interpreter_lca import SETUP, process
+from test_interpreter_lca import (B_ELEC, B_ELEC_DE, B_STEEL, BRIDGES, SETUP,
+                                  process)
 
 EF = "EF v3.1"
 FOSSIL = "Climate change: fossil"
@@ -41,7 +42,8 @@ def client(client):
 @pytest.fixture
 def session(client):
     s = Session(client=client)
-    assert s.run(SETUP).ok
+    r = s.run(SETUP + BRIDGES)
+    assert r.ok, r.errors
     return s
 
 
@@ -68,8 +70,8 @@ def exchange(client, proc_name, flow_part):
 PLAIN = f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB"
-  INPUT USE PROCESS "{STEEL}", 0.5, kg
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg
   OUTPUT "Carbon dioxide, fossil", 0.1, kg TO AIR
 END PROCESS
 '''
@@ -110,8 +112,8 @@ def test_uncertainty_on_exchanges_is_written(session, client):
     ok(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB" UNCERTAINTY LOGNORMAL 2, 1.2 BASE UNCERTAINTY 0.0006
-  INPUT USE PROCESS "{STEEL}", 0.5, kg UNCERTAINTY TRIANGLE 0.4, 0.5, 0.7
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh UNCERTAINTY LOGNORMAL 2, 1.2 BASE UNCERTAINTY 0.0006
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg UNCERTAINTY TRIANGLE 0.4, 0.5, 0.7
   OUTPUT "Carbon dioxide, fossil", 0.1, kg TO AIR UNCERTAINTY UNIFORM 0.05, 0.15
 END PROCESS''')
     elec = exchange(client, "Gadget", "electricity")
@@ -132,7 +134,7 @@ def test_bad_uncertainty_stops_the_block_before_anything_is_written(
     e = err(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg UNCERTAINTY LOGNORMAL 0.5, 0.8
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg UNCERTAINTY LOGNORMAL 0.5, 0.8
 END PROCESS''')
     assert e["line"] == 4 and "above 1" in e["message"]
     assert client.by_name(o.Process, "Gadget") == []
@@ -144,7 +146,7 @@ def test_uncertainty_takes_variables(session, client):
 LET spread = 1.3
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg UNCERTAINTY LOGNORMAL 0.5, spread
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg UNCERTAINTY LOGNORMAL 0.5, spread
 END PROCESS''')
     assert exchange(client, "Gadget", "steel").uncertainty.geom_sd == 1.3
 
@@ -153,7 +155,7 @@ def test_uncertainty_needs_a_distribution(session):
     e = err(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg UNCERTAINTY 0.5, 0.8
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg UNCERTAINTY 0.5, 0.8
 END PROCESS''')
     assert "UNCERTAINTY needs a distribution" in e["message"]
     assert "LOGNORMAL gm, gsd" in e["hint"]
@@ -164,7 +166,7 @@ def test_uncertainty_on_a_local_parameter(session, client):
 MAKE PROCESS "Gadget"
   LET yield = 0.9 UNCERTAINTY NORMAL 0.9, 0.05
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5 / yield, kg
+  INPUT USE PROCESS "{B_STEEL}", 0.5 / yield, kg
 END PROCESS''')
     param = next(p for p in process(client, "Gadget").parameters
                  if p.name == "yield")
@@ -176,7 +178,7 @@ def test_uncertainty_on_a_global_parameter(session, client):
 LET steel_kg = 0.5 UNCERTAINTY UNIFORM 0.4, 0.6
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", steel_kg, kg
+  INPUT USE PROCESS "{B_STEEL}", steel_kg, kg
 END PROCESS''')
     param = client.by_name(o.Parameter, "steel_kg")[0]
     assert (param.uncertainty.minimum, param.uncertainty.maximum) == (0.4, 0.6)
@@ -197,7 +199,7 @@ def test_montecarlo_draws_from_the_distributions(session, client):
     ok(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg UNCERTAINTY UNIFORM 0.4, 0.6
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg UNCERTAINTY UNIFORM 0.4, 0.6
 END PROCESS
 SYSTEM "Gadget"''')
     r = ok(session, f'MONTECARLO "Gadget" USING "{EF}" RUNS 200')
@@ -213,8 +215,8 @@ SYSTEM "Gadget"''')
 AVOIDED = f'''
 MAKE PROCESS "Heat plant"
   OUTPUT MAKE FLOW "Test heat", 1, MJ, PRODUCT
-  OUTPUT USE PROCESS "{ELECTRICITY}", 0.1, kWh LOCATION "GB" AVOIDED
-  INPUT USE PROCESS "{STEEL}", 0.5, kg
+  OUTPUT USE PROCESS "{B_ELEC}", 0.1, kWh AVOIDED
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg
 END PROCESS
 SYSTEM "Heat plant"
 '''
@@ -246,7 +248,7 @@ def test_an_input_cannot_be_avoided(session):
     e = err(session, f'''
 MAKE PROCESS "Odd"
   OUTPUT MAKE FLOW "Odd", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg AVOIDED
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg AVOIDED
 END PROCESS''')
     assert e["line"] == 4 and "AVOIDED is for a product" in e["message"]
     e = err(session, '''
@@ -262,8 +264,8 @@ END PROCESS''')
 COSTED = f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT COST 10 CURRENCY "EUR"
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB" COST 0.4 CURRENCY "GBP"
-  INPUT USE PROCESS "{STEEL}", 0.5, kg COST 1.5 CURRENCY "Euro"
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh COST 0.4 CURRENCY "GBP"
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg COST 1.5 CURRENCY "Euro"
 END PROCESS
 SYSTEM "Gadget"
 '''
@@ -290,7 +292,7 @@ def test_cost_needs_a_currency_that_exists(session, client):
     e = err(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg COST 1.5 CURRENCY "XXX"
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg COST 1.5 CURRENCY "XXX"
 END PROCESS''')
     assert e["line"] == 4 and "No currency is called 'XXX'" in e["message"]
     assert "MAKE CURRENCY" in e["hint"]
@@ -299,7 +301,7 @@ END PROCESS''')
     e = err(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg COST 1.5
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg COST 1.5
 END PROCESS''')
     assert "COST needs a currency" in e["message"]
 
@@ -309,7 +311,7 @@ def test_cost_formula(session, client):
 MAKE PROCESS "Gadget"
   LET price = 3
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg COST FORMULA "0.5 * price" CURRENCY "EUR"
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg COST FORMULA "0.5 * price" CURRENCY "EUR"
 END PROCESS''')
     assert exchange(client, "Gadget", "steel").cost_formula == "0.5 * price"
 
@@ -329,13 +331,14 @@ def test_site_sets_the_exchange_location_not_the_provider(session, client):
     ok(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB" SITE "DE"
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh SITE "DE"
   OUTPUT "Carbon dioxide, fossil", 0.1, kg TO AIR SITE "GB"
 END PROCESS''')
     elec = exchange(client, "Gadget", "electricity")
     assert elec.location.name == "Germany"
+    # the provider is still the bridge to the United Kingdom's supply
     provider = client.store["Process"][elec.default_provider.id]
-    assert client._location_code(provider.location) == "GB"
+    assert provider.name == B_ELEC
     assert exchange(client, "Gadget",
                     "Carbon dioxide").location.name == "United Kingdom"
 
@@ -344,7 +347,7 @@ def test_site_must_be_a_known_location(session, client):
     e = err(session, f'''
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{STEEL}", 0.5, kg SITE "Atlantis"
+  INPUT USE PROCESS "{B_STEEL}", 0.5, kg SITE "Atlantis"
 END PROCESS''')
     assert e["line"] == 4 and "No location" in e["message"]
     assert client.by_name(o.Process, "Gadget") == []
@@ -356,7 +359,7 @@ SAWMILL = f'''
 MAKE PROCESS "Sawmill"
   OUTPUT MAKE FLOW "Test boards", 1, kg, PRODUCT
   OUTPUT MAKE FLOW "Test chips", 0.4, kg
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB"
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh
   OUTPUT "Carbon dioxide, fossil", 0.1, kg TO AIR
   DEFAULT ALLOCATION PHYSICAL
   ALLOCATION PHYSICAL
@@ -447,11 +450,11 @@ def test_causal_allocation_is_per_exchange(session, client):
 MAKE PROCESS "Sawmill"
   OUTPUT MAKE FLOW "Test boards", 1, kg, PRODUCT
   OUTPUT MAKE FLOW "Test chips", 0.4, kg
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB"
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh
   OUTPUT "Carbon dioxide, fossil", 0.1, kg TO AIR
   ALLOCATION CAUSAL
-    "Test boards", 0.8 FOR INPUT "test electricity, medium voltage"
-    "Test chips", 0.2 FOR INPUT "test electricity, medium voltage"
+    "Test boards", 0.8 FOR INPUT "{B_ELEC}"
+    "Test chips", 0.2 FOR INPUT "{B_ELEC}"
     "Test boards", 0.5 FOR OUTPUT "Carbon dioxide, fossil"
     "Test chips", 0.5 FOR OUTPUT "Carbon dioxide, fossil"
   END ALLOCATION
@@ -466,13 +469,13 @@ def test_causal_shares_must_add_up_per_exchange(session):
 MAKE PROCESS "Sawmill"
   OUTPUT MAKE FLOW "Test boards", 1, kg, PRODUCT
   OUTPUT MAKE FLOW "Test chips", 0.4, kg
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB"
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh
   ALLOCATION CAUSAL
-    "Test boards", 0.8 FOR INPUT "test electricity, medium voltage"
-    "Test chips", 0.3 FOR INPUT "test electricity, medium voltage"
+    "Test boards", 0.8 FOR INPUT "{B_ELEC}"
+    "Test chips", 0.3 FOR INPUT "{B_ELEC}"
   END ALLOCATION
 END PROCESS''')
-    assert "for 'test electricity, medium voltage' add up to 1.1" in e["message"]
+    assert f"for '{B_ELEC}' add up to 1.1" in e["message"]
     e = err(session, '''
 MAKE PROCESS "Sawmill"
   OUTPUT MAKE FLOW "Test boards", 1, kg, PRODUCT
@@ -757,7 +760,7 @@ def test_show_process_fields(session):
     ok(session, COSTED.replace("SYSTEM \"Gadget\"", ""))
     ok(session, f'''
 EDIT PROCESS "Gadget"
-  UPDATE INPUT "{STEEL}" UNCERTAINTY LOGNORMAL 0.5, 1.3 SITE "DE"
+  UPDATE INPUT "{B_STEEL}" UNCERTAINTY LOGNORMAL 0.5, 1.3 SITE "DE"
   TYPE LCI RESULT
 END EDIT''')
     r = ok(session, 'SHOW PROCESS "Gadget" FIELDS')
@@ -800,7 +803,7 @@ def test_edit_sets_and_removes_exchange_fields(session, client):
     ok(session, PLAIN)
     r = ok(session, f'''
 EDIT PROCESS "Gadget"
-  UPDATE INPUT "{STEEL}" UNCERTAINTY NORMAL 0.5, 0.05 COST 2 CURRENCY "EUR" SITE "GB"
+  UPDATE INPUT "{B_STEEL}" UNCERTAINTY NORMAL 0.5, 0.05 COST 2 CURRENCY "EUR" SITE "GB"
 END EDIT''')
     assert "uncertainty set to NORMAL 0.5, 0.05" in r.text
     assert "cost set to 2 Euro" in r.text
@@ -808,7 +811,7 @@ END EDIT''')
     assert steel.uncertainty.sd == 0.05 and steel.cost_value == 2
     ok(session, f'''
 EDIT PROCESS "Gadget"
-  UPDATE INPUT "{STEEL}" UNCERTAINTY NONE NO COST NO SITE
+  UPDATE INPUT "{B_STEEL}" UNCERTAINTY NONE NO COST NO SITE
 END EDIT''')
     steel = exchange(client, "Gadget", "steel")
     assert steel.uncertainty is None and steel.cost_value is None
@@ -820,7 +823,7 @@ def test_edit_can_change_an_amount_and_its_uncertainty_together(
     ok(session, PLAIN)
     ok(session, f'''
 EDIT PROCESS "Gadget"
-  UPDATE INPUT "{STEEL}", 0.6, kg UNCERTAINTY UNIFORM 0.5, 0.7
+  UPDATE INPUT "{B_STEEL}", 0.6, kg UNCERTAINTY UNIFORM 0.5, 0.7
 END EDIT''')
     steel = exchange(client, "Gadget", "steel")
     assert steel.amount == 0.6 and steel.uncertainty.maximum == 0.7
@@ -831,7 +834,7 @@ def test_edit_added_exchanges_carry_their_fields(session, client):
     ok(session, f'''
 EDIT PROCESS "Gadget"
   ADD OUTPUT MAKE FLOW "Test offcuts", 0.2, kg AVOIDED COST 1 CURRENCY "EUR"
-  ADD INPUT USE PROCESS "{STEEL}", 0.1, kg UNCERTAINTY UNIFORM 0.05, 0.15
+  ADD INPUT USE PROCESS "{B_STEEL}", 0.1, kg UNCERTAINTY UNIFORM 0.05, 0.15
 END EDIT''')
     offcuts = exchange(client, "Gadget", "offcuts")
     assert offcuts.is_avoided_product and offcuts.cost_value == 1
@@ -846,7 +849,7 @@ def test_edit_refuses_before_writing_anything(session, client):
     e = err(session, f'''
 EDIT PROCESS "Gadget"
   ADD OUTPUT MAKE FLOW "Test offcuts", 0.2, kg
-  UPDATE INPUT "{STEEL}", 0.9, kg UNCERTAINTY LOGNORMAL 0.5, 0.5
+  UPDATE INPUT "{B_STEEL}", 0.9, kg UNCERTAINTY LOGNORMAL 0.5, 0.5
 END EDIT''')
     assert e["line"] == 4 and "above 1" in e["message"]
     assert client.by_name(o.Flow, "Test offcuts") == []
@@ -1016,8 +1019,8 @@ SYSTEM_WITH_SETS = f'''
 LET steel_kg = 0.5
 MAKE PROCESS "Gadget"
   OUTPUT MAKE FLOW "Gadget", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 2, kWh LOCATION "GB"
-  INPUT USE PROCESS "{STEEL}", steel_kg, kg
+  INPUT USE PROCESS "{B_ELEC}", 2, kWh
+  INPUT USE PROCESS "{B_STEEL}", steel_kg, kg
 END PROCESS
 SYSTEM "Gadget"
   PARAMETER SET "Light" BASELINE
@@ -1156,8 +1159,8 @@ def test_a_process_shared_by_name_needs_a_location_in_a_group(session):
     ok(session, f'''
 MAKE PROCESS "Two grids"
   OUTPUT MAKE FLOW "Two grids", 1, kg, PRODUCT
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh LOCATION "GB"
-  INPUT USE PROCESS "{ELECTRICITY}", 1, kWh LOCATION "DE"
+  INPUT USE PROCESS "{B_ELEC}", 1, kWh
+  INPUT USE PROCESS "{B_ELEC_DE}", 1, kWh
 END PROCESS
 SYSTEM "Two grids"''')
     e = err(session, f'''

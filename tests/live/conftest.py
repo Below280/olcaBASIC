@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from live_support import matching_baseline
+from live_support import bridged, matching_baseline
 from runner import LiveRunner
 
 
@@ -35,7 +35,12 @@ def tol(baseline):
 @pytest.fixture(scope="session")
 def live(runner, baseline, names):
     """Build the reference model once, hand over the runner, clean up."""
-    runner.run(baseline["program_template"].format(**names))
+    # Every background input goes through a bridge from 0.4.0, so the
+    # baseline program is rewritten to use one per input (live_support).
+    # The bridges stay in the folder and are reused by the next run.
+    program, bridges = bridged(baseline["program_template"].format(**names))
+    runner.run(program)
+    runner.bridges = bridges
     yield runner
     # Clean up: the system and the process. The product flow stays
     # unless OLCA_LIVE_DELETE_FLOW=1: DELETE FLOW reads every process

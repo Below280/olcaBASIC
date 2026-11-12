@@ -975,11 +975,33 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 name = given
         provider_id = None
 
-        if stmt.provider:
+        if stmt.provider and stmt.provider_location is not None:
+            # PROVIDER "name" LOCATION "code": one of several processes
+            # with the same name
+            prov_str = self._eval_str(stmt.provider)
+            where = self._eval_str(stmt.provider_location)
+            found = self.bridge.process_candidates(prov_str, where)
+            if len(found) > 1:
+                self._ambiguous_process(prov_str, where, stmt.line, found)
+            if not found:
+                others = sorted({c["location"] for c in
+                                 self.bridge.process_candidates(prov_str)
+                                 if c["location"]})
+                raise BasicError(
+                    f"No process is called '{prov_str}' at LOCATION "
+                    f"\"{where}\".", stmt.line,
+                    hint=("It exists at: " + ", ".join(others) + "."
+                          if others else
+                          f"FIND PROCESS \"{prov_str}\" lists what "
+                          f"matches."))
+            provider_id = found[0]["id"]
+        elif stmt.provider:
             prov_str = self._eval_str(stmt.provider)
             prov = self.bridge.resolve_process_strict(prov_str)
             if "error" in prov:
-                raise BasicError(prov["error"], stmt.line)
+                hint = (" Or add LOCATION \"code\" after the name."
+                        if prov.get("ambiguous") else "")
+                raise BasicError(prov["error"] + hint, stmt.line)
             provider_id = prov["process_id"]
 
         second_id = None
@@ -1380,7 +1402,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                                 proc_match["process_name"], location_filter))
                     if not ex.provider:
                         self._note_provider(provider_id, folder, line,
-                                            check_only)
+                                            check_only, ex.unit or "")
                 else:
                     # Try to find a flow by name directly: a UUID,
                     # then FOLDER if given, then by name.
@@ -1495,42 +1517,82 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                                      line)
                 ex_dict["provider_id"] = prov["process_id"]
                 self._note_provider(prov["process_id"], folder, line,
-                                    check_only)
+                                    check_only, ex.unit or "")
 
             exchanges.append(ex_dict)
         return exchanges
 
-    def _note_provider(self, provider_id: str, folder: str, line: int,
-                       check_only: bool):
-        """Keep count of background processes used directly, for the
-        lint note at the end of the block. (Inside an EPD module this
-        is an error: see workflows/epd.py.)"""
+    def _build_folders(self, folder: str = "") -> list:
+        """The folders this program builds in: the process folder, the
+        flow folder, the folders made with CDIR or MKDIR, and the
+        folder of the active EPD. A process outside them (and not a
+        bridge) is a background process."""
+        rt = self.runtime
+        tops = []
+        for path in (folder, rt.process_folder, rt.flow_folder):
+            if path:
+                tops.append(path.strip("/").split("/")[0].lower())
+        tops.extend(p.strip("/").lower() for p in rt.pending_folders if p)
+        epd = getattr(rt, "epd", None)
+        if epd is not None:
+            tops.append(epd.folder.strip("/").lower())
+        return tops
+
+    def _is_own_process(self, info: dict, folder: str = "") -> bool:
+        """True for a bridge, a process this session built, or a
+        process in one of the program's build folders."""
+        if self._is_bridge(info["name"], info["category"]):
+            return True
+        if info["id"] in self.runtime.built_processes:
+            return True
+        category = (info["category"] or "").strip("/").lower()
+        tops = self._build_folders(folder)
+        if not (folder or self.runtime.process_folder):
+            # no process folder: the program builds at the top level
+            if not category:
+                return True
+        return any(category == top or category.startswith(top + "/")
+                   for top in tops)
+
+    def _require_bridged(self, provider_id: str, folder: str, line: int,
+                         unit: str = ""):
+        """Every background input goes through a bridge. There is no
+        opt-out: a bridge keeps each background choice in one place and
+        named, and the data quality split depends on it."""
         info = self.bridge.describe_process(provider_id)
-        if info is None:
-            return
-        own = (folder or self.runtime.process_folder or "").split("/")[0].lower()
-        mine = bool(own) and info["category"].lower().split("/")[0] == own
-        bridged = self._is_bridge(info["name"], info["category"])
+        if info is None or self._is_own_process(info, folder):
+            return info
+        if getattr(self, "_editing_bridge", False):
+            return info
+        unit = unit or "unit"
+        raise BasicError(
+            f"'{info['name']}' is a background process: it is outside the "
+            f"folders this program builds in. Every background input goes "
+            f"through a bridge.", line,
+            hint=f"Write the bridge first, then use it: BRIDGE \"short "
+                 f"name\", {unit} / PROVIDER \"{info['id']}\" / END BRIDGE, "
+                 f"then INPUT USE PROCESS \"BRIDGE | short name | {unit}\", "
+                 f"amount, {unit}. (Each / is a new line.) HELP BRIDGE has "
+                 f"the details.")
+
+    def _note_provider(self, provider_id: str, folder: str, line: int,
+                       check_only: bool, unit: str = ""):
+        """Check the provider an INPUT or OUTPUT line names: a
+        background process has to come through a bridge, and inside an
+        EPD module the EPD's own rules apply as well (see
+        workflows/epd.py)."""
         epd = getattr(self.runtime, "epd", None)
         if epd is not None and self.runtime.epd_module:
-            epd.check_provider(info, line)
-        if check_only or mine or bridged or not own:
+            info = self.bridge.describe_process(provider_id)
+            if info is not None:
+                epd.check_provider(info, line)
             return
-        direct = getattr(self, "_direct_background", None)
-        if direct is not None and info["name"] not in direct:
-            direct.append(info["name"])
+        self._require_bridged(provider_id, folder, line, unit)
 
     def _lint_direct_background(self):
-        direct = getattr(self, "_direct_background", None) or []
+        """Kept for callers: background inputs are errors now, so there
+        is nothing left to note."""
         self._direct_background = None
-        if not direct:
-            return
-        n = len(direct)
-        self.out.write(
-            f"  NOTE: {n} input{'s use' if n > 1 else ' uses'} a background "
-            f"process directly. A BRIDGE keeps each background choice in "
-            f"one place, so it can be swapped without editing every "
-            f"process (HELP BRIDGE).")
 
     @staticmethod
     def _engine_error_line(message: str, ex_lines, param_lines, default: int) -> int:
@@ -1567,6 +1629,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 result["error"], ex_lines, param_lines, stmt.line))
 
         self._last_created = result
+        if result.get("process_id"):
+            self.runtime.built_processes.add(result["process_id"])
         if result.get("already_existed", False):
             where = folder or "(root)"
             self.out.write(f"  WARNING: process '{name}' already exists in {where}. "
@@ -2451,6 +2515,16 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if proc is None:
             raise BasicError(f"Could not load process '{target}'", stmt.line)
         current = list(proc.exchanges or [])
+        # A bridge is where a background process is named, so editing
+        # one may point it at another background process.
+        self._editing_bridge = self._is_bridge(
+            proc.name, getattr(proc, "category", "") or "")
+        try:
+            return self._edit_process(stmt, target, proc_id, proc, current)
+        finally:
+            self._editing_bridge = False
+
+    def _edit_process(self, stmt, target, proc_id, proc, current):
 
         def describe(ex, n):
             prov = ex.default_provider
@@ -2596,6 +2670,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                     self._eval_str(spec["provider"]))
                 if "error" in prov:
                     raise BasicError(f"PROVIDER: {prov['error']}", line)
+                self._require_bridged(prov["process_id"],
+                                      self.runtime.process_folder, line)
                 upd["provider_id"] = prov["process_id"]
             if "location" in spec:
                 # Same product, supplied from another location
@@ -2613,6 +2689,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                         f"The '{prov_name}' at that location makes a "
                         f"different product, so it can't supply '{name}'",
                         line)
+                self._require_bridged(match["process_id"],
+                                      self.runtime.process_folder, line)
                 upd["provider_id"] = match["process_id"]
             if len(upd) > 1 + ("internal_id" in upd):
                 updates.append(upd)
@@ -2993,6 +3071,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         tgt = self.bridge.resolve_process_strict(target_name)
         if "error" in tgt:
             raise BasicError(f"Target: {tgt['error']}", stmt.line)
+        if not self._is_bridge(tgt.get("process_name", target_name),
+                               tgt.get("category", "")):
+            self._require_bridged(src["process_id"],
+                                  self.runtime.process_folder, stmt.line,
+                                  stmt.unit or "")
 
         # The source's reference flow is what the target takes in
         source_info = self.bridge.find_process_qref_flow(src["process_id"])

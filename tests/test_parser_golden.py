@@ -1,4 +1,10 @@
-"""test_features.baslca must keep parsing to the v0.3.0 baseline."""
+"""The v0.3.0 test_features.baslca must keep parsing to the v0.3.0
+baseline.
+
+The copy in tests/golden is the file as it was in 0.3.0. The one at the
+top of the repository moved on in 0.4.0 (its background inputs go
+through bridges, which the language now requires); it is parsed here
+too, so that it stays a program the parser accepts."""
 
 from collections import Counter
 from pathlib import Path
@@ -20,8 +26,16 @@ BASELINE = {
 
 
 def _statements():
-    source = (ROOT / "test_features.baslca").read_text(encoding="utf-8")
+    source = (ROOT / "tests" / "golden" / "test_features_0_3_0.baslca"
+              ).read_text(encoding="utf-8")
     return parse(source)
+
+
+def test_the_current_file_parses_and_uses_bridges():
+    source = (ROOT / "test_features.baslca").read_text(encoding="utf-8")
+    types = Counter(type(s).__name__ for s in parse(source))
+    assert types["BridgeStmt"] == 2
+    assert types["ProcessStmt"] == BASELINE["ProcessStmt"]
 
 
 def test_statement_count():

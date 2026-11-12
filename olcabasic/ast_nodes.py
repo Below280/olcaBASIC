@@ -187,6 +187,7 @@ class BridgeStmt(Statement):
     energy_source: Expr = None     # ENERGY SOURCE "wind"
     location_based_provider: Expr = None   # LOCATION BASED PROVIDER "uuid"
     ratings: Dict = field(default_factory=dict)   # RATING aspect "level" ...
+    provider_location: Expr = None  # PROVIDER "name" LOCATION "code"
 
 
 # ── Process ──────────────────────────────────────────────

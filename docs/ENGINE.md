@@ -14,7 +14,7 @@ Most methods return a dictionary, and report a failure as `{"error": "..."}` and
 
 For most uses `olcabasic.Session` is the better entry point: it runs programs, serialises access to openLCA and applies the language's rules. The engine applies none of them: it will, for example, accept part of a method name.
 
-## Public methods (110)
+## Public methods (118)
 
 This list is generated from the code: `python docs/make_engine_doc.py`.
 
@@ -27,6 +27,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `cache_size()` | Number of cached entries (descriptor lists and unit lookups) |
 | `calculate_impacts(system_ref: str, method_ref: str, allocation: Optional[str] = None)` | Run a baseline impact calculation for a product system |
 | `calculate_project(ref: str)` | Calculate every enabled variant of a project with the project's method and compare them |
+| `calculate_scaled(system_ref: str, method_ref: str, names: List[str], factor: float, allocation: Optional[str] = None)` | Calculate a system with every input parameter in names multiplied by factor |
 | `check_process_fields(fields: Dict, views: List[Dict])` | Check the wider fields of a process against its exchanges without writing anything |
 | `chemical_synonyms(chemical_name: str, search_database: bool = True, max_synonyms: int = 20)` | Look up chemical synonyms via PubChem (US NIH, free, no key) |
 | `clear_caches()` | Forget cached descriptor lists so the next call reads them from openLCA again |
@@ -38,6 +39,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `create_global_parameter(name: str, value: Optional[float] = None, formula: Optional[str] = None, description: str = '')` | Create or update a global (database-level) parameter |
 | `create_process(name: str, category: str, exchanges: List[Dict], parameters: Optional[List[Dict]] = None, description: str = '', location: Optional[str] = None, flow_schema: Optional[str] = None, process_schema: Optional[str] = None)` | Create a process, or return the existing one if a process with the same name and category already exists |
 | `create_product_system(process_ref: str, linking: str = 'prefer_defaults', target_amount: Optional[float] = None, target_unit: Optional[str] = None, target_flow_property: Optional[str] = None, category: Optional[str] = None, prefer: Optional[str] = None, cutoff: Optional[float] = None)` | Create a product system from a process |
+| `dataset_metadata(process_id: str)` | What a process says about itself |
 | `delete_any(word: str, ref: str, confirm_foreign: bool = False)` | Delete an entity of any type but process, flow and product system (delete_entity handles those) |
 | `delete_entity(entity_type: str, entity_id: str, usage_checked: bool = False, prefer_categories=None)` | Delete a process, flow, or product system from the database |
 | `delete_probe(word: str, ref: str)` | {"own", "factors"} for a method or category |
@@ -50,6 +52,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `entity_usage(word: str, entity_id: str, name: str = '', max_hits: int = 10, progress=None, workers: int = 8)` | Where an entity is used |
 | `exchange_views(process_id: str)` | One small dict per exchange of a process, in the shape check_process_fields takes |
 | `export_json_ld(word: str, ref: str, path: str)` | Ask openLCA to write an entity, with what it depends on, to a JSON-LD zip file |
+| `export_model(folder: str, system_ids: List[str], title: str = '')` | Everything a verifier needs to read a model, as one dictionary |
 | `extract_model(category: str)` | Extract all processes within a category folder and its subfolders |
 | `find_entities(word: str, term: str = '', folder: Optional[str] = None, limit: int = 200)` | Entities of one type whose name contains term (every one when term is empty), optionally in a folder or below it |
 | `find_flow(name: str, unit: str = '', category='', strict: bool = False)` | Find an existing flow by name |
@@ -64,6 +67,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `flow_by_id(uid: str)` | The flow with this UUID, as a find_flow result, or None |
 | `flow_candidates(name: str, folder: str = '')` | Every flow called exactly this (optionally only in one folder and the folders below it), as [{"id", "name", "category", "flow_type"}] sorted by category |
 | `flow_info(flow_id: str)` | {"name", "type"} of a flow, {} if it is not in the database |
+| `flow_split(system_ref: str, method_ref: str, category: str, name_holds: str, allocation: Optional[str] = None)` | One calculation, then one impact category split between the elementary flows whose name holds name_holds (case does not matter) and the rest |
 | `flow_type_of(flow_id: str)` | 'product', 'waste' or 'elementary' for a flow, '' if it is not in the database |
 | `folder_exists(path: str, entity_type: str = '')` | True if any entity of this type (any type if empty) sits in this folder or below it (whole path segments) |
 | `get_data_quality(process_id: str)` | Extract pedigree matrix / data quality entries for a process and all its exchanges |
@@ -92,6 +96,7 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `make_method(name: str, folder: Optional[str], categories: List[Dict], nw_sets: Optional[List[Dict]] = None, description: Optional[str] = None, source: Optional[str] = None, code: Optional[str] = None)` | Make an impact method with its categories, characterisation factors and normalisation and weighting sets |
 | `make_project(name: str, folder: Optional[str], method: str, variants: List[Dict], nw_set: Optional[str] = None, with_costs: bool = False, with_regionalisation: bool = False, description: Optional[str] = None)` | Make a project |
 | `method_is_own(ref: str)` | {"own" |
+| `model_parameters(process_ids: List[str])` | The parameters a set of processes can be varied through |
 | `monte_carlo(system_ref: str, method_ref: str, iterations: int = 1000, allocation: Optional[str] = None)` | Run Monte Carlo uncertainty simulation |
 | `move_any(word: str, ref: str, folder: str)` | Move an entity of any type to a folder |
 | `move_entity(entity_type: str, entity_id: str, category: str)` | Move a process, flow or product system to another folder |
@@ -116,9 +121,11 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `run_scenarios_csv(system_ref: str, method_ref: str, csv_path: str, output_path: str = '', allocation: Optional[str] = None)` | Full scenario pipeline |
 | `run_sensitivity(system_ref: str, method_ref: str, parameter_names: List[str], variation_pct: float = 20.0, allocation: Optional[str] = None)` | Run +/- sensitivity analysis on named parameters |
 | `run_sensitivity_csv(system_ref: str, method_ref: str, csv_path: str, variation_pct: float = 20.0, output_path: str = '', allocation: Optional[str] = None)` | Full sensitivity pipeline |
+| `save_epd(name: str, folder: Optional[str], modules: List[Dict], product_result: str, amount: float, unit: str, fields: Optional[Dict[str, Any]] = None, replace: bool = False)` | Write an openLCA Epd entity |
 | `save_result(handle: str, name: str, folder: Optional[str] = None, description: Optional[str] = None, replace: bool = False)` | Store an open result in the database as an openLCA Result entity |
 | `search_flows(search_term: str = '', category_filter: str = '', limit: int = 20)` | Search flows by name and/or category folder |
 | `search_processes(search_term: str, category_filter: str = '', location_filter: str = '', limit: int = 20, with_location: bool = False)` | Search processes by name, category, and/or location |
+| `set_analysis_group(system_id: str, name: str, process_ids: List[str])` | Put the processes of a product system that are in process_ids into one analysis group (replacing the group of that name) |
 | `set_database_family(family: str)` | Set the database family manually from user input |
 | `set_flow_fields(flow_id: str, fields: Dict)` | Write a flow's cas, formula, synonyms, location, infrastructure flag and description |
 | `set_parameter_uncertainty(name: str, uncertainty: Optional[Dict])` | Set (or with None remove) the uncertainty distribution of a global input parameter |
@@ -128,5 +135,6 @@ This list is generated from the code: `python docs/make_engine_doc.py`.
 | `set_system_fields(system_ref: str, parameter_sets: Optional[List[Dict]] = None, analysis_groups: Optional[List[Dict]] = None, remove_parameter_sets: Optional[List[str]] = None, remove_analysis_groups: Optional[List[str]] = None, description: Optional[str] = None)` | Write parameter sets and analysis groups on a product system |
 | `show_entity(word: str, ref: str)` | An entity's fields in plain values |
 | `shutdown_server()` | Stop openLCA's IPC server and close its database (runtime/shutdown) |
+| `system_for_process(process_id: str)` | The product system built from a process |
 | `upstream_tree(system_ref: str, method_ref: str, category: str, levels: int = 3, top: int = 5, allocation: Optional[str] = None, with_quality: bool = True, result_handle: Optional[str] = None)` | Multi-level contribution tree for one impact category, walked with openLCA's upstream tree (result.get_upstream_impacts_of) |
 | `validate_system(system_ref: str, test_calculate: bool = False)` | Validate a product system structure |

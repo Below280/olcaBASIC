@@ -27,6 +27,10 @@ FOLDER = "00: olcaBASIC live fields"
 NAME = "olcaBASIC live fields product"
 CO = "olcaBASIC live fields co-product"
 PARAM = "olcabasic_live_fields_kwh"
+# Every background input goes through a bridge (0.4.0). The bridge stays
+# in the folder after the run and is reused by the next one.
+BRIDGE_SHORT = "olcaBASIC live fields electricity"
+BRIDGE = f"BRIDGE | {BRIDGE_SHORT} | kWh"
 
 
 def near(a, b, tol=1e-6):
@@ -83,13 +87,16 @@ def model(runner, baseline, provider, currency, people):
 SET PROCESS FOLDER "{FOLDER}"
 SET FLOW FOLDER "{FOLDER}"
 LET {PARAM} = 2 UNCERTAINTY UNIFORM 1.5, 2.5
+BRIDGE "{BRIDGE_SHORT}", kWh
+  PROVIDER "{name}" LOCATION "{location}"
+END BRIDGE
 MAKE PROCESS "{NAME}"
   DESCRIPTION "olcaBASIC live test of process fields"
   TYPE UNIT
   INFRASTRUCTURE
   OUTPUT MAKE FLOW "{NAME}", 1, kg, PRODUCT COST 10 CURRENCY "{currency[1]}"
   OUTPUT MAKE FLOW "{CO}", 0.5, kg
-  INPUT USE PROCESS "{name}", {PARAM}, kWh LOCATION "{location}" UNCERTAINTY TRIANGLE 1.5, 2, 2.5 BASE UNCERTAINTY 0.0006 COST 0.3 CURRENCY "{currency[1]}" SITE "{location}"
+  INPUT USE PROCESS "{BRIDGE}", {PARAM}, kWh UNCERTAINTY TRIANGLE 1.5, 2, 2.5 BASE UNCERTAINTY 0.0006 COST 0.3 CURRENCY "{currency[1]}" SITE "{location}"
   DEFAULT ALLOCATION PHYSICAL
   ALLOCATION PHYSICAL
     "{NAME}", 0.7
@@ -253,10 +260,9 @@ def test_montecarlo_runs_as_a_simulation(runner, model):
 
 
 def test_edit_removes_and_changes_fields(runner, model):
-    name = model["provider"][0]
     r = runner.session.run(f'''
 EDIT PROCESS "{NAME}"
-  UPDATE INPUT "{name}" UNCERTAINTY NONE NO COST NO SITE
+  UPDATE INPUT "{BRIDGE}" UNCERTAINTY NONE NO COST NO SITE
   INFRASTRUCTURE NO
   REMOVE ALLOCATION ECONOMIC
   DOCUMENT

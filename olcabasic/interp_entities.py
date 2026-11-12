@@ -412,6 +412,13 @@ class EntitiesInterpMixin:
                     f"({result['categories']} categories, "
                     f"{result['factors']} factors, {result['nw_sets']} NW "
                     f"sets)")
+                if result.get("source_dropped"):
+                    self.out.write(
+                        "  WARNING: openLCA did not keep the SOURCE of the "
+                        "method: its IPC server does not store a method's "
+                        "source. Everything else was written. Set the "
+                        "source in openLCA itself (the method's General "
+                        "information tab).")
             self.bridge.refresh_caches()
             return
 

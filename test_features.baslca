@@ -69,12 +69,20 @@ SET PROCESS FOLDER "00: Test"
 SET FLOW FOLDER "00: Test/Flows"
 PWD
 
+REM Every background input goes through a bridge (0.4.0)
+BRIDGE "Cement", kg
+  PROVIDER "Portland cement; at plant"
+END BRIDGE
+BRIDGE "Sand", kg
+  PROVIDER "Construction sand and gravel; at mine"
+END BRIDGE
+
 REM cement_mass becomes a global parameter; sand_mass a global
 REM formula parameter (cement_mass * aggregate_ratio)
 MAKE PROCESS "Test concrete; at plant"
   OUTPUT MAKE FLOW "Test concrete", 1, m3, PRODUCT
-  INPUT USE PROCESS "Portland cement; at plant", cement_mass, kg
-  INPUT USE PROCESS "Construction sand and gravel; at mine", sand_mass, kg
+  INPUT USE PROCESS "BRIDGE | Cement | kg", cement_mass, kg
+  INPUT USE PROCESS "BRIDGE | Sand | kg", sand_mass, kg
   REM Elementary flow: checks the compartment lookup and that it's
   REM characterised (adds 0.3 kg CO2 per m3, i.e. +0.06 in the wall)
   OUTPUT "Carbon dioxide", cement_mass * 0.001, kg TO AIR
@@ -85,7 +93,7 @@ REM has to change it in both places
 MAKE PROCESS "Test wall; at site"
   OUTPUT MAKE FLOW "Test wall", 1, m2, PRODUCT
   INPUT USE PROCESS "Test concrete; at plant", 0.2, m3
-  INPUT USE PROCESS "Portland cement; at plant", cement_mass * 0.05, kg
+  INPUT USE PROCESS "BRIDGE | Cement | kg", cement_mass * 0.05, kg
 END PROCESS
 
 REM LINK adds sand bedding to the wall after it's built. The amount
@@ -96,7 +104,7 @@ PRINT "=== EDIT ==="
 REM Render goes from 0.05 to 0.06 x cement_mass: still proportional,
 REM so the scenario ratios must stay exact
 EDIT PROCESS "Test wall; at site"
-  UPDATE INPUT "Portland cement; at plant", cement_mass * 0.06, kg
+  UPDATE INPUT "BRIDGE | Cement | kg", cement_mass * 0.06, kg
   ADD OUTPUT "Carbon dioxide", 0.5, kg TO AIR
   SET DESCRIPTION "Test wall, edited by olcaBASIC"
 END EDIT
@@ -180,7 +188,7 @@ SET PROCESS FOLDER "00: Test"
 MAKE PROCESS "Test pedigree check"
   FLOW SCHEMA "Flow Pedigree"
   OUTPUT MAKE FLOW "Test pedigree product", 1, kg, PRODUCT
-  INPUT USE PROCESS "Portland cement; at plant", 10, kg PEDIGREE (1,2,4,1,3) COMMENT "olcaBASIC test comment"
+  INPUT USE PROCESS "BRIDGE | Cement | kg", 10, kg PEDIGREE (1,2,4,1,3) COMMENT "olcaBASIC test comment"
 END PROCESS
 SHOW PROCESS "Test pedigree check" INPUTS
 SYSTEM "Test pedigree check"
