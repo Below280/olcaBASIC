@@ -2,7 +2,7 @@
 AST node types for olcaBASIC.
 
 Each node represents a parsed statement. The interpreter walks
-these and dispatches the appropriate LCAFunctions calls.
+these and dispatches the appropriate engine calls.
 """
 
 from dataclasses import dataclass, field

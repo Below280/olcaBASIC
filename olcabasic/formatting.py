@@ -243,7 +243,7 @@ def format_systems(results: Dict) -> str:
 
 
 def exchange_amount(ex: Dict, param_values: Dict) -> str:
-    """The amount to show for an exchange. The MCP stores plain-number
+    """The amount to show for an exchange. The engine stores plain-number
     amounts as process parameters (p01_...), so show the value rather
     than the parameter's name; real formulas are shown as written."""
     formula = ex.get("formula")

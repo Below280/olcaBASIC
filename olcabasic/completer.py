@@ -110,9 +110,9 @@ class Completer:
             return
         try:
             import olca_schema as o
-            descs = self.bridge.lca._get_descriptors(o.Process)
+            descs = self.bridge.get_descriptors(o.Process)
             self._process_cache = [d.name for d in descs]
-            descs = self.bridge.lca._get_descriptors(o.Flow)
+            descs = self.bridge.get_descriptors(o.Flow)
             self._flow_cache = [d.name for d in descs][:500]
             methods = self.bridge.list_methods()
             self._method_cache = [

@@ -1016,7 +1016,7 @@ class Interpreter:
                 ex_dict["provider_id"] = provider_id
 
             # Pedigree scores (checked against the FLOW SCHEMA by the
-            # MCP) and a per-line comment, both optional
+            # engine) and a per-line comment, both optional
             if ex.pedigree is not None:
                 ex_dict["dq_entry"] = (ex.pedigree if isinstance(ex.pedigree, str)
                                        else "(" + ";".join(str(n) for n in ex.pedigree) + ")")
@@ -1030,7 +1030,7 @@ class Interpreter:
                 # Expression contains variables: pass as formula
                 ex_dict["formula"] = self._expr_to_formula(ex.amount)
             else:
-                # Bare number: auto-parametrised by LCAFunctions
+                # Bare number: auto-parametrised by the engine
                 ex_dict["amount"] = float(self._eval(ex.amount))
 
             # Explicit provider overrides auto-detected one. It must
@@ -1056,7 +1056,7 @@ class Interpreter:
             description, location, flow_schema, process_schema)
 
         if "error" in result:
-            # Put MCP wording into olcaBASIC terms
+            # Put the engine's wording into olcaBASIC terms
             msg = result["error"].replace(
                 "Set flow_schema.",
                 'Add a FLOW SCHEMA "name" line to the PROCESS block '
@@ -1170,8 +1170,8 @@ class Interpreter:
             csv_path = self._eval_str(stmt.from_csv)
             save_to = self._eval_str(stmt.save_to) if stmt.save_to else ""
             print(f"  Running scenarios from {csv_path}...")
-            result = self.bridge.lca.run_scenarios_csv(
-                system, method, csv_path, save_to, stmt.allocation or None)
+            result = self.bridge.run_scenarios_csv(
+                system, method, csv_path, save_to, stmt.allocation)
         else:
             # Use accumulated SCENARIO blocks
             scenarios = self.runtime.scenarios
@@ -1201,9 +1201,9 @@ class Interpreter:
             csv_path = self._eval_str(stmt.from_csv)
             save_to = self._eval_str(stmt.save_to) if stmt.save_to else ""
             print(f"  Running sensitivity from {csv_path}...")
-            result = self.bridge.lca.run_sensitivity_csv(
+            result = self.bridge.run_sensitivity_csv(
                 system, method, csv_path, stmt.variation_pct,
-                save_to, stmt.allocation or None)
+                save_to, stmt.allocation)
         else:
             params = stmt.parameters
             self._check_overridable(params, "SENSITIVITY", stmt.line)
@@ -1284,7 +1284,7 @@ class Interpreter:
         if etype == "system":
             etype = "product_system"
 
-        # The MCP deletes by UUID, so resolve the name first.
+        # The engine deletes by UUID, so resolve the name first.
         # (Passing the name always came back 'not found'.)
         target = self.bridge.resolve_entity_strict(etype, ref)
         if "error" in target:
@@ -1497,7 +1497,7 @@ class Interpreter:
                     f"Say INPUT or OUTPUT to pick one.", line)
             return name, hits[0], line
 
-        # Removals. The MCP removes by flow, so a flow that appears
+        # Removals. The engine removes by flow, so a flow that appears
         # more than once can't be removed on its own.
         remove_ids = []
         for spec in stmt.remove_exchanges:

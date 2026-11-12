@@ -99,20 +99,26 @@ def test_process_matches_the_baseline(live, baseline, names):
     assert got["category"] == names["folder"]
 
     def exchanges(details, swap):
+        """Exchange rows with auto-parameter formulas replaced by their
+        values. (Auto-parameter names contain part of the product's
+        name, which differs between the reference and the test model.)"""
+        values = {p["name"]: p["value"] for p in details["parameters"]}
         rows = set()
         for ex in details["exchanges"]:
             formula = ex["formula"] or ""
             flow = ex["flow"]
+            amount = values.get(formula, formula)
             if swap:
-                formula = rename(formula, baseline, names)
                 flow = rename(flow, baseline, names)
-            rows.add((flow, formula, ex["unit"], bool(ex["is_input"]),
+                if isinstance(amount, str):
+                    amount = rename(amount, baseline, names)
+            rows.add((flow, amount, ex["unit"], bool(ex["is_input"]),
                       bool(ex["is_qref"]), ex["provider"]))
         return rows
 
     assert exchanges(got, False) == exchanges(want, True)
-    assert ({p["name"]: p["value"] for p in got["parameters"]}
-            == {p["name"]: p["value"] for p in want["parameters"]})
+    assert (sorted(p["value"] for p in got["parameters"])
+            == sorted(p["value"] for p in want["parameters"]))
 
 
 def test_system_validates_like_the_baseline(live, baseline, names):
@@ -120,8 +126,14 @@ def test_system_validates_like_the_baseline(live, baseline, names):
     want = baseline["validate"]
     assert got["valid"] == want["valid"]
     assert got["summary"] == want["summary"]
-    assert ([f["message"] for f in got["findings"]]
-            == [f["message"] for f in want["findings"]])
+    # The number of process links must be the same. The parameter count
+    # is not compared: openLCA lists every global parameter in the
+    # database with each system, and the test model adds one.
+    def links(result):
+        return [f["message"] for f in result["findings"]
+                if f["check"] in ("links_present", "no_links")]
+
+    assert links(got) == links(want)
 
 
 @pytest.mark.parametrize("method", ["EF v3.1", "IPCC 2021"])

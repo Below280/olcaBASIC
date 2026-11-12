@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "olcabasic"
-version = "0.3.0"
+version = "0.4.0"
 description = "A BASIC-like language for controlling openLCA"
 readme = "README.md"
 license = {text = "MPL-2.0"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{name = "Below280", email = "info@below280.com"}]
 keywords = ["lca", "openlca", "basic", "dsl", "life-cycle-assessment"]
 classifiers = [
@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "b280-olca-mcp>=1.16.0",
+    "olca-ipc>=2.4.0,<3",
 ]
 
 [project.optional-dependencies]

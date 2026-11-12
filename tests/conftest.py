@@ -57,17 +57,14 @@ def empty_client() -> FakeClient:
 
 @pytest.fixture
 def engine(client):
-    from b280_olca_mcp.functions import LCAFunctions
-    return LCAFunctions(client)
+    from olcabasic.engine import Engine
+    return Engine(client)
 
 
 @pytest.fixture
 def bridge(engine):
     from olcabasic.bridge import LCABridge
-    b = LCABridge()
-    b.lca = engine
-    b._connected = True
-    return b
+    return LCABridge(engine=engine)
 
 
 @pytest.fixture
