@@ -95,6 +95,23 @@ class Runtime:
         # Error handling mode
         self.error_mode: str = "STOP"  # STOP, PRINT, SKIP
 
+        # Last VALIDATE result per product system id (this session)
+        self.validation: Dict[str, Dict] = {}
+
+        # Defaults already stated this session
+        self.defaults_shown: set = set()
+
+        # Folders created with CDIR or MKDIR that hold nothing yet
+        # (openLCA only knows a folder once something is in it)
+        self.pending_folders: set = set()
+
+        # Source of every program run without error, for SAVE PROGRAM
+        self.program_history: List[str] = []
+
+        # The active EPD definition, if any (see workflows/epd.py)
+        self.epd = None
+        self.epd_module: str = ""
+
     def push_scope(self) -> Scope:
         """Create a new local scope."""
         new_scope = Scope(parent=self.current_scope)
@@ -176,3 +193,10 @@ class Runtime:
         self.var_exprs.clear()
         self.synced_globals.clear()
         self.confirm_delete = False
+        self.validation.clear()
+        self.defaults_shown.clear()
+        self.deprecation_shown.clear()
+        self.pending_folders.clear()
+        self.program_history.clear()
+        self.epd = None
+        self.epd_module = ""

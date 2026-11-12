@@ -207,16 +207,28 @@ def format_processes(results: Dict) -> str:
     """Format process search results."""
     procs = results.get("processes", [])
     # UUID column: it's what PROVIDER, LINK and MOVE take when
-    # several processes share a name
-    headers = ["Name", "Category", "UUID"]
-    rows = [[p.get("name", "?"), p.get("category", ""), p.get("id", "")]
-            for p in procs]
+    # several processes share a name. Location column (when the
+    # search returned it): what LOCATION takes.
+    with_location = any("location" in p for p in procs)
+    if with_location:
+        headers = ["Name", "Location", "Category", "UUID"]
+        rows = [[p.get("name", "?"), p.get("location", ""),
+                 p.get("category", ""), p.get("id", "")] for p in procs]
+        widths = [70, 14, 50, 36]
+    else:
+        headers = ["Name", "Category", "UUID"]
+        rows = [[p.get("name", "?"), p.get("category", ""), p.get("id", "")]
+                for p in procs]
+        widths = [70, 70, 36]
 
     count = results.get("count", len(procs))
     total = results.get("total_matches", count)
     lines = [f"  {count} results (of {total} total)"]
     if rows:
-        lines.append(format_table(headers, rows, max_widths=[70, 70, 36]))
+        lines.append(format_table(headers, rows, max_widths=widths))
+    if results.get("truncated"):
+        lines.append(f"  Showing the first {count}. Narrow the search with "
+                     f"more of the name, AT \"location\" or IN \"folder\".")
     return "\n".join(lines)
 
 

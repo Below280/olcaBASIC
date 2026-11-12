@@ -408,8 +408,9 @@ Every command, by topic. `HELP`, `HELP <topic>` and `HELP <command>` show the sa
 | `CAT` / `LS` | Acorn / Linux | List the folders and entries in the current folder |
 | `DIR` / `CD` | Acorn / Linux | Go to a folder (DIR on its own shows where you are) |
 | `UP` / `CD ..` | Acorn / Linux | Go up one folder |
-| `BACK` | Acorn | Go back to the folder you were in before |
+| `BACK` / `CD -` | Acorn / Linux | Go back to the folder you were in before |
 | `CDIR` | Acorn | Create a folder, go into it, and build there from now on |
+| `MKDIR` | Linux | Create a folder without going into it |
 | `PWD` | Linux | Show where you are browsing and where new things are built |
 | `NAVIGATE` | olcaBASIC | Choose which tree CAT, DIR and UP move through |
 | `SET PROCESS FOLDER` / `SET FOLDER` | olcaBASIC | Say where new processes are built |
@@ -421,6 +422,7 @@ DIR "folder"
 UP
 BACK
 CDIR "name"
+MKDIR "name"
 PWD
 NAVIGATE PROCESSES|FLOWS|METHODS|SYSTEMS
 SET PROCESS FOLDER "path"
@@ -433,11 +435,14 @@ SET FLOW FOLDER "path"
 |---|---|---|
 | `FIND PROCESS` | olcaBASIC | Search processes by name |
 | `FIND FLOW` | olcaBASIC | Search flows by name |
+| `FIND SYSTEM` | olcaBASIC | Search product systems by name |
 | `FIND METHOD` | olcaBASIC | Search impact methods by name |
 | `FIND UNIT` | olcaBASIC | Look up a unit and the flow property it belongs to |
 | `FIND CHEMICAL` | olcaBASIC | Look up a chemical's synonyms on PubChem |
-| `SHOW PROCESS` | olcaBASIC | Show a process: exchanges, parameters, location |
-| `SHOW FLOW` | olcaBASIC | Show a flow: type, folder, properties and units |
+| `SHOW PROCESS` | olcaBASIC | Show a process: exchanges, parameters, data quality, location |
+| `SHOW FLOW` | olcaBASIC | Show a flow: type, folder, units, or where it is used |
+| `SHOW SYSTEM` | olcaBASIC | Show a product system, its parameters or its provider links |
+| `SHOW GLOBAL PARAMS` | olcaBASIC | List global parameters, optionally those whose name contains a text |
 | `SHOW PARAMETER` | olcaBASIC | Show a global parameter |
 | `DATABASE INFO` / `PRINT DATABASE` / `DATABASE` | olcaBASIC | Count what is in the database and name its family |
 | `DATABASE FAMILY` | olcaBASIC | Say which flow property names the database uses |
@@ -455,11 +460,14 @@ SET FLOW FOLDER "path"
 ```basic
 FIND PROCESS "text" [AT "location"] [IN "folder"]
 FIND FLOW "text" [IN "folder"]
+FIND SYSTEM "text"
 FIND METHOD "text"
 FIND UNIT "unit"
 FIND CHEMICAL "name or CAS number"
-SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|LOCATION|DESCRIPTION]
-SHOW FLOW "name" [UNITS|DESCRIPTION]
+SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|DESCRIPTION]
+SHOW FLOW "name" [UNITS|DESCRIPTION|USAGE [LIMIT n]]
+SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"]]
+SHOW GLOBAL PARAMS ["text"]
 SHOW PARAMETER "name" [VALUE|DESCRIPTION]
 DATABASE INFO
 DATABASE FAMILY "ecoinvent"|"flcac"
@@ -484,8 +492,8 @@ PRINT DQ SYSTEMS
 | `BRIDGE` / `MAKE BRIDGE` | olcaBASIC | Create a bridge process between your model and a background process |
 | `SYSTEM` / `MAKE SYSTEM` | olcaBASIC | Create the product system for a process |
 | `LINK` | olcaBASIC | Add the source's product as an input of the target |
-| `MOVE` | olcaBASIC | Move a process to another folder |
-| `DELETE` | olcaBASIC | Delete a process or a product system |
+| `MOVE` | olcaBASIC | Move a process, flow or product system to another folder |
+| `DELETE` | olcaBASIC | Delete a process, a product system or an unused flow |
 | `CONFIRM DELETE` | olcaBASIC | Let a program delete without being asked each time |
 
 ```basic
@@ -515,8 +523,8 @@ SYSTEM "process name"
   [FOLDER "path"]
 END SYSTEM
 LINK PROCESS "source" TO PROCESS "target" WITH amount, unit
-MOVE PROCESS "name" TO "folder"
-DELETE PROCESS|SYSTEM "name or uuid"
+MOVE PROCESS|FLOW|SYSTEM "name" TO "folder"
+DELETE PROCESS|SYSTEM|FLOW "name or uuid"
 CONFIRM DELETE ON|OFF
 ```
 
@@ -532,7 +540,8 @@ EDIT PROCESS "name or uuid"
   ADD INPUT|OUTPUT ...                 (same forms as in MAKE PROCESS)
   ADD PARAM name = value
   REMOVE INPUT|OUTPUT "flow or provider name"
-  UPDATE INPUT|OUTPUT "name", amount [, unit]
+         [PROVIDER "name or uuid"] [LOCATION "code"] [AMOUNT n] [INDEX n]
+  UPDATE INPUT|OUTPUT "name" [INDEX n], amount [, unit]
   UPDATE INPUT|OUTPUT "name" [LOCATION "code"] [PROVIDER "uuid"]
                              [PEDIGREE (1,2,1,1,3)] [COMMENT "text"]
   UPDATE PARAM name = value
@@ -622,10 +631,12 @@ EXTRACT [FOLDER] "folder"
 |---|---|---|
 | `PRINT RESULTS` | olcaBASIC | Show the most recent results again |
 | `SAVE RESULTS` / `EXPORT RESULTS TO` | olcaBASIC | Write the most recent results to a CSV file |
+| `SAVE PROGRAM` / `SAVE "file.baslca"` | olcaBASIC | Write every program run so far in this session to a file |
 
 ```basic
 PRINT RESULTS
 SAVE RESULTS "file.csv"
+SAVE PROGRAM "file.baslca"
 ```
 
 ### Programming: basic: variables, loops, conditions, subroutines

@@ -107,6 +107,11 @@ class Parser:
             tok.line,
             hint="Use one of: " + ", ".join(self.ALLOCATIONS) + ".")
 
+    @staticmethod
+    def _defaulted(**given) -> tuple:
+        """Names of the optional arguments that were left out."""
+        return tuple(name for name, value in given.items() if not value)
+
     def peek_at(self, offset: int) -> Token:
         i = self.pos + offset
         if i < len(self.tokens):
@@ -260,6 +265,19 @@ class Parser:
                     self.advance()
                 return FuncCall(name, args)
             return Identifier(name)
+
+        # A keyword that is also a built-in function: MAX(a, b)
+        if (tok.type == TokenType.KEYWORD and tok.upper() in ("MAX",)
+                and self.peek_at(1).type == TokenType.LPAREN):
+            self.advance()
+            self.advance()
+            args = []
+            while self.peek().type != TokenType.RPAREN:
+                args.append(self.parse_expr())
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+            self.advance()
+            return FuncCall(tok.value, args)
 
         # Allow keywords to be used as identifiers in expressions
         # (e.g. unit names like "kg" which might also be keywords)
@@ -510,7 +528,17 @@ class Parser:
             return self.parse_dir_nav(line)
 
         if kw == "CD":
-            return self.parse_dir_nav(line)  # undocumented alias
+            return self.parse_dir_nav(line)  # Linux form of DIR
+
+        if kw == "MKDIR":
+            self.advance()
+            if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                    TokenType.COMMENT):
+                raise ParseError("MKDIR needs a folder name.", line,
+                                 hint='For example: MKDIR "00: My model"')
+            name = self.parse_string_or_expr()
+            self.expect_newline()
+            return MkdirStmt(line=line, name=name)
 
         if kw == "PWD":
             self.advance()
@@ -1006,6 +1034,7 @@ class Parser:
         process_ref = self.parse_string_or_expr()
 
         linking = "PREFER_DEFAULTS"
+        linking_given = False
         target_amount = None
         target_unit = ""
         target_property = None
@@ -1027,6 +1056,7 @@ class Parser:
                             "LINKING must be PREFER_DEFAULTS or "
                             "ONLY_DEFAULTS", self.current_line())
                     linking = self.advance().upper()
+                    linking_given = True
                 elif self.match_keyword("TARGET"):
                     target_amount = self.parse_expr()
                     if self.peek().type == TokenType.COMMA:
@@ -1051,7 +1081,9 @@ class Parser:
         return SystemStmt(
             line=line, process_ref=process_ref, linking=linking,
             target_amount=target_amount, target_unit=target_unit,
-            target_property=target_property, folder=folder)
+            target_property=target_property, folder=folder,
+            defaulted=self._defaulted(LINKING=linking_given,
+                                      TARGET=target_amount is not None))
 
     def parse_calculate(self, line: int) -> CalculateStmt:
         self.advance()  # consume CALCULATE
@@ -1063,7 +1095,8 @@ class Parser:
             allocation = self.parse_allocation()
         self.expect_newline()
         return CalculateStmt(line=line, system=system, method=method,
-                              allocation=allocation)
+                              allocation=allocation,
+                              defaulted=self._defaulted(ALLOCATE=allocation))
 
     def parse_contribution(self, line: int) -> ContributionStmt:
         self.advance()  # consume CONTRIBUTION
@@ -1071,11 +1104,13 @@ class Parser:
         self.expect_keyword("USING")
         method = self.parse_string_or_expr()
         top = 10
+        top_given = False
         allocation = ""
         categories = []
 
         if self.match_keyword("TOP"):
             top = self.parse_int("TOP")
+            top_given = True
         if self.match_keyword("ALLOCATE"):
             allocation = self.parse_allocation()
 
@@ -1099,7 +1134,8 @@ class Parser:
 
         return ContributionStmt(
             line=line, system=system, method=method, top=top,
-            categories=categories, allocation=allocation)
+            categories=categories, allocation=allocation,
+            defaulted=self._defaulted(TOP=top_given, ALLOCATE=allocation))
 
     def parse_inventory(self, line: int) -> InventoryStmt:
         self.advance()  # consume INVENTORY
@@ -1107,14 +1143,18 @@ class Parser:
         self.expect_keyword("USING")
         method = self.parse_string_or_expr()
         max_flows = 50
+        max_given = False
         allocation = ""
         if self.match_keyword("MAX"):
             max_flows = self.parse_int("MAX")
+            max_given = True
         if self.match_keyword("ALLOCATE"):
             allocation = self.parse_allocation()
         self.expect_newline()
         return InventoryStmt(line=line, system=system, method=method,
-                              max_flows=max_flows, allocation=allocation)
+                              max_flows=max_flows, allocation=allocation,
+                              defaulted=self._defaulted(MAX=max_given,
+                                                        ALLOCATE=allocation))
 
     def parse_montecarlo(self, line: int) -> MonteCarloStmt:
         self.advance()  # consume MONTECARLO
@@ -1122,14 +1162,18 @@ class Parser:
         self.expect_keyword("USING")
         method = self.parse_string_or_expr()
         runs = 1000
+        runs_given = False
         allocation = ""
         if self.match_keyword("RUNS"):
             runs = self.parse_int("RUNS")
+            runs_given = True
         if self.match_keyword("ALLOCATE"):
             allocation = self.parse_allocation()
         self.expect_newline()
         return MonteCarloStmt(line=line, system=system, method=method,
-                               runs=runs, allocation=allocation)
+                               runs=runs, allocation=allocation,
+                               defaulted=self._defaulted(RUNS=runs_given,
+                                                         ALLOCATE=allocation))
 
     def parse_scenario(self, line: int) -> ScenarioStmt:
         self.advance()  # consume SCENARIO
@@ -1169,13 +1213,16 @@ class Parser:
         self.expect_keyword("USING")
         method = self.parse_string_or_expr()
 
-        variation = 20.0
         allocation = ""
-        if self.match_keyword("BY"):
-            variation = self.parse_number("BY")
-            self.match_keyword("PERCENT")  # optional
-            if self.peek().type == TokenType.PERCENT:
-                self.advance()
+        if not self.match_keyword("BY"):
+            raise ParseError(
+                "SENSITIVITY needs BY: how far to vary each parameter.",
+                line, hint='For example: SENSITIVITY ON "system" USING '
+                           '"method" BY 10%')
+        variation = self.parse_number("BY")
+        self.match_keyword("PERCENT")  # optional
+        if self.peek().type == TokenType.PERCENT:
+            self.advance()
 
         if self.match_keyword("ALLOCATE"):
             allocation = self.parse_allocation()
@@ -1231,11 +1278,18 @@ class Parser:
         self.match_keyword("SENSITIVITY")
         self.expect_newline()
 
+        if not parameters and from_csv is None:
+            raise ParseError(
+                "SENSITIVITY has nothing to vary.", line,
+                hint='Add a VARY line inside the block, for example: '
+                     'VARY cement_mass (or FROM "parameters.csv")')
+
         return SensitivityStmt(
             line=line, system=system, method=method,
             variation_pct=variation, parameters=parameters,
             from_csv=from_csv, save_to=save_to, allocation=allocation,
-            parameter_lines=parameter_lines)
+            parameter_lines=parameter_lines,
+            defaulted=self._defaulted(ALLOCATE=allocation))
 
     def parse_run(self, line: int) -> Statement:
         self.advance()  # consume RUN
@@ -1287,7 +1341,8 @@ class Parser:
             return RunScenariosStmt(
                 line=line, system=system, method=method,
                 from_csv=from_csv, save_to=save_to,
-                allocation=allocation)
+                allocation=allocation,
+                defaulted=self._defaulted(ALLOCATE=allocation))
 
         # RUN "filename.baslca"
         filename = self.parse_string_or_expr()
@@ -1309,14 +1364,17 @@ class Parser:
         self.advance()  # consume CHECK
         system = self.parse_string_or_expr()
         tier = 1
+        tier_given = False
         against = None
         if self.match_keyword("TIER"):
             tier = self.parse_int("TIER")
+            tier_given = True
         if self.match_keyword("AGAINST"):
             against = self.parse_string_or_expr()
         self.expect_newline()
         return CheckStmt(line=line, system=system, tier=tier,
-                          against=against)
+                          against=against,
+                          defaulted=self._defaulted(TIER=tier_given))
 
     def parse_extract(self, line: int) -> ExtractStmt:
         self.advance()  # consume EXTRACT
@@ -1338,9 +1396,17 @@ class Parser:
             filename = self.parse_string_or_expr()
             self.expect_newline()
             return SaveResultsStmt(line=line, filename=filename)
-        # SAVE "filename" (save program — REPL mode)
+        # SAVE PROGRAM "file" or SAVE "file.baslca": the program so far
+        if self.match_word("PROGRAM"):
+            filename = self.parse_string_or_expr()
+            self.expect_newline()
+            return SaveProgramStmt(line=line, filename=filename)
         filename = self.parse_string_or_expr()
         self.expect_newline()
+        if (isinstance(filename, StringLiteral)
+                and filename.value.lower().endswith((".baslca", ".bas"))):
+            return SaveProgramStmt(line=line, filename=filename)
+        # SAVE "file.csv": the latest results, as before
         return SaveResultsStmt(line=line, filename=filename)
 
     def parse_export(self, line: int) -> ExportResultsStmt:
@@ -1354,23 +1420,12 @@ class Parser:
     def parse_delete(self, line: int) -> DeleteStmt:
         self.advance()  # consume DELETE
         entity_type = ""
-        if self.at_keyword("FLOW"):
-            # openLCA's IPC server can't say whether a flow is in use, and
-            # deleting one that is leaves processes broken
-            raise ParseError(
-                "DELETE FLOW is currently not available in olcaBASIC. "
-                "openLCA's IPC interface can't establish whether a flow is "
-                "used elsewhere in a model, and deleting one that is leaves "
-                "those processes broken. We have raised a request with "
-                "GreenDelta to add this: "
-                "https://github.com/GreenDelta/olca-modules/issues/76 "
-                "Until then, delete flows in openLCA, which checks first.",
-                line)
-        if self.at_keyword("PROCESS", "SYSTEM"):
+        if self.at_keyword("PROCESS", "SYSTEM", "FLOW"):
             entity_type = self.advance().upper()
         else:
-            raise ParseError("Say what to delete: DELETE PROCESS or "
-                             "DELETE SYSTEM", line)
+            raise ParseError("Say what to delete.", line,
+                             hint='DELETE PROCESS "name", DELETE SYSTEM '
+                                  '"name" or DELETE FLOW "name"')
         ref = self.parse_string_or_expr()
         self.expect_newline()
         return DeleteStmt(line=line, entity_type=entity_type, ref=ref)
@@ -1397,12 +1452,13 @@ class Parser:
         self.advance()  # FIND
         entity_type = ""
         if self.at_word("PROCESS", "FLOW", "METHOD", "CHEMICAL",
-                         "UNIT"):
+                         "UNIT", "SYSTEM"):
             entity_type = self.advance().upper()
         else:
             raise ParseError(
-                "FIND needs a type: PROCESS, FLOW, METHOD, CHEMICAL "
-                "or UNIT", line)
+                "FIND needs a type: PROCESS, FLOW, SYSTEM, METHOD, "
+                "CHEMICAL or UNIT", line,
+                hint='For example: FIND PROCESS "cement"')
         search_term = self.parse_string_or_expr()
         location = None
         category = None
@@ -1504,6 +1560,18 @@ class Parser:
             self.advance()
             self.expect_newline()
             return UpStmt(line=line)
+        # CD - goes back to the previous folder, as in bash
+        if (tok.type == TokenType.MINUS and self.peek_at(1).type in (
+                TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT)):
+            self.advance()
+            self.expect_newline()
+            return BackStmt(line=line)
+        # CD / goes to the top level
+        if (tok.type == TokenType.SLASH and self.peek_at(1).type in (
+                TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT)):
+            self.advance()
+            self.expect_newline()
+            return DirStmt(line=line, path=StringLiteral("/"))
         path = self.parse_string_or_expr()
         self.expect_newline()
         return DirStmt(line=line, path=path)
@@ -1528,29 +1596,62 @@ class Parser:
                 line)
 
     def parse_show(self, line: int) -> ShowStmt:
-        """SHOW PROCESS/FLOW/PARAMETER "name" [sub-command]"""
+        """SHOW PROCESS|FLOW|SYSTEM|PARAMETER "name" [sub-command]
+        SHOW GLOBAL PARAMS ["text"]"""
         self.advance()  # SHOW
         entity_type = ""
+        if self.at_word("GLOBAL") and self.peek_at(1).upper() == "PARAMS":
+            self.advance()
+            self.advance()
+            flt = None
+            if self.peek().type not in (TokenType.NEWLINE, TokenType.EOF,
+                                        TokenType.COMMENT):
+                flt = self.parse_string_or_expr()
+            self.expect_newline()
+            return ShowStmt(line=line, entity_type="GLOBAL_PARAMS",
+                            ref=flt, filter=flt)
         if self.at_keyword("PROCESS"):
             entity_type = self.advance().upper()
         elif self.at_keyword("FLOW"):
+            entity_type = self.advance().upper()
+        elif self.at_keyword("SYSTEM"):
             entity_type = self.advance().upper()
         elif self.at_word("PARAMETER", "PARAMS", "GLOBAL"):
             entity_type = "PARAMETER"
             self.advance()
         else:
             raise ParseError(
-                "Expected PROCESS, FLOW, or PARAMETER after SHOW", line)
+                "Expected PROCESS, FLOW, SYSTEM or PARAMETER after SHOW.",
+                line, hint='For example: SHOW PROCESS "name"')
 
         ref = self.parse_string_or_expr()
         sub_command = ""
-        if self.at_word("INPUTS", "OUTPUTS", "LOCATION", "DESCRIPTION",
-                        "UNITS", "VALUE", "PARAMS"):
+        flt = None
+        limit = 0
+        allowed = {
+            "PROCESS": ("INPUTS", "OUTPUTS", "LOCATION", "DESCRIPTION",
+                        "PARAMS", "QUALITY"),
+            "FLOW": ("UNITS", "DESCRIPTION", "USAGE"),
+            "SYSTEM": ("PARAMS", "LINKS"),
+            "PARAMETER": ("VALUE", "DESCRIPTION"),
+        }[entity_type]
+        if self.peek().type in (TokenType.KEYWORD, TokenType.IDENTIFIER):
+            if not self.at_word(*allowed):
+                raise ParseError(
+                    f"SHOW {entity_type} doesn't take "
+                    f"'{self.peek().value}'.", line,
+                    hint="Use one of: " + ", ".join(allowed) + ".")
             sub_command = self.advance().upper()
+        if sub_command in ("LINKS", "PARAMS") and entity_type == "SYSTEM":
+            if self.peek().type == TokenType.STRING:
+                flt = self.parse_string_or_expr()
+        if sub_command == "USAGE" and self.match_keyword("LIMIT"):
+            limit = self.parse_int("LIMIT")
 
         self.expect_newline()
         return ShowStmt(line=line, entity_type=entity_type,
-                         ref=ref, sub_command=sub_command)
+                         ref=ref, sub_command=sub_command,
+                         filter=flt, limit=limit)
 
     def parse_link(self, line: int) -> LinkStmt:
         """LINK PROCESS "source" TO PROCESS "target" WITH amount, unit"""
@@ -1617,9 +1718,11 @@ class Parser:
         allocation = ""
         with_quality = True
 
+        given = set()
         while self.at_word("CATEGORY", "LEVELS", "TOP", "ALLOCATE",
                            "NOQUALITY"):
             kw = self.advance().upper()
+            given.add(kw)
             if kw == "CATEGORY":
                 category = self.parse_string_or_expr()
             elif kw == "LEVELS":
@@ -1634,7 +1737,10 @@ class Parser:
         self.expect_newline()
         return TreeStmt(line=line, system=system, method=method,
                          category=category, levels=levels, top=top,
-                         allocation=allocation, with_quality=with_quality)
+                         allocation=allocation, with_quality=with_quality,
+                         defaulted=self._defaulted(
+                             LEVELS="LEVELS" in given, TOP="TOP" in given,
+                             ALLOCATE=allocation))
 
     def parse_move(self, line: int) -> MoveStmt:
         """MOVE PROCESS/FLOW/SYSTEM "ref" TO "folder" """
@@ -2063,8 +2169,20 @@ class Parser:
                 self.advance()
                 d = direction()
                 ref = self.parse_string_or_expr()
-                stmt.remove_exchanges.append(
-                    {"direction": d, "name": ref, "line": ln})
+                spec = {"direction": d, "name": ref, "line": ln}
+                # Which one, when the flow appears more than once
+                while True:
+                    if self.match_keyword("PROVIDER"):
+                        spec["provider"] = self.parse_string_or_expr()
+                    elif self.match_keyword("LOCATION"):
+                        spec["location"] = self.parse_string_or_expr()
+                    elif self.match_word("AMOUNT"):
+                        spec["amount"] = self.parse_expr()
+                    elif self.match_word("INDEX"):
+                        spec["index"] = self.parse_int("INDEX")
+                    else:
+                        break
+                stmt.remove_exchanges.append(spec)
                 self.expect_newline()
 
             elif kw == "UPDATE":
@@ -2080,6 +2198,8 @@ class Parser:
                     d = direction()
                     upd = {"direction": d, "name": self.parse_string_or_expr(),
                            "line": ln}
+                    if self.match_word("INDEX"):
+                        upd["index"] = self.parse_int("INDEX")
                     if self.peek().type == TokenType.COMMA:
                         self.advance()
                         upd["amount"] = self.parse_expr()
@@ -2088,7 +2208,9 @@ class Parser:
                         if self.peek().type == TokenType.IDENTIFIER:
                             upd["unit"] = self.parse_unit()
                     while True:
-                        if self.match_word("AMOUNT"):       # legacy form
+                        if self.match_word("INDEX"):
+                            upd["index"] = self.parse_int("INDEX")
+                        elif self.match_word("AMOUNT"):       # legacy form
                             upd["amount"] = self.parse_expr()
                         elif self.match_keyword("FORMULA"):
                             upd["formula"] = self.parse_string_or_expr()
@@ -2102,7 +2224,7 @@ class Parser:
                             upd["comment"] = self.parse_string_or_expr()
                         else:
                             break
-                    if len(upd) == 3:
+                    if len(upd) - ("index" in upd) == 3:
                         raise ParseError(
                             "UPDATE needs an amount, PROVIDER, LOCATION, "
                             "PEDIGREE or COMMENT", ln)

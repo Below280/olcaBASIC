@@ -416,8 +416,13 @@ class Engine(ResolveMixin):
     def search_processes(self, search_term: str,
                          category_filter: str = "",
                          location_filter: str = "",
-                         limit: int = 20) -> Dict:
-        """Search processes by name, category, and/or location."""
+                         limit: int = 20,
+                         with_location: bool = False) -> Dict:
+        """Search processes by name, category, and/or location.
+
+        location_filter matches the location code of the process (GB,
+        RER, RoW) or, as before, text in its name. with_location=True
+        adds each process's location code to the results."""
         # V06: Reject invalid limits
         MAX_SEARCH_LIMIT = 200
         if limit <= 0:
@@ -439,15 +444,20 @@ class Engine(ResolveMixin):
             proc_cat = getattr(p, "category", "") or ""
             if cat and cat not in proc_cat.lower():
                 continue
-            # Location filter: check if location code/name is in process name
-            # (ecoinvent embeds location in name, e.g. "| Cutoff, U - GB")
-            if loc and loc not in p.name.lower():
+            # Location filter: the location code on the process, or the
+            # location written into its name (older ecoinvent exports
+            # do that, e.g. "| Cutoff, U - GB")
+            proc_loc = getattr(p, "location", "") or ""
+            if loc and loc != proc_loc.lower() and loc not in p.name.lower():
                 continue
-            all_matches.append({
+            match = {
                 "id": p.id,
                 "name": p.name,
                 "category": proc_cat,
-            })
+            }
+            if with_location:
+                match["location"] = proc_loc
+            all_matches.append(match)
 
         truncated = len(all_matches) > limit
 
@@ -1732,7 +1742,32 @@ class Engine(ResolveMixin):
                     )
                     changes.append(f"location set to '{loc_ref.name}'")
 
-            # Remove exchanges by flow_id
+            # Remove exchanges by flow_id. An entry may also be a dict
+            # {"flow_id": ..., "internal_id": n}, which removes only that
+            # one exchange when a flow appears more than once.
+            single = [r for r in (remove_exchanges or []) if isinstance(r, dict)]
+            remove_exchanges = [r for r in (remove_exchanges or [])
+                                if not isinstance(r, dict)] or (
+                                    None if not single else [])
+            if single and process.exchanges:
+                wanted = {(r.get("flow_id"), r.get("internal_id")) for r in single}
+                kept, removed_one = [], 0
+                for ex in process.exchanges:
+                    key = (ex.flow.id if ex.flow else None,
+                           getattr(ex, "internal_id", None))
+                    if key in wanted:
+                        wanted.discard(key)
+                        removed_one += 1
+                    else:
+                        kept.append(ex)
+                process.exchanges = kept
+                if removed_one:
+                    changes.append(f"{removed_one} exchange(s) removed")
+                if wanted:
+                    changes.append(
+                        f"WARNING: {len(wanted)} exchange(s) to remove were "
+                        f"not found in the process.")
+
             if remove_exchanges and process.exchanges:
                 remove_set = set(remove_exchanges)
                 # B09: Track which flow_ids were actually found
@@ -1768,7 +1803,11 @@ class Engine(ResolveMixin):
                     if not target_fid:
                         continue
                     matched = False
+                    target_internal = upd.get("internal_id")
                     for ex in process.exchanges:
+                        if (target_internal is not None and
+                                getattr(ex, "internal_id", None) != target_internal):
+                            continue
                         if ex.flow and ex.flow.id == target_fid:
                             matched = True
                             if "formula" in upd and upd["formula"]:
@@ -2313,15 +2352,20 @@ class Engine(ResolveMixin):
             except Exception:
                 pass
 
+            others = []     # EPDs and stored results that use the flow
+
             def result(methods, checked, total):
-                return {
+                out = {
                     "flow_id": flow_id, "flow_name": flow.name,
                     "used_by_processes": used_by[:max_hits],
                     "used_in_impact_categories": methods,
-                    "in_use": bool(used_by or methods),
+                    "in_use": bool(used_by or methods or others),
                     "complete": len(used_by) + len(methods) < max_hits,
                     "processes_checked": checked, "processes_total": total,
                 }
+                if others:
+                    out["used_elsewhere"] = others
+                return out
 
             descs = list(self.client.get_descriptors(o.Process))
             if len(used_by) >= max_hits:
@@ -2349,7 +2393,12 @@ class Engine(ResolveMixin):
 
             def uses(d):
                 proc = worker_client().get(o.Process, d.id)
-                return proc is not None and any(
+                if proc is None:
+                    # A process that can't be read can't be ruled out
+                    raise RuntimeError(
+                        f"could not read process '{d.name}' ({d.id}), so "
+                        f"the search for uses of the flow is incomplete")
+                return any(
                     ex.flow and ex.flow.id == flow_id
                     for ex in (proc.exchanges or []))
 
@@ -2369,6 +2418,29 @@ class Engine(ResolveMixin):
                     if len(used_by) >= max_hits:
                         return result([], checked, len(descs))
 
+            # EPD datasets and stored results also point at flows
+            for otype, label in ((getattr(o, "Epd", None), "EPD"),
+                                 (getattr(o, "Result", None), "result")):
+                if otype is None:
+                    continue
+                try:
+                    descs_other = list(self.client.get_descriptors(otype))
+                except Exception:
+                    descs_other = []
+                for d in descs_other:
+                    entity = self.client.get(otype, d.id)
+                    if entity is None:
+                        continue
+                    refs = []
+                    product = getattr(entity, "product", None)
+                    if product is not None and getattr(product, "flow", None):
+                        refs.append(product.flow.id)
+                    for fr in getattr(entity, "flow_results", None) or []:
+                        if fr.flow:
+                            refs.append(fr.flow.id)
+                    if flow_id in refs:
+                        others.append(f"{d.name} ({label})")
+
             methods = []
             if flow.flow_type == o.FlowType.ELEMENTARY_FLOW:
                 for d in self.client.get_descriptors(o.ImpactCategory):
@@ -2379,6 +2451,53 @@ class Engine(ResolveMixin):
                         if len(used_by) + len(methods) >= max_hits:
                             break
             return result(methods, checked, len(descs))
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def move_entity(self, entity_type: str, entity_id: str,
+                    category: str) -> Dict:
+        """
+        Move a process, flow or product system to another folder.
+
+        entity_type: 'process', 'flow', or 'product_system'
+        category: the folder path to move it to
+
+        Only the folder changes. Exchanges, links and parameters that
+        point at the entity do so by UUID and are unaffected.
+        """
+        type_map = {
+            "process": o.Process,
+            "flow": o.Flow,
+            "product_system": o.ProductSystem,
+        }
+        olca_type = type_map.get(entity_type)
+        if not olca_type:
+            return {
+                "error": f"Unknown entity type: {entity_type}. "
+                         f"Use: {', '.join(type_map.keys())}",
+            }
+        cat_err = _validate_category(category)
+        if cat_err:
+            return {"error": cat_err}
+        if category and category.count("/") > 6:
+            return {"error": f"Category has {category.count('/') + 1} "
+                             f"levels (max 7). Use a shallower path."}
+        try:
+            entity = self.client.get(olca_type, entity_id)
+            if not entity:
+                return {"error": f"{entity_type} not found: {entity_id}"}
+            previous = getattr(entity, "category", "") or ""
+            entity.category = category
+            self.client.put(entity)
+            self._cache.pop(olca_type.__name__, None)
+            return {
+                "moved": True,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "name": getattr(entity, "name", entity_id),
+                "from": previous,
+                "to": category,
+            }
         except Exception as ex:
             return {"error": str(ex)}
 
@@ -2421,10 +2540,18 @@ class Engine(ResolveMixin):
                     prefer_categories=prefer_categories)
                 if "error" in usage:
                     return usage
+                if (not usage["in_use"] and usage["processes_checked"]
+                        < usage["processes_total"]):
+                    return {"error": (
+                        f"Only {usage['processes_checked']} of "
+                        f"{usage['processes_total']} processes could be "
+                        f"checked for uses of flow '{name}', so it was "
+                        f"not deleted.")}
                 if usage["in_use"]:
                     where = usage["used_by_processes"] + [
                         f"{c} (impact category)"
-                        for c in usage["used_in_impact_categories"]]
+                        for c in usage["used_in_impact_categories"]
+                    ] + list(usage.get("used_elsewhere", []))
                     more = "" if usage["complete"] else " (and possibly others)"
                     return {"error": (
                         f"Flow '{name}' is still used by "

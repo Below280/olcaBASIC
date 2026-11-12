@@ -13,7 +13,9 @@ variable, or by looking in the parent folders for
 REBUILD_PLAN/live_baseline.json.
 
 Everything the tests create goes in the folder "00: olcaBASIC live test"
-and the process and product system are deleted at the end.
+and the product system, the process and its product flow are deleted at
+the end. The global parameter the model uses stays: openLCA parameters
+have no folder and olcaBASIC has no command to delete one.
 """
 
 import json
@@ -78,8 +80,12 @@ def live(baseline, names):
             f"{expected['impact_methods']}")
     runner.run(baseline["program_template"].format(**names))
     yield runner
+    # Clean up: the system, the process, then its product flow. DELETE
+    # FLOW reads every process to make sure nothing uses the flow, so
+    # this takes a while on a large database.
     runner.run(f'CONFIRM DELETE ON\nDELETE SYSTEM "{names["name"]}"\n'
-               f'DELETE PROCESS "{names["name"]}"')
+               f'DELETE PROCESS "{names["name"]}"\n'
+               f'DELETE FLOW "{names["name"]}"')
 
 
 def close(a, b, tol):
@@ -141,6 +147,43 @@ def test_system_validates_like_the_baseline(live, baseline, names):
                 if f["check"] in ("links_present", "no_links")]
 
     assert links(got) == links(want)
+
+
+def test_flow_in_use_cannot_be_deleted(live, names):
+    """DELETE FLOW must refuse while the process still uses the flow."""
+    result = live.session.run(f'CONFIRM DELETE ON\nDELETE FLOW "{names["name"]}"')
+    assert not result.ok
+    assert "is still used by" in result.errors[0]["message"]
+    found = live.engine.search_flows(names["name"])["flows"]
+    assert len(found) == 1
+
+
+def test_near_miss_method_name_is_refused(live, names):
+    result = live.session.run(f'CALCULATE "{names["name"]}" USING "EF 3.1"')
+    assert not result.ok
+    assert "No impact method is called 'EF 3.1'" in result.errors[0]["message"]
+    assert '"EF v3.1"' in result.errors[0]["hint"]
+
+
+def test_ambiguous_background_name_is_refused(live, baseline):
+    """The electricity market exists once per location: without
+    LOCATION the program must stop and list them."""
+    ambiguous = baseline["program_template"].split("USE PROCESS ")[1].split('"')[1]
+    result = live.session.run(
+        'SET PROCESS FOLDER "00: olcaBASIC live test"\n'
+        'MAKE PROCESS "olcaBASIC live test ambiguity"\n'
+        '  OUTPUT MAKE FLOW "olcaBASIC live test ambiguity", 1, kg, PRODUCT\n'
+        f'  INPUT USE PROCESS "{ambiguous}", 1, kWh\n'
+        'END PROCESS')
+    assert not result.ok
+    error = result.errors[0]
+    assert error["line"] == 4 and "matches" in error["message"]
+    assert "LOCATION" in error["hint"]
+    # nothing was written: not the process, not its flow
+    assert live.engine.search_processes(
+        "olcaBASIC live test ambiguity")["total_matches"] == 0
+    assert live.engine.search_flows(
+        "olcaBASIC live test ambiguity")["count"] == 0
 
 
 @pytest.mark.parametrize("method", ["EF v3.1", "IPCC 2021"])

@@ -65,7 +65,7 @@ def test_unclosed_blocks(source, needle):
 @pytest.mark.parametrize("source,needle", [
     ('PROCESS "P"\n PRINT 1\nEND PROCESS', "is not allowed inside PROCESS"),
     ('SCENARIO "S"\n PRINT 1\nEND SCENARIO', "is not allowed inside SCENARIO"),
-    ('SENSITIVITY ON "W" USING "M"\n PRINT 1\nEND SENSITIVITY',
+    ('SENSITIVITY ON "W" USING "M" BY 5\n PRINT 1\nEND SENSITIVITY',
      "is not allowed inside SENSITIVITY"),
     ('EDIT PROCESS "P"\n PRINT 1\nEND EDIT', "is not allowed inside EDIT"),
     ('EDIT FLOW "F"\n PRINT 1\nEND EDIT', "is not allowed inside EDIT FLOW"),
@@ -95,13 +95,17 @@ def test_every_analysis_requires_a_method(source):
     assert "Expected USING" in str(error(source))
 
 
-def test_delete_flow_is_refused_with_the_reason():
-    e = error('DELETE FLOW "Steel"')
-    assert "DELETE FLOW is currently not available" in str(e)
+def test_delete_flow_parses():
+    """Changed on purpose in 0.4.0 (design section 9): DELETE FLOW is
+    available now that the engine checks for uses before deleting."""
+    stmt = parse('DELETE FLOW "Steel"')[0]
+    assert stmt.entity_type == "FLOW"
 
 
 def test_delete_needs_a_type():
-    assert "DELETE PROCESS or DELETE SYSTEM" in str(error('DELETE "Widget"'))
+    e = error('DELETE "Widget"')
+    assert "Say what to delete" in str(e)
+    assert "DELETE PROCESS" in e.hint and "DELETE SYSTEM" in e.hint
 
 
 def test_find_needs_a_type():
@@ -143,7 +147,7 @@ def test_make_needs_a_type():
 
 
 def test_show_needs_a_type():
-    assert "Expected PROCESS, FLOW, or PARAMETER after SHOW" in str(
+    assert "Expected PROCESS, FLOW, SYSTEM or PARAMETER after SHOW" in str(
         error('SHOW "x"'))
 
 
@@ -153,8 +157,17 @@ def test_single_line_if_takes_one_statement_per_branch():
 
 
 def test_vary_needs_a_name():
-    e = error('SENSITIVITY ON "W" USING "M"\n VARY 5\nEND SENSITIVITY')
+    e = error('SENSITIVITY ON "W" USING "M" BY 5\n VARY 5\nEND SENSITIVITY')
     assert "Expected a parameter name after VARY" in str(e)
+
+
+def test_sensitivity_requires_by_and_something_to_vary():
+    """Required by the grammar from 0.4.0 (design section 4, principle
+    2): there is no safe default for the range."""
+    e = error('SENSITIVITY ON "W" USING "M"\n VARY a\nEND SENSITIVITY')
+    assert "SENSITIVITY needs BY" in str(e) and "BY 10%" in e.hint
+    e = error('SENSITIVITY ON "W" USING "M" BY 10%\nEND SENSITIVITY')
+    assert "nothing to vary" in str(e) and "VARY" in e.hint
 
 
 def test_parse_line_returns_none_on_error():

@@ -77,6 +77,9 @@ class LogicalOp(Expr):
 class Statement:
     """Base class for statements."""
     line: int = 0
+    # Optional arguments the program left out, so the interpreter can
+    # say which defaults it applied (e.g. ["TOP", "ALLOCATE"]).
+    defaulted: tuple = ()
 
 
 @dataclass
@@ -460,6 +463,8 @@ class ShowStmt(Statement):
     entity_type: str = ""   # PROCESS, FLOW, PARAMETER
     ref: Expr = None
     sub_command: str = ""   # INPUTS, OUTPUTS, LOCATION, DESCRIPTION, UNITS, VALUE, or empty (all)
+    filter: Expr = None     # text filter (SHOW SYSTEM ... LINKS "text", SHOW GLOBAL PARAMS "text")
+    limit: int = 0          # SHOW FLOW ... USAGE LIMIT n
 
 
 # ── Link ─────────────────────────────────────────────────
@@ -558,6 +563,18 @@ class BackStmt(Statement):
 class CdirStmt(Statement):
     """CDIR "name" — create a category folder"""
     name: Expr = None
+
+
+@dataclass
+class MkdirStmt(Statement):
+    """MKDIR "name": create a folder without entering it (Linux form)"""
+    name: Expr = None
+
+
+@dataclass
+class SaveProgramStmt(Statement):
+    """SAVE "file.baslca" / SAVE PROGRAM "file": save what has been run"""
+    filename: Expr = None
 
 
 @dataclass

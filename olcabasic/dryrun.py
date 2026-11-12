@@ -32,8 +32,8 @@ NO_CONNECTION_NEEDED = (
     ast.WhileStmt, ast.SubDef, ast.SubCall, ast.FunctionDef, ast.RunFileStmt,
     ast.IncludeStmt, ast.ScenarioStmt, ast.SaveResultsStmt,
     ast.ExportResultsStmt, ast.SetFolderStmt, ast.NavigateStmt, ast.PwdStmt,
-    ast.UpStmt, ast.BackStmt, ast.CdirStmt, ast.HelpStmt, ast.ClearStmt,
-    ast.ConfirmDeleteStmt, ast.ExitStmt)
+    ast.UpStmt, ast.BackStmt, ast.CdirStmt, ast.MkdirStmt, ast.HelpStmt,
+    ast.ClearStmt, ast.ConfirmDeleteStmt, ast.ExitStmt, ast.SaveProgramStmt)
 
 
 def command_word(stmt) -> str:

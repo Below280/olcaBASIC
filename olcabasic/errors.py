@@ -24,7 +24,12 @@ class BasicError(Exception):
         self.message = message
         self.hint = hint
         prefix = f"Line {line}: " if line else ""
-        full = f"{message} {hint}".strip() if hint else message
+        if hint and "\n" in message:
+            full = f"{message}\n  {hint}"      # a listing: hint on its own line
+        elif hint:
+            full = f"{message} {hint}".strip()
+        else:
+            full = message
         super().__init__(f"{prefix}{full}")
 
     def at(self, line: int) -> "BasicError":

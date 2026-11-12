@@ -17,6 +17,7 @@ from .bridge import LCABridge
 from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
 from .errors import BasicError, split_hint
+from .enforce import EnforcementMixin, TIER_1_CAVEAT
 from .formatting import (
     format_impacts, format_scenarios, format_sensitivity,
     format_processes, format_methods, format_systems,
@@ -77,7 +78,7 @@ def _command_word(stmt) -> str:
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
 
 
-class Interpreter:
+class Interpreter(EnforcementMixin):
     """Executes olcaBASIC AST nodes."""
 
     def __init__(self, bridge: Optional[LCABridge] = None,
@@ -166,6 +167,7 @@ class Interpreter:
             self.out.write(f"  Error: {e}")
             return True
 
+        failed = False
         for stmt in statements:
             if stmt is None:
                 continue
@@ -174,11 +176,17 @@ class Interpreter:
             try:
                 self._execute(stmt)
             except BasicError as e:
+                failed = True
                 self.out.write(f"  Error: {e}")
             except RuntimeError as e:
+                failed = True
                 self.out.write(f"  Error: {e}")
             except Exception as e:
+                failed = True
                 self.out.write(f"  Error: {e}")
+        if not failed and not all(isinstance(st, (SaveProgramStmt, HelpStmt))
+                                  for st in statements):
+            self.runtime.program_history.append(text)
 
         return True
 
@@ -428,6 +436,12 @@ class Interpreter:
 
         elif isinstance(stmt, CdirStmt):
             self._exec_cdir(stmt)
+
+        elif isinstance(stmt, MkdirStmt):
+            self._exec_mkdir(stmt)
+
+        elif isinstance(stmt, SaveProgramStmt):
+            self._exec_save_program(stmt)
 
         elif isinstance(stmt, ClearStmt):
             self.out.clear_screen()
@@ -762,6 +776,7 @@ class Interpreter:
 
         if stmt.is_new:
             # NEW: always create
+            self._require_family(stmt.line, "MAKE FLOW")
             result = self.bridge.create_flow(name, stmt.unit, folder, ft)
             self._emit("create_flow", result)
             if "error" in result:
@@ -777,6 +792,7 @@ class Interpreter:
                 self.out.write(f"  Flow found: {found['flow_name']}")
             else:
                 # Not found: create it
+                self._require_family(stmt.line, "FLOW")
                 result = self.bridge.create_flow(name, stmt.unit, folder, ft)
                 self._emit("create_flow", result)
                 if "error" in result:
@@ -785,8 +801,20 @@ class Interpreter:
 
     def _exec_bridge(self, stmt: BridgeStmt):
         self._require_bridge(stmt.line)
-        name = self._eval_str(stmt.name)
+        given = self._eval_str(stmt.name)
+        name = self._bridge_name(given, stmt.unit, stmt.line)
         folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.process_folder
+        self._require_family(stmt.line, "BRIDGE")
+        # A bridge made before 0.4.0 may carry the plain name: reuse it
+        # rather than building a second one beside it.
+        if name != given:
+            old = [c for c in self.bridge.process_candidates(given)
+                   if not folder or folder in c["category"]]
+            if old:
+                self.out.write(
+                    f"  NOTE: a bridge called '{given}' already exists and "
+                    f"is reused. New bridges are named '{name}'.")
+                name = given
         provider_id = None
 
         if stmt.provider:
@@ -811,6 +839,12 @@ class Interpreter:
         existed = result.get("already_existed", False)
         status = "exists" if existed else "created"
         self.out.write(f"  Bridge {status}: {name} ({stmt.unit})")
+        if result.get("note"):
+            self.out.write(f"  NOTE: this bridge has no provider yet. Add "
+                           f"PROVIDER \"process name or uuid\" to the BRIDGE "
+                           f"block, or it supplies nothing.")
+        if result.get("warning"):
+            self.out.write(f"  WARNING: {result['warning']}")
 
     def _exec_process(self, stmt: ProcessStmt):
         self._require_bridge(stmt.line)
@@ -840,11 +874,15 @@ class Interpreter:
         # Local LETs inside the PROCESS block must be visible to the
         # exchange amounts, so evaluate them into a temporary scope.
         self._flows_made = []
+        self._direct_background = []
         try:
-            return self._exec_process_body(stmt, name, folder, description,
+            done = self._exec_process_body(stmt, name, folder, description,
                                            location, flow_schema,
                                            process_schema, ex_list)
+            self._lint_direct_background()
+            return done
         except BasicError as e:
+            self._direct_background = None
             if self._flows_made:
                 made = ", ".join(f'"{n}"' for n in self._flows_made)
                 note = (f"The process was not created. Flows this block "
@@ -1028,6 +1066,7 @@ class Interpreter:
             provider_id = None
 
             if ex.is_new and check_only:
+                self._require_family(line, "MAKE FLOW")
                 flow_id = "(to be created)"
 
             elif ex.is_new:
@@ -1090,14 +1129,15 @@ class Interpreter:
                 if proc_match:
                     flow_id = proc_match["flow_id"]
                     provider_id = proc_match["process_id"]
-                    if proc_match.get("ambiguous"):
-                        loc = proc_match.get("location", "")
-                        self.out.write(f"  WARNING: '{flow_name}' matched "
-                              f"{proc_match['ambiguous']} processes, "
-                              f"using '{proc_match['process_name']}'"
-                              f"{' | ' + loc if loc else ''}. "
-                              f"Add LOCATION \"code\" to pick a "
-                              f"specific one.")
+                    if proc_match.get("ambiguous") and not ex.provider:
+                        # Never pick between same-named processes
+                        self._ambiguous_process(
+                            proc_match["process_name"], location_filter,
+                            line, self.bridge.process_candidates(
+                                proc_match["process_name"], location_filter))
+                    if not ex.provider:
+                        self._note_provider(provider_id, folder, line,
+                                            check_only)
                 else:
                     # Try to find a flow by name directly
                     flow_match = self.bridge.find_flow(
@@ -1124,6 +1164,7 @@ class Interpreter:
                                 f"new flow.",
                                 line)
                         elif check_only:
+                            self._require_family(line, "a new output flow")
                             flow_id = "(to be created)"
                         else:
                             self.out.write(f"  NOTE: Creating new flow "
@@ -1182,9 +1223,43 @@ class Interpreter:
                     raise BasicError(f"PROVIDER: {prov['error']}{hint}",
                                      line)
                 ex_dict["provider_id"] = prov["process_id"]
+                self._note_provider(prov["process_id"], folder, line,
+                                    check_only)
 
             exchanges.append(ex_dict)
         return exchanges
+
+    def _note_provider(self, provider_id: str, folder: str, line: int,
+                       check_only: bool):
+        """Keep count of background processes used directly, for the
+        lint note at the end of the block. (Inside an EPD module this
+        is an error: see workflows/epd.py.)"""
+        info = self.bridge.describe_process(provider_id)
+        if info is None:
+            return
+        own = (folder or self.runtime.process_folder or "").split("/")[0].lower()
+        mine = bool(own) and info["category"].lower().split("/")[0] == own
+        bridged = self._is_bridge(info["name"], info["category"])
+        epd = getattr(self.runtime, "epd", None)
+        if epd is not None and self.runtime.epd_module:
+            epd.check_provider(info, line)
+        if check_only or mine or bridged or not own:
+            return
+        direct = getattr(self, "_direct_background", None)
+        if direct is not None and info["name"] not in direct:
+            direct.append(info["name"])
+
+    def _lint_direct_background(self):
+        direct = getattr(self, "_direct_background", None) or []
+        self._direct_background = None
+        if not direct:
+            return
+        n = len(direct)
+        self.out.write(
+            f"  NOTE: {n} input{'s use' if n > 1 else ' uses'} a background "
+            f"process directly. A BRIDGE keeps each background choice in "
+            f"one place, so it can be swapped without editing every "
+            f"process (HELP BRIDGE).")
 
     @staticmethod
     def _engine_error_line(message: str, ex_lines, param_lines, default: int) -> int:
@@ -1240,6 +1315,7 @@ class Interpreter:
         target_unit = stmt.target_unit or None
         target_prop = self._eval_str(stmt.target_property) if stmt.target_property else None
 
+        self._defaults(stmt)
         self.out.write(f"  Creating product system from: {proc_ref}...")
         result = self.bridge.create_system(
             proc_ref, linking, target_amount, target_unit,
@@ -1247,15 +1323,28 @@ class Interpreter:
         self._emit("create_system", result)
 
         if "error" in result:
+            if result.get("partial"):
+                # openLCA made the system but the engine could not
+                # finish setting it up
+                raise BasicError(
+                    f"The product system for '{proc_ref}' was created, but "
+                    f"setting it up did not finish ({result['error']}).",
+                    stmt.line,
+                    hint=f"Run VALIDATE \"{proc_ref}\" to see what state "
+                         f"it is in. If it is not usable: DELETE SYSTEM "
+                         f"\"{proc_ref}\", then SYSTEM \"{proc_ref}\" "
+                         f"again.")
             raise BasicError(result["error"], stmt.line)
 
         sys_name = result.get("system_name", proc_ref)
         if result.get("already_existed", False):
             self.out.write(f"  WARNING: product system '{sys_name}' already exists "
                   f"and was reused as it is. If the process changed, "
-                  f"DELETE SYSTEM \"{sys_name}\" first to rebuild it.")
+                  f"DELETE SYSTEM \"{sys_name}\" first to rebuild it. "
+                  f"VALIDATE \"{sys_name}\" checks the one that is there.")
         else:
             self.out.write(f"  System created: {sys_name}")
+            self._forget_validation(result.get("system_id", ""))
         if result.get("warnings"):
             for w in result["warnings"]:
                 self.out.write(f"  WARNING: {w}")
@@ -1263,7 +1352,9 @@ class Interpreter:
     def _exec_calculate(self, stmt: CalculateStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "CALCULATE")
+        self._defaults(stmt)
         self.out.write(f"  Calculating: {system} using {method}...")
         result = self.bridge.calculate(system, method, stmt.allocation)
         self._emit("calculate", result)
@@ -1275,7 +1366,9 @@ class Interpreter:
     def _exec_contribution(self, stmt: ContributionStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "CONTRIBUTION")
+        self._defaults(stmt, TOP=stmt.top)
         cats = [self._eval_str(c) for c in stmt.categories] or None
         self.out.write(f"  Contribution analysis: {system}...")
         result = self.bridge.contribution(
@@ -1289,7 +1382,9 @@ class Interpreter:
     def _exec_inventory(self, stmt: InventoryStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "INVENTORY")
+        self._defaults(stmt, MAX=stmt.max_flows)
         self.out.write(f"  Inventory: {system}...")
         result = self.bridge.inventory(
             system, method, stmt.max_flows, stmt.allocation)
@@ -1302,7 +1397,9 @@ class Interpreter:
     def _exec_montecarlo(self, stmt: MonteCarloStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "MONTECARLO")
+        self._defaults(stmt, RUNS=stmt.runs)
         self.out.write(f"  Monte Carlo ({stmt.runs} runs): {system}...")
         result = self.bridge.monte_carlo(
             system, method, stmt.runs, stmt.allocation)
@@ -1330,7 +1427,9 @@ class Interpreter:
     def _exec_run_scenarios(self, stmt: RunScenariosStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "RUN SCENARIOS")
+        self._defaults(stmt)
 
         if stmt.from_csv:
             # CSV-based scenarios
@@ -1364,7 +1463,9 @@ class Interpreter:
     def _exec_sensitivity(self, stmt: SensitivityStmt):
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "SENSITIVITY")
+        self._defaults(stmt)
 
         if stmt.from_csv:
             csv_path = self._eval_str(stmt.from_csv)
@@ -1402,19 +1503,65 @@ class Interpreter:
         self._emit("validate_system", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
+        self._record_validation(result)
         self.out.write(format_generic(result))
+        if not result.get("valid", True):
+            self.out.write(
+                f"  WARNING: '{result.get('system', ref)}' did not pass. "
+                f"Calculations on it are refused in this session until it "
+                f"is fixed (or deleted and rebuilt) and VALIDATE passes.")
 
     def _exec_check(self, stmt: CheckStmt):
+        """CHECK "system" [TIER n]: the three tiers of model checking.
+        Tier 1 is structural and always says so."""
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.system)
+        if stmt.tier not in (1, 2, 3):
+            raise BasicError(f"There is no tier {stmt.tier}.", stmt.line,
+                             hint="Use TIER 1, TIER 2 or TIER 3.")
+        self._defaults(stmt)
         self.out.write(f"  Checking: {ref} (Tier {stmt.tier})...")
         if stmt.tier == 1:
             result = self.bridge.validate_system(ref)
             self._emit("validate_system", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            self._record_validation(result)
             self.out.write(format_generic(result))
-        elif stmt.tier >= 2:
-            self.out.write("  Tier 2/3 checks require extract_model comparison.")
-            self.out.write("  Use EXTRACT and COMPARE for source comparison.")
+            self.out.write(TIER_1_CAVEAT.format(
+                system=result.get("system", ref)))
+        elif stmt.tier == 2:
+            against = (f' against "{self._eval_str(stmt.against)}"'
+                       if stmt.against else "")
+            self.out.write(
+                f"  Tier 2 compares every exchange in the model with the "
+                f"source data{against}. olcaBASIC lists the model; the "
+                f"comparison is yours to make, line by line.")
+            desc = self.bridge.find_system(ref)
+            if desc is None:
+                raise BasicError(f"Product system not found: {ref}",
+                                 stmt.line)
+            folder = getattr(desc, "category", "") or ""
+            proc = self.bridge.find_process(desc.name)
+            if proc is not None:
+                folder = getattr(proc, "category", "") or folder
+            if not folder:
+                self.out.write("  The model is not in a folder, so there is "
+                               "nothing to list. EXTRACT FOLDER \"path\" "
+                               "lists a folder you name.")
+                return
+            result = self.bridge.extract_model(folder.split("/")[0])
+            self._emit("extract_model", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            self.out.write(format_generic(result))
+        else:
+            self.out.write(
+                f"  Tier 3 asks whether the results are plausible. Run "
+                f"CALCULATE \"{ref}\" USING \"method\" and CONTRIBUTION "
+                f"\"{ref}\" USING \"method\" TOP 5, then compare the "
+                f"totals and the main contributors with published values "
+                f"for similar products. olcaBASIC cannot judge that for you.")
 
     def _exec_extract(self, stmt: ExtractStmt):
         self._require_bridge(stmt.line)
@@ -1457,8 +1604,9 @@ class Interpreter:
         self._require_bridge(stmt.line)
         ref = self._eval_str(stmt.ref)
         if not stmt.entity_type:
-            raise BasicError("Say what to delete: DELETE PROCESS or "
-                             "DELETE SYSTEM", stmt.line)
+            raise BasicError("Say what to delete.", stmt.line,
+                             hint='DELETE PROCESS "name", DELETE SYSTEM '
+                                  '"name" or DELETE FLOW "name"')
         etype = stmt.entity_type.lower()
         if etype == "system":
             etype = "product_system"
@@ -1472,6 +1620,32 @@ class Interpreter:
             self.out.write(f"  Not found: {ref} (nothing to delete)")
             return
 
+        if etype == "flow":
+            # Deleting a flow that is still used leaves processes and
+            # impact categories broken, so look for uses first. Every
+            # process is read: this is slow on a large database.
+            self.out.write(f"  Checking where '{target['name']}' is used "
+                           f"(this reads every process)...")
+            usage = self.bridge.find_flow_usage(
+                target["id"], 1, prefer_categories=[
+                    f for f in (self.runtime.process_folder,
+                                self.runtime.flow_folder) if f])
+            self._emit("find_flow_usage", usage)
+            if "error" in usage:
+                raise BasicError(
+                    f"Could not check where '{target['name']}' is used "
+                    f"({usage['error']}), so it was not deleted.", stmt.line)
+            if usage["in_use"]:
+                users = usage["used_by_processes"] + [
+                    f"{c} (impact category)"
+                    for c in usage["used_in_impact_categories"]
+                ] + list(usage.get("used_elsewhere", []))
+                raise BasicError(
+                    f"Flow '{target['name']}' is still used by "
+                    f"{', '.join(users)}, so it was not deleted.", stmt.line,
+                    hint=f"Remove it from there first. SHOW FLOW "
+                         f"\"{target['name']}\" USAGE lists every use.")
+
         if not self.runtime.confirm_delete:
             confirm = self._ask(
                 f"  Delete {stmt.entity_type} '{target['name']}'? (yes/no) ",
@@ -1483,11 +1657,17 @@ class Interpreter:
         else:
             self.out.write(f"  Deleting {stmt.entity_type} '{target['name']}'...")
 
-        result = self.bridge.delete_entity(etype, target["id"])
+        if etype == "flow":
+            # the usage was checked just above, completely
+            result = self.bridge.delete_entity(etype, target["id"], True)
+        else:
+            result = self.bridge.delete_entity(etype, target["id"])
         self._emit("delete_entity", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.out.write(f"  Deleted: {result.get('name', ref)}")
+        if etype == "product_system":
+            self._forget_validation(target["id"])
         self.bridge.refresh_caches()
 
     def _exec_find(self, stmt: FindStmt):
@@ -1498,9 +1678,15 @@ class Interpreter:
         if etype == "PROCESS":
             loc = self._eval_str(stmt.location) if stmt.location else ""
             cat = self._eval_str(stmt.category) if stmt.category else ""
-            result = self.bridge.search_processes(term, cat, loc)
+            result = self.bridge.search_processes(term, cat, loc, 20, True)
             self._emit("search_processes", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
             self.out.write(format_processes(result))
+        elif etype == "SYSTEM":
+            result = self.bridge.list_systems(term)
+            self._emit("list_systems", result)
+            self.out.write(format_systems(result))
         elif etype == "FLOW":
             cat = self._eval_str(stmt.category) if stmt.category else ""
             result = self.bridge.search_flows(term, cat)
@@ -1663,8 +1849,20 @@ class Interpreter:
             raise BasicError(f"Could not load process '{target}'", stmt.line)
         current = list(proc.exchanges or [])
 
+        def describe(ex, n):
+            prov = ex.default_provider
+            where = ""
+            if prov is not None:
+                loc = getattr(prov, "location", "") or ""
+                where = f", provider {prov.name}" + (f" [{loc}]" if loc else "")
+            amount = ex.amount_formula or _fmt_num(ex.amount)
+            unit = ex.unit.name if ex.unit else ""
+            return f"    INDEX {n}: {amount} {unit}{where}"
+
         def find_exchange(spec, action):
-            """One exchange matching a flow or provider name."""
+            """One exchange matching a flow or provider name. If the
+            name matches several, PROVIDER, LOCATION, AMOUNT or INDEX
+            on the line says which."""
             self._at(spec.get("line", stmt.line))
             name = self._eval_str(spec["name"])
             want = spec["direction"]
@@ -1680,11 +1878,67 @@ class Interpreter:
                 raise BasicError(
                     f"'{target}' has no {want.lower() or 'exchange'} called "
                     f"'{name}'. Its exchanges are: {', '.join(names)}", line)
-            if len(hits) > 1:
+            everything = list(hits)
+            # REMOVE reads PROVIDER, LOCATION and AMOUNT as "which one";
+            # UPDATE reads them as new values, so it only takes INDEX.
+            if action == "remove":
+                if "provider" in spec:
+                    wanted = self._eval_str(spec["provider"]).lower()
+                    hits = [ex for ex in hits if ex.default_provider and wanted in (
+                        (ex.default_provider.name or "").lower(),
+                        ex.default_provider.id.lower())]
+                if "location" in spec:
+                    wanted = self._eval_str(spec["location"]).lower()
+                    hits = [ex for ex in hits if ex.default_provider and (
+                        getattr(ex.default_provider, "location", "") or ""
+                    ).lower() == wanted]
+                if "amount" in spec:
+                    amount = self._eval(spec["amount"])
+                    values = {p.name: p.value for p in (proc.parameters or [])}
+
+                    def value_of(ex):
+                        if ex.amount_formula in values:
+                            return values[ex.amount_formula]
+                        return ex.amount
+
+                    hits = [ex for ex in hits if value_of(ex) is not None
+                            and abs(value_of(ex) - amount) <= 1e-9 * max(
+                                1.0, abs(amount))]
+            if "index" in spec:
+                n = spec["index"]
+                if not 1 <= n <= len(everything):
+                    raise BasicError(
+                        f"INDEX {n} is out of range: '{name}' appears "
+                        f"{len(everything)} time(s) in '{target}'.", line,
+                        hint=f"Use INDEX 1 to {len(everything)}.")
+                hits = [ex for ex in hits if ex is everything[n - 1]]
+            if not hits:
+                listing = "\n".join(describe(ex, i + 1)
+                                    for i, ex in enumerate(everything))
                 raise BasicError(
-                    f"'{name}' matches {len(hits)} exchanges in '{target}'. "
-                    f"Say INPUT or OUTPUT to pick one.", line)
+                    f"None of the {len(everything)} exchanges called "
+                    f"'{name}' in '{target}' fits what the line asks for:\n"
+                    f"{listing}", line,
+                    hint="Pick one with INDEX n.")
+            if len(hits) > 1:
+                same_flow = len({ex.flow.id for ex in hits if ex.flow}) == 1
+                if not same_flow or "index" in spec:
+                    raise BasicError(
+                        f"'{name}' matches {len(hits)} exchanges in "
+                        f"'{target}'. Say INPUT or OUTPUT to pick one.", line)
+                listing = "\n".join(describe(ex, everything.index(ex) + 1)
+                                    for ex in hits)
+                extra = (" (or PROVIDER, LOCATION or AMOUNT)"
+                         if action == "remove" else "")
+                raise BasicError(
+                    f"'{name}' appears {len(hits)} times in '{target}':\n"
+                    f"{listing}", line,
+                    hint=f"Add INDEX n to the line to say which{extra}.")
             return name, hits[0], line
+
+        def is_repeated(ex):
+            return sum(1 for e in current
+                       if e.flow and ex.flow and e.flow.id == ex.flow.id) > 1
 
         # Removals. The engine removes by flow, so a flow that appears
         # more than once can't be removed on its own.
@@ -1695,17 +1949,20 @@ class Interpreter:
                 raise BasicError(
                     f"'{name}' is the reference product of '{target}' and "
                     f"can't be removed. Delete the process instead.", line)
-            if sum(1 for e in current if e.flow and e.flow.id == ex.flow.id) > 1:
-                raise BasicError(
-                    f"'{name}' appears more than once in '{target}', so "
-                    f"EDIT can't remove just one of them yet.", line)
-            remove_ids.append(ex.flow.id)
+            if is_repeated(ex):
+                # one of several exchanges of the same flow
+                remove_ids.append({"flow_id": ex.flow.id,
+                                   "internal_id": ex.internal_id})
+            else:
+                remove_ids.append(ex.flow.id)
 
         # Updates
         updates = []
         for spec in stmt.update_exchanges:
             name, ex, line = find_exchange(spec, "update")
             upd = {"flow_id": ex.flow.id}
+            if is_repeated(ex):
+                upd["internal_id"] = ex.internal_id
             if "amount" in spec:
                 if self._expr_is_variable(spec["amount"]):
                     formula = self._expr_to_formula(spec["amount"])
@@ -1816,9 +2073,57 @@ class Interpreter:
     def _exec_show(self, stmt: ShowStmt):
         """SHOW PROCESS/FLOW/PARAMETER with optional sub-command."""
         self._require_bridge(stmt.line)
-        ref = self._eval_str(stmt.ref)
+        ref = self._eval_str(stmt.ref) if stmt.ref is not None else ""
         sub = stmt.sub_command.upper()
         etype = stmt.entity_type.upper()
+        flt = self._eval_str(stmt.filter) if stmt.filter is not None else ""
+
+        if etype == "GLOBAL_PARAMS":
+            result = self.bridge.get_global_parameters(flt)
+            self._emit("get_global_parameters", result)
+            self.out.write(format_params(result))
+            return
+
+        if etype == "SYSTEM":
+            if sub == "LINKS":
+                result = self.bridge.get_system_links(ref, flt)
+                self._emit("get_system_links", result)
+                if "error" in result:
+                    raise BasicError(result["error"], stmt.line)
+                self.out.write(format_generic(result))
+            elif sub == "PARAMS":
+                result = self.bridge.get_system_parameters(ref, flt)
+                self._emit("get_system_parameters", result)
+                if "error" in result:
+                    raise BasicError(result["error"], stmt.line)
+                self.out.write(format_params(result))
+            else:
+                desc = self.bridge.find_system(ref)
+                if desc is None:
+                    raise BasicError(
+                        f"Product system not found: {ref}", stmt.line,
+                        hint=f"FIND SYSTEM \"{ref}\" searches by part of "
+                             f"a name.")
+                last = self.runtime.validation.get(desc.id)
+                state = ("not validated in this session" if last is None
+                         else "passed VALIDATE" if last.get("valid")
+                         else "FAILED VALIDATE")
+                self.out.write(f"  Name:      {desc.name}")
+                self.out.write(f"  Folder:    "
+                               f"{getattr(desc, 'category', '') or '(root)'}")
+                self.out.write(f"  UUID:      {desc.id}")
+                self.out.write(f"  Validated: {state}")
+                self.out.write(f"  SHOW SYSTEM \"{desc.name}\" PARAMS and "
+                               f"... LINKS [\"text\"] show more.")
+            return
+
+        if etype == "PROCESS" and sub == "QUALITY":
+            result = self.bridge.get_data_quality(ref)
+            self._emit("get_data_quality", result)
+            if "error" in result:
+                raise BasicError(result["error"], stmt.line)
+            self.out.write(format_generic(result))
+            return
 
         if etype == "PROCESS":
             proc = self.bridge.resolve_process_strict(ref)
@@ -1896,6 +2201,40 @@ class Interpreter:
                 raise BasicError(f"'{ref}' matches {found['ambiguous']} flows. "
                                  f"Give the exact name of the one you mean.",
                                  stmt.line)
+            if sub == "USAGE":
+                limit = stmt.limit or 10
+                if not stmt.limit:
+                    self._default("USAGE LIMIT", limit)
+                self.out.write(f"  Looking for uses of '{found['flow_name']}' "
+                               f"(this reads processes until {limit} uses "
+                               f"are found)...")
+                usage = self.bridge.find_flow_usage(
+                    found["flow_id"], limit, prefer_categories=[
+                        f for f in (self.runtime.process_folder,
+                                    self.runtime.flow_folder) if f])
+                self._emit("find_flow_usage", usage)
+                if "error" in usage:
+                    raise BasicError(usage["error"], stmt.line)
+                users = usage["used_by_processes"]
+                cats = usage["used_in_impact_categories"]
+                other = usage.get("used_elsewhere", [])
+                if not usage["in_use"]:
+                    self.out.write(
+                        f"  Not used anywhere ({usage['processes_checked']} "
+                        f"of {usage['processes_total']} processes checked).")
+                for u in users:
+                    self.out.write(f"    [P]    {u}")
+                for c in cats:
+                    self.out.write(f"    [I]    {c} (impact category)")
+                for x in other:
+                    self.out.write(f"    [O]    {x}")
+                if usage["in_use"]:
+                    total = len(users) + len(cats) + len(other)
+                    tail = ("" if usage["complete"] else
+                            f" The search stopped at LIMIT {limit}: there "
+                            f"may be more.")
+                    self.out.write(f"  {total} use(s) found.{tail}")
+                return
             flow = self.bridge.get_flow_details(found["flow_id"])
             if "error" in flow:
                 raise BasicError(flow["error"], stmt.line)
@@ -2039,6 +2378,13 @@ class Interpreter:
 
         result = self.bridge.list_category_contents(path, entity_type)
         self._emit("list_category_contents", result)
+        known = {sf.lower() for sf in result["subfolders"]}
+        created = [p for p in self._pending_subfolders(path)
+                   if p.lower() not in known]
+        if created:
+            result = dict(result)
+            result["subfolders"] = sorted(result["subfolders"] + created)
+            result["subfolder_count"] = len(result["subfolders"])
 
         from fnmatch import fnmatch
         pattern = stmt.filter_pattern.lower() if stmt.filter_pattern else ""
@@ -2101,19 +2447,81 @@ class Interpreter:
             current = self._active_folder()
             relative = (current.rstrip("/") + "/" + path) if current else path
             # Relative first (DIR "subfolder"), then absolute
-            if current and self.bridge.folder_exists(relative, entity_type):
+            if current and self._folder_exists(relative, entity_type):
                 self._set_active_folder(relative)
-            elif self.bridge.folder_exists(path, entity_type):
+            elif self._folder_exists(path, entity_type):
                 self._set_active_folder(path)
             else:
                 # Don't invent a folder: that silently sends later
                 # PROCESS and CDIR commands somewhere that isn't there
                 raise BasicError(
-                    f"Folder not found: '{path}'. Use CAT to list folders, "
-                    f"or CDIR to create a new one.", stmt.line)
+                    f"Folder not found: '{path}'. Use CAT (or LS) to list "
+                    f"folders, CDIR to create one and go into it, or MKDIR "
+                    f"to create one and stay where you are.", stmt.line)
 
         folder = self._active_folder() or "(root)"
         self.out.write(f"  {folder}")
+
+    def _folder_exists(self, path: str, entity_type: str) -> bool:
+        """A folder exists if openLCA has something in it, or if CDIR or
+        MKDIR created it in this session."""
+        wanted = path.strip("/").lower()
+        for pending in self.runtime.pending_folders:
+            p = pending.lower()
+            if p == wanted or p.startswith(wanted + "/"):
+                return True
+        return self.bridge.folder_exists(path, entity_type)
+
+    def _pending_subfolders(self, path: str) -> list:
+        """Folders created this session, directly under path, that
+        openLCA does not hold yet."""
+        base = path.strip("/")
+        out = set()
+        for pending in self.runtime.pending_folders:
+            if base:
+                if not pending.lower().startswith(base.lower() + "/"):
+                    continue
+                rest = pending[len(base) + 1:]
+            else:
+                rest = pending
+            if rest:
+                out.add((base + "/" if base else "") + rest.split("/")[0])
+        return sorted(out)
+
+    def _exec_mkdir(self, stmt):
+        """MKDIR "name": create a folder and stay where you are (the
+        Linux meaning). CDIR creates it and goes in (the Acorn one)."""
+        name = self._eval_str(stmt.name).strip("/")
+        if not name:
+            raise BasicError("MKDIR needs a folder name.", stmt.line,
+                             hint='For example: MKDIR "00: My model"')
+        current = self._active_folder()
+        new_path = (current.rstrip("/") + "/" + name) if current else name
+        if self.bridge and self.bridge.connected and self.bridge.folder_exists(
+                new_path, self._nav_entity_type()):
+            self.out.write(f"  Folder already exists: {new_path}")
+            return
+        self.runtime.pending_folders.add(new_path)
+        self.out.write(f"  Created: {new_path}")
+        self.out.write("  You are still in: "
+                       f"{current or '(root)'}. The folder shows in openLCA "
+                       "once something is built in it.")
+
+    def _exec_save_program(self, stmt):
+        """SAVE "file.baslca": write out the programs run so far in
+        this session, so the work can be repeated with RUN."""
+        filename = self._eval_str(stmt.filename)
+        history = self.runtime.program_history
+        if not history:
+            raise BasicError(
+                "There is nothing to save yet: no program has run "
+                "without an error in this session.", stmt.line)
+        text = "\n".join(part.rstrip("\n") for part in history) + "\n"
+        with open(filename, "w", newline="\n", encoding="utf-8") as f:
+            f.write(text)
+        self.out.write(f"  Program saved to {filename} "
+                       f"({len(text.splitlines())} lines). "
+                       f"RUN \"{filename}\" repeats it.")
 
     def _exec_up(self):
         """UP — go up one level in the active tree."""
@@ -2143,6 +2551,7 @@ class Interpreter:
         else:
             new_path = name
         self._set_active_folder(new_path)
+        self.runtime.pending_folders.add(new_path)
         # A folder is created to put things in, so it becomes the
         # build folder for this tree
         mode = self.runtime.navigation_mode
@@ -2161,7 +2570,8 @@ class Interpreter:
         with the pedigree scores on each branch's link."""
         self._require_bridge(stmt.line)
         system = self._eval_str(stmt.system)
-        method = self._eval_str(stmt.method)
+        method = self._method(self._eval_str(stmt.method), stmt.line)
+        self._require_valid(system, stmt.line, "TREE")
         if stmt.category is None:
             calc = self.bridge.calculate(system, method, stmt.allocation)
             if "error" in calc:
@@ -2170,6 +2580,7 @@ class Interpreter:
             raise BasicError(f"TREE needs CATEGORY. Categories in "
                              f"{method}: {cats}", stmt.line)
         category = self._eval_str(stmt.category)
+        self._defaults(stmt, LEVELS=stmt.levels, TOP=stmt.top)
         self.out.write(f"  Building contribution tree: {system}...")
         result = self.bridge.upstream_tree(
             system, method, category, stmt.levels, stmt.top,
@@ -2202,21 +2613,36 @@ class Interpreter:
                 "No destination folder. Use MOVE ... TO \"path\" "
                 "or SET PROCESS FOLDER first.", stmt.line)
 
+        if not etype:
+            raise BasicError("Say what to move.", stmt.line,
+                             hint='MOVE PROCESS "name" TO "folder", MOVE FLOW '
+                                  '... or MOVE SYSTEM ...')
+        kind = {"PROCESS": "process", "FLOW": "flow",
+                "SYSTEM": "product_system"}[etype]
+        # Strict: moving the wrong one of two same-named entries could
+        # pull a background dataset out of its folder
         if etype == "PROCESS":
-            # Strict: moving the wrong one of two same-named processes
-            # could pull a background dataset out of its folder
             proc = self.bridge.resolve_process_strict(ref)
             if "error" in proc:
                 raise BasicError(proc["error"], stmt.line)
-            result = self.bridge.edit_process(
-                proc["process_id"], category=dest)
-            self._emit("edit_process", result)
-            if "error" in result:
-                raise BasicError(result["error"], stmt.line)
+            found = {"id": proc["process_id"]}
         else:
+            found = self.bridge.resolve_entity_strict(kind, ref)
+        if "error" in found:
             raise BasicError(
-                f"MOVE {etype} not yet supported. "
-                f"Use MOVE PROCESS for now.", stmt.line)
+                found["error"].replace("Nothing was deleted. Delete by UUID "
+                                       "instead.", "Nothing was moved."),
+                stmt.line, hint="Use the UUID instead of the name "
+                                f"(FIND {etype} shows it).")
+        if found.get("not_found"):
+            raise BasicError(f"No {etype.lower()} is called '{ref}'.",
+                             stmt.line,
+                             hint=f"FIND {etype} \"{ref}\" searches by "
+                                  f"part of a name.")
+        result = self.bridge.move_entity(kind, found["id"], dest)
+        self._emit("move_entity", result)
+        if "error" in result:
+            raise BasicError(result["error"], stmt.line)
 
         self.out.write(f"  Moved {etype.lower()} '{ref}' to '{dest}'")
         self.bridge.refresh_caches()

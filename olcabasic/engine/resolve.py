@@ -24,6 +24,62 @@ class ResolveMixin:
         proc = self.find_process(name_or_id)
         return proc.id if proc else None
 
+    def process_candidates(self, name: str, location: str = "") -> list:
+        """Every process called exactly this (optionally at one location
+        code), as [{"id", "name", "location", "category"}], sorted by
+        location. Used to list the choices when a name is ambiguous."""
+        loc = location.strip().lower()
+        out = []
+        for p in self.get_descriptors(o.Process):
+            if p.name != name:
+                continue
+            p_loc = getattr(p, "location", "") or ""
+            if loc and p_loc.lower() != loc:
+                continue
+            out.append({"id": p.id, "name": p.name, "location": p_loc,
+                        "category": getattr(p, "category", "") or ""})
+        return sorted(out, key=lambda c: (c["location"], c["id"]))
+
+    def describe_process(self, process_id: str) -> Optional[Dict]:
+        """{"id", "name", "location", "category"} of a process, from its
+        descriptor (no full read). None if there is no such process."""
+        for p in self.get_descriptors(o.Process):
+            if p.id == process_id:
+                return {"id": p.id, "name": p.name,
+                        "location": getattr(p, "location", "") or "",
+                        "category": getattr(p, "category", "") or ""}
+        return None
+
+    def find_method_strict(self, ref: str) -> Dict:
+        """An impact method by UUID or by its full name.
+
+        Returns {"id", "name"}, or {"error", "candidates"} when nothing
+        has exactly that name. Candidates are the methods whose names
+        contain the text or are close to it, so 'EF 3.1' offers
+        'EF v3.1' and 'EF v3.1 no LT'."""
+        import difflib
+        methods = self.get_descriptors(o.ImpactMethod)
+        for m in methods:
+            if m.id == ref:
+                return {"id": m.id, "name": m.name}
+        exact = [m for m in methods if m.name == ref]
+        if len(exact) == 1:
+            return {"id": exact[0].id, "name": exact[0].name}
+        if len(exact) > 1:
+            return {"error": f"{len(exact)} impact methods are called "
+                             f"'{ref}'. Use the UUID of the one you mean.",
+                    "candidates": [f"{m.name} ({m.id})" for m in exact]}
+        names = sorted({m.name for m in methods})
+        lower = ref.lower()
+        squeezed = "".join(ch for ch in lower if ch.isalnum())
+        near = [n for n in names if lower in n.lower()
+                or squeezed in "".join(ch for ch in n.lower() if ch.isalnum())]
+        for n in difflib.get_close_matches(ref, names, n=5, cutoff=0.6):
+            if n not in near:
+                near.append(n)
+        return {"error": f"No impact method is called '{ref}'.",
+                "candidates": near[:10]}
+
     def get_process_details_by_ref(self, ref: str) -> Dict:
         """get_process_details for a name or a UUID."""
         proc = self.find_process(ref)

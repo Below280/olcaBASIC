@@ -142,15 +142,23 @@ def test_making_a_process_twice_warns_and_does_not_duplicate(run, client):
     assert len(client.by_name(o.Flow, "Widget")) == 1
 
 
-def test_ambiguous_use_process_warns_and_uses_first(run):
-    """v0.3.0 behaviour: a warning. Phase 5 turns this into an error."""
-    out = run(SETUP + f'''
+def test_ambiguous_use_process_is_an_error_listing_the_candidates(interp, client):
+    """Changed on purpose in 0.4.0 (command map section 7): this was a
+    warning that used the first match."""
+    with pytest.raises(BasicError) as e:
+        interp.run_program(SETUP + f'''
 MAKE PROCESS "Ambiguous"
   OUTPUT MAKE FLOW "Ambiguous", 1, kg, PRODUCT
   INPUT USE PROCESS "{ELECTRICITY}", 1, kWh
 END PROCESS''')
-    assert "WARNING" in out and "matched 3 processes" in out
-    assert 'Add LOCATION "code"' in out
+    text = str(e.value)
+    assert "matches 3 processes" in text and e.value.line == 8
+    for row in client.by_name(o.Process, ELECTRICITY):
+        assert row.id in text
+        assert client._location_code(row.location) in text
+    assert 'Add LOCATION "code"' in e.value.hint and "PROVIDER" in e.value.hint
+    assert client.by_name(o.Process, "Ambiguous") == []
+    assert client.by_name(o.Flow, "Ambiguous") == []
 
 
 def test_unknown_location_lists_what_is_available(interp):
@@ -360,7 +368,8 @@ def test_calculate_unknown_system_and_method(run, interp):
     assert "Product system not found: Nope" in str(e.value)
     with pytest.raises(BasicError) as e:
         interp.run_program('CALCULATE "Widget" USING "ReCiPe"')
-    assert "Impact method not found: ReCiPe" in str(e.value)
+    # wording changed in 0.4.0: method names must match in full
+    assert "No impact method is called 'ReCiPe'" in str(e.value)
 
 
 def test_contribution(run, interp):
@@ -535,12 +544,13 @@ def test_move_process(run, client):
     assert process(client, "Widget").category == "00: Elsewhere"
 
 
-def test_move_flow_not_yet_supported(run, interp):
-    """v0.3.0 behaviour. Phase 5 adds MOVE for flows and systems."""
-    run(WIDGET)
-    with pytest.raises(BasicError) as e:
-        interp.run_program('MOVE FLOW "Widget" TO "00: Elsewhere"')
-    assert "MOVE FLOW not yet supported" in str(e.value)
+def test_move_flow_and_system(run, client):
+    """Added in 0.4.0 (design section 9): MOVE handled processes only."""
+    out = run(WIDGET + 'MOVE FLOW "Widget" TO "00: Elsewhere/Flows"\n'
+              'MOVE SYSTEM "Widget" TO "00: Elsewhere"')
+    assert "Moved flow 'Widget' to '00: Elsewhere/Flows'" in out
+    assert client.by_name(o.Flow, "Widget")[0].category == "00: Elsewhere/Flows"
+    assert client.by_name(o.ProductSystem, "Widget")[0].category == "00: Elsewhere"
 
 
 def test_cat_and_ls_print_the_same(run):

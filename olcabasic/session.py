@@ -162,6 +162,10 @@ class Session:
                     errors.append(error_dict(str(e) or type(e).__name__, line))
                     sink.write(f"  Error: Line {line}: {e}")
                     break
+            if not errors and not all(
+                    type(st).__name__ in ("SaveProgramStmt", "HelpStmt")
+                    for st in statements):
+                self.runtime.program_history.append(code)
             return self._result(sink, errors)
 
     @staticmethod

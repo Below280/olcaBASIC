@@ -84,10 +84,11 @@ COMMANDS: List[Command] = [
         topic="NAVIGATION",
         usage='DIR "folder"',
         summary="Go to a folder (DIR on its own shows where you are)",
-        example='DIR "C:Manufacturing"\nCD "00: My model"\nDIR',
+        example='DIR "C:Manufacturing"\nCD "00: My model"\nDIR\nCD /',
         notes="The folder can be relative to the current one or a full "
-              "path. A folder that does not exist is an error: use CDIR "
-              "to create one.",
+              "path. DIR \"/\" and CD / go to the top level. A folder "
+              "that does not exist is an error: use CDIR or MKDIR to "
+              "create one.",
         statements=("DirStmt", "CdStmt")),
     Command(
         name="UP", aliases=("CD ..",), dialect=ACORN, alias_dialect=LINUX,
@@ -97,10 +98,11 @@ COMMANDS: List[Command] = [
         example="UP\nCD ..",
         statements=("UpStmt",)),
     Command(
-        name="BACK", dialect=ACORN, topic="NAVIGATION",
+        name="BACK", aliases=("CD -",), dialect=ACORN, alias_dialect=LINUX,
+        topic="NAVIGATION",
         usage="BACK",
         summary="Go back to the folder you were in before",
-        example="BACK",
+        example="BACK\nCD -",
         statements=("BackStmt",)),
     Command(
         name="CDIR", dialect=ACORN, topic="NAVIGATION",
@@ -108,8 +110,19 @@ COMMANDS: List[Command] = [
         summary="Create a folder, go into it, and build there from now on",
         example='CDIR "00: My model"',
         notes="The folder appears in openLCA when the first process or "
-              "flow is built in it.",
+              "flow is built in it. CDIR goes into the new folder, as "
+              "*CDIR followed by *DIR would on an Acorn; the Linux MKDIR "
+              "creates it and stays where you are.",
         statements=("CdirStmt",)),
+    Command(
+        name="MKDIR", dialect=LINUX, topic="NAVIGATION",
+        usage='MKDIR "name"',
+        summary="Create a folder without going into it",
+        example='MKDIR "00: My model"',
+        notes="Unlike CDIR, MKDIR does not move you and does not change "
+              "where new processes are built. Follow it with DIR, or with "
+              "SET PROCESS FOLDER, to use the folder.",
+        statements=("MkdirStmt",)),
     Command(
         name="PWD", dialect=LINUX, topic="NAVIGATION",
         usage="PWD",
@@ -154,6 +167,12 @@ COMMANDS: List[Command] = [
         example='FIND FLOW "Carbon dioxide"',
         statements=("FindStmt",)),
     Command(
+        name="FIND SYSTEM", topic="EXPLORE",
+        usage='FIND SYSTEM "text"',
+        summary="Search product systems by name",
+        example='FIND SYSTEM "concrete"',
+        statements=("FindStmt",)),
+    Command(
         name="FIND METHOD", topic="EXPLORE",
         usage='FIND METHOD "text"',
         summary="Search impact methods by name",
@@ -174,15 +193,33 @@ COMMANDS: List[Command] = [
         statements=("FindStmt",)),
     Command(
         name="SHOW PROCESS", topic="EXPLORE",
-        usage='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|LOCATION|DESCRIPTION]',
-        summary="Show a process: exchanges, parameters, location",
+        usage='SHOW PROCESS "name" [INPUTS|OUTPUTS|PARAMS|QUALITY|LOCATION|DESCRIPTION]',
+        summary="Show a process: exchanges, parameters, data quality, location",
         example='SHOW PROCESS "Concrete block"\nSHOW PROCESS "Concrete block" INPUTS',
         statements=("ShowStmt",)),
     Command(
         name="SHOW FLOW", topic="EXPLORE",
-        usage='SHOW FLOW "name" [UNITS|DESCRIPTION]',
-        summary="Show a flow: type, folder, properties and units",
-        example='SHOW FLOW "Concrete block" UNITS',
+        usage='SHOW FLOW "name" [UNITS|DESCRIPTION|USAGE [LIMIT n]]',
+        summary="Show a flow: type, folder, units, or where it is used",
+        example='SHOW FLOW "Concrete block" UNITS\nSHOW FLOW "Concrete block" USAGE LIMIT 5',
+        notes="USAGE lists the processes and impact categories that use "
+              "the flow. openLCA cannot answer that directly, so every "
+              "process is read until LIMIT uses are found (10 by default): "
+              "slow on a large database.",
+        statements=("ShowStmt",)),
+    Command(
+        name="SHOW SYSTEM", topic="EXPLORE",
+        usage='SHOW SYSTEM "name" [PARAMS ["text"] | LINKS ["text"]]',
+        summary="Show a product system, its parameters or its provider links",
+        example='SHOW SYSTEM "Concrete block"\nSHOW SYSTEM "Concrete block" LINKS "electricity"',
+        notes="Without a sub-command it shows the folder, the UUID and "
+              "whether the system passed VALIDATE in this session.",
+        statements=("ShowStmt",)),
+    Command(
+        name="SHOW GLOBAL PARAMS", topic="EXPLORE",
+        usage='SHOW GLOBAL PARAMS ["text"]',
+        summary="List global parameters, optionally those whose name contains a text",
+        example='SHOW GLOBAL PARAMS "cement"',
         statements=("ShowStmt",)),
     Command(
         name="SHOW PARAMETER", topic="EXPLORE",
@@ -325,7 +362,10 @@ END BRIDGE''',
         notes="A bridge has the bridge flow as its product and one input "
               "from the background process. Your own processes use the "
               "bridge, so the background process can be swapped in one "
-              "place.",
+              "place.\n"
+              "Bridges are always named BRIDGE | what | unit. A plain name "
+              "(BRIDGE \"Cement\", kg) is given that form. PROVIDER takes "
+              "a UUID or a name that only one process has.",
         statements=("BridgeStmt",)),
     Command(
         name="SYSTEM", aliases=("MAKE SYSTEM",), topic="BUILD",
@@ -349,19 +389,27 @@ END SYSTEM''',
         statements=("LinkStmt",)),
     Command(
         name="MOVE", topic="BUILD",
-        usage='MOVE PROCESS "name" TO "folder"',
-        summary="Move a process to another folder",
-        example='MOVE PROCESS "Concrete block" TO "00: My model/A3"',
-        notes='MOVE ... TO FOLDER moves it to the current build folder.',
+        usage='MOVE PROCESS|FLOW|SYSTEM "name" TO "folder"',
+        summary="Move a process, flow or product system to another folder",
+        example='MOVE PROCESS "Concrete block" TO "00: My model/A3"\n'
+                'MOVE FLOW "Concrete block" TO "00: My model/Flows"',
+        notes="MOVE ... TO FOLDER moves it to the current build folder. "
+              "Only the folder changes: links are by UUID and are not "
+              "affected. A name shared by several entries is refused: use "
+              "the UUID.",
         statements=("MoveStmt",)),
     Command(
         name="DELETE", topic="BUILD",
-        usage='DELETE PROCESS|SYSTEM "name or uuid"',
-        summary="Delete a process or a product system",
-        example='CONFIRM DELETE ON\nDELETE SYSTEM "Concrete block"\nDELETE PROCESS "Concrete block"',
+        usage='DELETE PROCESS|SYSTEM|FLOW "name or uuid"',
+        summary="Delete a process, a product system or an unused flow",
+        example='CONFIRM DELETE ON\nDELETE SYSTEM "Concrete block"\nDELETE PROCESS "Concrete block"\nDELETE FLOW "Concrete block"',
         notes="Deleting cannot be undone. In the terminal olcaBASIC asks "
               "first; a program must say CONFIRM DELETE ON. A name that "
-              "matches several entries is refused: use the UUID.",
+              "matches several entries is refused: use the UUID.\n"
+              "DELETE FLOW first reads every process to check that nothing "
+              "uses the flow (slow on a large database) and refuses if "
+              "anything does, naming it. Delete the system, then the "
+              "process, then its flows.",
         statements=("DeleteStmt",)),
     Command(
         name="CONFIRM DELETE", topic="BUILD",
@@ -379,7 +427,8 @@ END SYSTEM''',
   ADD INPUT|OUTPUT ...                 (same forms as in MAKE PROCESS)
   ADD PARAM name = value
   REMOVE INPUT|OUTPUT "flow or provider name"
-  UPDATE INPUT|OUTPUT "name", amount [, unit]
+         [PROVIDER "name or uuid"] [LOCATION "code"] [AMOUNT n] [INDEX n]
+  UPDATE INPUT|OUTPUT "name" [INDEX n], amount [, unit]
   UPDATE INPUT|OUTPUT "name" [LOCATION "code"] [PROVIDER "uuid"]
                              [PEDIGREE (1,2,1,1,3)] [COMMENT "text"]
   UPDATE PARAM name = value
@@ -391,7 +440,10 @@ END EDIT''',
 END EDIT''',
         notes="Product systems that already use the process keep their "
               "old links: DELETE SYSTEM and SYSTEM again after adding or "
-              "removing exchanges.",
+              "removing exchanges.\n"
+              "If a flow appears more than once in the process, say which "
+              "exchange you mean: INDEX n (the error lists them with their "
+              "index), or for REMOVE also PROVIDER, LOCATION or AMOUNT.",
         statements=("EditProcessStmt",)),
     Command(
         name="EDIT FLOW", topic="EDIT",
@@ -510,6 +562,8 @@ END SENSITIVITY''',
         example='''SENSITIVITY ON "Concrete block" USING "EF v3.1" BY 10%
   VARY cement_mass
 END SENSITIVITY''',
+        notes="BY is required: there is no default range. So is at least "
+              "one VARY line or a FROM file.",
         statements=("SensitivityStmt",)),
 
     # ── CHECK ────────────────────────────────────────────────
@@ -520,15 +574,19 @@ END SENSITIVITY''',
         example='VALIDATE "Concrete block"',
         notes="Checks the reference process, its reference product, the "
               "links and the parameters. It does not check whether the "
-              "amounts are right.",
+              "amounts are right. If a system fails, calculations on it "
+              "are refused for the rest of the session until VALIDATE "
+              "passes.",
         statements=("ValidateStmt",)),
     Command(
         name="CHECK", topic="CHECK",
         usage='CHECK "system" [TIER 1|2|3] [AGAINST "file"]',
         summary="Run a tier of model checks",
         example='CHECK "Concrete block" TIER 1',
-        notes="Tier 1 is structural. Tier 2 compares the model with its "
-              "source data. Tier 3 asks whether the results are plausible.",
+        notes="Tier 1 is structural (the same checks as VALIDATE) and "
+              "always ends by saying so. Tier 2 lists the model for "
+              "comparison with its source data. Tier 3 is the plausibility "
+              "check of the results, which only a person can make.",
         statements=("CheckStmt",)),
     Command(
         name="AUDIT", topic="CHECK",
@@ -556,6 +614,16 @@ END SENSITIVITY''',
         summary="Write the most recent results to a CSV file",
         example='SAVE RESULTS "results.csv"',
         statements=("SaveResultsStmt", "ExportResultsStmt")),
+    Command(
+        name="SAVE PROGRAM", aliases=('SAVE "file.baslca"',), topic="OUTPUT",
+        usage='SAVE PROGRAM "file.baslca"',
+        summary="Write every program run so far in this session to a file",
+        example='SAVE PROGRAM "my_model.baslca"',
+        notes="The file is the reproducible record of the work: RUN "
+              "\"my_model.baslca\" repeats it. Only programs that ran "
+              "without an error are saved. SAVE with a name ending in "
+              ".baslca does the same.",
+        statements=("SaveProgramStmt",)),
 
     # ── PROGRAMMING ──────────────────────────────────────────
     Command(
@@ -614,7 +682,7 @@ IF condition THEN statement [ELSE statement]''',
         summary="Define a function; it returns the variable with its own name",
         example="FUNCTION double(x)\n  LET double = x * 2\nEND FUNCTION\nPRINT double(4)",
         notes="Built-in functions: ABS, INT, SQR, LOG, EXP, SIN, COS, TAN, "
-              "MIN, ROUND, LEN, VAL, STR$, TRIM$, UCASE$, LCASE$.",
+              "MIN, MAX, ROUND, LEN, VAL, STR$, TRIM$, UCASE$, LCASE$.",
         statements=("FunctionDef",)),
     Command(
         name="DATA", dialect=BASIC, topic="PROGRAMMING",
@@ -834,6 +902,9 @@ line numbers. Comments start with REM or '.
 - Variables persist between runs in the same session. A top-level variable
   used as an amount becomes a global parameter in openLCA.
 - MAKE is idempotent: running a build twice does not duplicate anything.
+- A product system that fails VALIDATE cannot be calculated until it passes.
+- Defaults that were applied are stated in the output (NOTE: default used).
+- SAVE PROGRAM "file.baslca" writes out what has run, as the record of the work.
 """
 
 

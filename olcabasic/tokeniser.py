@@ -87,7 +87,7 @@ KEYWORDS = {
     # File operations
     "RUN", "SAVE", "LOAD", "INCLUDE", "NEW",
     "HISTORY", "CLEAR", "EXIT", "QUIT", "HELP",
-    "CD", "DIR", "CAT", "UP", "BACK", "CDIR", "PWD", "LS",
+    "CD", "DIR", "CAT", "UP", "BACK", "CDIR", "PWD", "LS", "MKDIR",
     # LCA entities
     "FLOW", "PROCESS", "BRIDGE", "SYSTEM",
     "CALCULATE", "SENSITIVITY", "SCENARIO", "SCENARIOS",

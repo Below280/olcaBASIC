@@ -316,9 +316,9 @@ END SENSITIVITY''')
 def test_engine_errors_carry_the_statement_line(session):
     session.run(WIDGET)
     r = session.run('PRINT 1\nCALCULATE "Widget" USING "No such method"')
-    assert r.errors == [{"line": 2,
-                         "message": "Impact method not found: No such method",
-                         "hint": ""}]
+    assert r.errors == [{
+        "line": 2, "message": "No impact method is called 'No such method'.",
+        "hint": "PRINT METHODS lists every impact method in the database."}]
 
 
 def test_unexpected_exception_becomes_an_error(session, client):
