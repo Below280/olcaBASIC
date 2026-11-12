@@ -235,3 +235,42 @@ EPD REPORT "{out.as_posix()}"
             f'DELETE SYSTEM "{n}"' for n in names if ":" in n) + "\n" + "\n".join(
             f'DELETE PROCESS "{n}"' for n in names)
         live.session.run(cleanup)
+
+
+# ── 4. PARAMETERISE PROCESS, on a bridge of our own ──────────
+
+def test_parameterise_needs_confirm_and_keeps_the_amount(live, providers):
+    """Only ever run on a process this test created: a plain bridge,
+    whose one input has a fixed amount of 1."""
+    name = "BRIDGE | olcaBASIC live parameterise | kWh"
+    cleanup = f'CONFIRM DELETE ON\nDELETE PROCESS "{name}"'
+    live.session.run(cleanup)
+    try:
+        r = live.session.run(f'''BRIDGE "olcaBASIC live parameterise", kWh
+  FOLDER "{FOLDER}/Bridges"
+  PROVIDER "{providers[0]}"
+END BRIDGE''')
+        assert r.ok, f"{r.errors}\n{r.text}"
+        found = live.engine.process_candidates(name)
+        assert len(found) == 1
+        pid = found[0]["id"]
+
+        r = live.session.run(f'PARAMETERISE PROCESS "{name}"')
+        assert not r.ok
+        assert "refused without CONFIRM" in r.errors[0]["message"]
+        assert "1 fixed amount " in r.errors[0]["message"]
+        before = live.engine.process_structure(pid)
+        assert before["parameters"] == {}
+        assert [l["formula"] for l in before["links"]] == [None]
+
+        r = live.session.run(f'PARAMETERISE PROCESS "{name}" CONFIRM')
+        assert r.ok, f"{r.errors}\n{r.text}"
+        after = live.engine.process_structure(pid)
+        assert list(after["parameters"].values()) == [1.0]
+        assert [l["formula"] for l in after["links"]] == list(after["parameters"])
+        assert after["links"][0]["provider_id"] == providers[0]
+
+        r = live.session.run(f'PARAMETERISE PROCESS "{name}" CONFIRM')
+        assert r.ok and "Nothing to parameterise" in r.text
+    finally:
+        live.session.run(cleanup)
