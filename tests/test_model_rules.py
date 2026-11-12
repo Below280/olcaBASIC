@@ -522,3 +522,39 @@ def test_other_commands_check_allocation_too(session, client):
     e = err(session.run(f'CONTRIBUTION "Widget" USING "{EF}" '
                         f'ALLOCATE PHYSICAL'))
     assert "no PHYSICAL allocation factors" in e["message"]
+
+
+# ── what the engine reads for these rules ────────────────────
+
+def test_openlca_27_is_asked_which_systems_hold_a_process(session, client):
+    """Before 2.7 every product system is read; from 2.7 the server
+    answers and none is."""
+    assert session.run(BUILT).ok
+    widget_id = client.by_name(o.Process, "Widget")[0].id
+    old = session.engine.systems_containing(widget_id)
+    assert [s["name"] for s in old["systems"]] == ["Widget"]
+    assert old["how"] == "read every product system"
+
+    client.server_version = "2.7.0"
+    newer = Session(client=client)
+    before = len([c for c in client.calls
+                  if c[:2] == ("get", "ProductSystem")])
+    got = newer.engine.systems_containing(widget_id)
+    assert [s["name"] for s in got["systems"]] == ["Widget"]
+    assert got["how"] == "asked openLCA"
+    assert len([c for c in client.calls
+                if c[:2] == ("get", "ProductSystem")]) == before
+    newer.close()
+
+
+def test_a_system_is_read_once_for_its_processes(session, client):
+    assert session.run(BUILT).ok
+    widget_id = client.by_name(o.Process, "Widget")[0].id
+    session.engine.systems_containing(widget_id)
+    reads = len([c for c in client.calls if c[0] == "get"
+                 and "ProductSystem" in str(c[1])])
+    session.engine.systems_containing(widget_id)
+    session.engine.clear_caches()
+    session.engine.systems_containing(widget_id)
+    assert len([c for c in client.calls if c[0] == "get"
+                and "ProductSystem" in str(c[1])]) == reads

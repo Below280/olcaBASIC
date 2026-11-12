@@ -85,8 +85,9 @@ class CompareMixin:
             amount = re.sub(r"\s+", "", formula)
         else:
             amount = ex.amount
+        # (a server may give 0 for a cost that was never set)
         cost = None
-        if ex.cost_value is not None or ex.cost_formula:
+        if ex.cost_value or ex.cost_formula or ex.currency is not None:
             cost = {"value": ex.cost_value or 0.0,
                     "formula": ex.cost_formula or "",
                     "currency": ex.currency.id if ex.currency else ""}
@@ -161,8 +162,12 @@ class CompareMixin:
                 "type": ("LCI RESULT" if process.process_type
                          == o.ProcessType.LCI_RESULT else "UNIT"),
                 "infrastructure": bool(process.is_infrastructure_process),
-                "default allocation": (ALLOCATION_NAMES.get(default, "")
-                                       if default is not None else ""),
+                # no method set and "no allocation" are the same thing
+                "default allocation": (
+                    "" if default in (None,
+                                      o.AllocationType.NO_ALLOCATION,
+                                      o.AllocationType.USE_DEFAULT_ALLOCATION)
+                    else ALLOCATION_NAMES.get(default, "")),
                 "location": process.location.id if process.location else None,
                 "description": _blank(
                     ratings_block.strip(process.description).strip()),

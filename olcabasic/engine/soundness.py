@@ -66,15 +66,28 @@ class SoundnessMixin:
 
     def systems_containing(self, process_id: str) -> Dict:
         """The product systems that contain a process:
-        {"systems": [{"id", "name"}]}. Every product system in the
-        database is looked at (each is read once and remembered)."""
+        {"systems": [{"id", "name"}], "how"}. openLCA 2.7 answers
+        directly; before that every product system in the database is
+        looked at (each is read once and remembered)."""
         try:
+            # openLCA 2.7 can say where a process is used
+            if self.ipc_supports("data/get/usage"):
+                data, err = self.client.rpc_call(
+                    "data/get/usage",
+                    {"@type": "Process", "@id": process_id})
+                if not err:
+                    return {"process_id": process_id, "systems": [
+                        {"id": d.get("@id"), "name": d.get("name", "")}
+                        for d in data or []
+                        if d.get("@type") == "ProductSystem"],
+                        "how": "asked openLCA"}
             self._cache.pop("ProductSystem", None)
             found = []
             for d in self._get_descriptors(o.ProductSystem):
                 if process_id in self._system_members(d.id):
                     found.append({"id": d.id, "name": d.name})
-            return {"process_id": process_id, "systems": found}
+            return {"process_id": process_id, "systems": found,
+                    "how": "read every product system"}
         except Exception as ex:
             return {"error": str(ex)}
 
