@@ -63,12 +63,19 @@ def live(baseline, names):
     runner = LiveRunner()
     info = runner.engine.get_database_info()
     expected = baseline["database_info"]
-    if (info.get("processes"), info.get("flows")) != (
-            expected["processes"], expected["flows"]):
+    # A different database gives different numbers, so say so instead of
+    # failing. A few extra entities are fine (these tests leave a flow
+    # behind, and the reference model may or may not be present).
+    for kind in ("processes", "flows"):
+        if abs(info.get(kind, 0) - expected[kind]) > 25:
+            pytest.skip(
+                f"the open database has {info.get(kind)} {kind}; the "
+                f"baseline was captured from one with {expected[kind]}")
+    if info.get("impact_methods") != expected["impact_methods"]:
         pytest.skip(
-            f"the open database has {info.get('processes')} processes and "
-            f"{info.get('flows')} flows; the baseline was captured from one "
-            f"with {expected['processes']} and {expected['flows']}")
+            f"the open database has {info.get('impact_methods')} impact "
+            f"methods; the baseline was captured from one with "
+            f"{expected['impact_methods']}")
     runner.run(baseline["program_template"].format(**names))
     yield runner
     runner.run(f'CONFIRM DELETE ON\nDELETE SYSTEM "{names["name"]}"\n'
