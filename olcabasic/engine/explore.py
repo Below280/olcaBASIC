@@ -22,6 +22,7 @@ import threading
 # One logger for the whole engine, under the name it has always had.
 logger = logging.getLogger("olcabasic.engine.engine")
 
+from . import ratings_block
 from .validators import (
     validate_category as _validate_category,
     validate_param_name as _validate_param_name,
@@ -175,7 +176,7 @@ class ExploreMixin:
         results = []
         for desc in descriptors:
             param = self.client.get(o.Parameter, desc.id)
-            if param:
+            if param and self._is_global(param):
                 results.append({
                     "name": param.name,
                     "value": param.value,
@@ -594,9 +595,13 @@ class ExploreMixin:
                 key, sep, value = tag[len(lead):].partition("=")
                 if sep:
                     out[key] = value
+            description = getattr(process, "description", "") or ""
+            # the ratings, which live in the description (see
+            # set_process_tags)
+            out.update(ratings_block.read(description))
             return {"process_id": process.id, "process_name": process.name,
                     "category": getattr(process, "category", "") or "",
-                    "description": getattr(process, "description", "") or "",
+                    "description": ratings_block.strip(description),
                     "tags": out}
         except Exception as ex:
             return {"error": str(ex)}

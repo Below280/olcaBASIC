@@ -163,9 +163,26 @@ def test_calculate_matches_the_baseline(live, baseline, names, tol):
                 f"{method} / {cat}: {g['amount']!r} is not {w['amount']!r}")
 
 
+def live_parameter(live, names, ref_param, baseline):
+    """The live model's name for a parameter of the baseline. A global
+    keeps its name. An automatic parameter (pNN_process__input_unit) is
+    named after its input, which is now a bridge, so it is found by its
+    number: the inputs are in the same order."""
+    m = re.match(r"p(\d\d)_", ref_param)
+    if not m:
+        return rename(ref_param, baseline, names)
+    found = live.engine.search_processes(names["name"])["processes"]
+    details = live.engine.get_process_details(found[0]["id"])
+    hits = [p["name"] for p in details["parameters"]
+            if p["name"].startswith(m.group(0))]
+    assert len(hits) == 1, (ref_param, hits)
+    return hits[0]
+
+
 def test_sensitivity_matches_the_baseline(live, baseline, names, tol):
     spec = baseline["sensitivity"]
-    params = [rename(p, baseline, names) for p in spec["parameters"]]
+    params = [live_parameter(live, names, p, baseline)
+              for p in spec["parameters"]]
     vary = "\n".join(f"  VARY {p}" for p in params)
     got = live.run(
         f'SENSITIVITY ON "{names["name"]}" USING "{spec["method"]}" '
@@ -175,7 +192,8 @@ def test_sensitivity_matches_the_baseline(live, baseline, names, tol):
     for cat, w in want["baseline"].items():
         assert close(got["baseline"][cat]["amount"], w["amount"], tol), cat
     for ref_param, w in want["sensitivity"].items():
-        g = got["sensitivity"][rename(ref_param, baseline, names)]
+        g = got["sensitivity"][live_parameter(live, names, ref_param,
+                                              baseline)]
         assert close(g["baseline_value"], w["baseline_value"], tol)
         for side in ("minus", "plus"):
             assert set(g[side]) == set(w[side])
@@ -191,15 +209,23 @@ def test_contribution_matches_the_baseline(live, baseline, names, tol):
     (about six minutes on the ecoinvent test database)."""
     spec = baseline["contribution"]
     cats = ", ".join(f'"{c}"' for c in spec["categories"])
+    # CONTRIBUTION ranks processes by everything upstream of them, so a
+    # bridge sits in the list beside the process it passes on, with the
+    # same amount. The baseline has no bridges: ask for that many more
+    # rows and leave the bridges out before comparing.
+    top = spec["top"] + len(live.bridges)
     got = live.run(
         f'CONTRIBUTION "{names["name"]}" USING "{spec["method"]}" '
-        f'TOP {spec["top"]}\n  CATEGORIES {cats}\nEND CONTRIBUTION')
+        f'TOP {top}\n  CATEGORIES {cats}\nEND CONTRIBUTION')
     want = spec["result"]
     assert set(got["categories"]) == set(want["categories"])
     for cat, w in want["categories"].items():
         g = got["categories"][cat]
         assert close(g["total"], w["total"], tol), cat
         assert g["unit"] == w["unit"]
+        g["contributors"] = [c for c in g["contributors"]
+                             if c["process"] not in live.bridges
+                             ][:len(w["contributors"])]
         assert len(g["contributors"]) == len(w["contributors"]), cat
         for gc, wc in zip(g["contributors"], w["contributors"]):
             assert gc["process"] == rename(wc["process"], baseline, names), cat

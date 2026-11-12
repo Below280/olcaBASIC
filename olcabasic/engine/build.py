@@ -19,9 +19,14 @@ import json as json_module
 import re
 import threading
 
+# openLCA keeps the tags of an entity in one column of 255 characters,
+# joined by commas. A save that overruns it is refused whole.
+TAGS_LIMIT = 255
+
 # One logger for the whole engine, under the name it has always had.
 logger = logging.getLogger("olcabasic.engine.engine")
 
+from . import ratings_block
 from .validators import (
     validate_category as _validate_category,
     validate_param_name as _validate_param_name,
@@ -70,8 +75,10 @@ class BuildMixin:
             existing = None
             for desc in self._get_descriptors(o.Parameter):
                 if desc.name == name:
-                    existing = self.client.get(o.Parameter, desc.id)
-                    break
+                    found = self.client.get(o.Parameter, desc.id)
+                    if found is not None and self._is_global(found):
+                        existing = found
+                        break
 
             if existing:
                 previous = {"value": existing.value,
@@ -1086,7 +1093,9 @@ class BuildMixin:
 
             # Update description
             if description is not None:
-                process.description = description
+                # the data quality ratings stay with the process
+                process.description = ratings_block.carry(
+                    process.description, description)
                 changes.append("description updated")
 
             # Update category
@@ -1547,6 +1556,13 @@ class BuildMixin:
         with the same prefix and key. A value of None removes the tag.
         Tags the call does not name are left alone.
 
+        The data quality ratings (keys rating_geography, rating_technology,
+        rating_time and their _reason) are not written as tags: openLCA
+        keeps 255 characters of tags for a process, which three reasons
+        overrun. They go in a marked block at the end of the process
+        description, where openLCA shows them, and get_process_tags
+        reads them back under the same keys.
+
         documentation, if given, sets fields of openLCA's process
         documentation: valid_from, valid_until (dates, YYYY-MM-DD),
         time_description, data_collection_description,
@@ -1558,18 +1574,34 @@ class BuildMixin:
             process = self.client.get(o.Process, process_id)
             if not process:
                 return {"error": f"Process not found: {process_id}"}
+            tags = dict(tags)
+            rated = {k: tags.pop(k) for k in list(tags)
+                     if k in ratings_block.KEYS}
+            if rated:
+                process.description = ratings_block.write(
+                    process.description, rated)
             lead = f"{prefix}:" if prefix else ""
             kept = []
             for tag in process.tags or []:
                 key = tag[len(lead):].partition("=")[0] if tag.startswith(lead) else None
-                if key is not None and key in tags:
+                if key is not None and (key in tags
+                                        or key in ratings_block.KEYS):
                     continue
                 kept.append(tag)
             for key, value in tags.items():
                 if value is None:
                     continue
-                text = str(value).replace("\n", " ").strip()
+                text = str(value).replace("\n", " ").replace(",", ";").strip()
                 kept.append(f"{lead}{key}={text}")
+            length = len(",".join(kept))
+            if length > TAGS_LIMIT:
+                longest = max(kept, key=len)
+                return {"error": (
+                    f"The declarations on '{process.name}' come to {length} "
+                    f"characters, and openLCA keeps no more than "
+                    f"{TAGS_LIMIT} for a process. Nothing was saved. "
+                    f"Shorten the text after SOURCE, PROVIDER or REASON "
+                    f"(the longest is '{longest[:60]}').")}
             process.tags = kept
             if documentation:
                 doc = process.process_documentation or o.ProcessDocumentation()

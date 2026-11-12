@@ -31,11 +31,39 @@ from .validators import (
 )
 
 
+def _checked(client):
+    """The client, with put() made to fail loudly. olca-ipc logs a
+    refused save and returns None, so a program would carry on as if
+    the entity had been written. Here a refused save raises, and the
+    engine reports it as the error of the command that asked for it."""
+    put = getattr(client, "put", None)
+    if put is None or getattr(put, "_olcabasic_checked", False):
+        return client
+
+    def checked_put(entity, *args, **kwargs):
+        ref = put(entity, *args, **kwargs)
+        if ref is None:
+            kind = type(entity).__name__
+            name = getattr(entity, "name", None) or getattr(entity, "id", "")
+            raise RuntimeError(
+                f"openLCA did not save the {kind} '{name}'. Nothing was "
+                f"changed. openLCA's own log (Help, Open log file) says "
+                f"why.")
+        return ref
+
+    checked_put._olcabasic_checked = True
+    try:
+        client.put = checked_put
+    except Exception:
+        pass
+    return client
+
+
 class CoreMixin:
     """The connection, the descriptor cache, name resolution, the database"""
 
     def __init__(self, client: Client):
-        self.client = client
+        self.client = _checked(client)
         self._cache: Dict[str, Any] = {}
         self._cache_ts: Dict[str, float] = {}
         self._cache_ttl: float = 1800  # 30 minutes
@@ -360,6 +388,14 @@ class CoreMixin:
         self._ensure_unit_cache()
         return self._unit_lookup.get(unit_name)
 
+    @staticmethod
+    def _is_global(param) -> bool:
+        """openLCA lists the parameters of processes among the
+        parameter descriptors too. Only a global one can be redefined
+        without a context, edited as a global or shown as one."""
+        scope = getattr(param, "parameter_scope", None)
+        return scope is None or scope == o.ParameterScope.GLOBAL_SCOPE
+
     def _parameter_targets(self, system,
                            names=None) -> Dict[str, List[Dict]]:
         """Every redefinable copy of every parameter in a system.
@@ -395,7 +431,7 @@ class CoreMixin:
             if names is not None and desc.name not in names:
                 continue
             param = self.client.get(o.Parameter, desc.id)
-            if not param:
+            if not param or not self._is_global(param):
                 continue
             targets.setdefault(param.name, []).append({
                 "context": None,

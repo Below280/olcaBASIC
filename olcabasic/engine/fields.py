@@ -1053,7 +1053,7 @@ class FieldsMixin:
             if d.name != name:
                 continue
             param = self.client.get(o.Parameter, d.id)
-            if param is None:
+            if param is None or not self._is_global(param):
                 continue
             if made is not None and not param.is_input_parameter:
                 return {"error": f"'{name}' is calculated from a formula, "

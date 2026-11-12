@@ -433,14 +433,71 @@ def test_ratings_are_stored_on_the_process(session, client):
     build(session, client)
     bridge = next(p for p in client.store["Process"].values()
                   if p.name == "BRIDGE | Steel | kg")
-    have = ratings_of({t.split(":", 1)[1].split("=", 1)[0]:
-                       t.split("=", 1)[1] for t in bridge.tags if "=" in t})
+    have = ratings_of(session.engine.get_process_tags(bridge.id, "epd")["tags"])
     assert have["GEOGRAPHY"] == {"level": "Good",
                                  "reason": "Synthetic data, same region"}
     assert have["TIME"]["level"] == "Fair"
-    assert "epd:rating_geography=Good" in bridge.tags
-    # the comma of the reason survives openLCA's comma-separated tags
-    assert not any("," in t for t in bridge.tags)
+    # The ratings are in the description, where openLCA shows them, and
+    # not in the tags: openLCA keeps 255 characters of tags for a
+    # process and refuses a save that overruns them (found live).
+    assert "Data quality ratings (olcaBASIC):" in bridge.description
+    assert "Geography: Good. Synthetic data, same region" in bridge.description
+    assert not any("rating" in t for t in bridge.tags)
+    assert len(",".join(bridge.tags)) <= 255
+
+
+def test_long_reasons_do_not_overrun_the_tags(session, client):
+    """Three long reasons used to make openLCA refuse the save, and
+    the data declaration was lost with them."""
+    long = "A reason that runs to a good many words, as real ones do. " * 4
+    build(session, client, ratings="")
+    r = session.run(
+        'EDIT PROCESS "BRIDGE | Steel | kg"\n'
+        f'  RATING GEOGRAPHY "Good" REASON "{long}"\n'
+        f'  RATING TECHNOLOGY "Fair" REASON "{long}"\n'
+        f'  RATING TIME "Poor" REASON "{long}"\n'
+        'END EDIT')
+    assert r.ok, r.errors
+    bridge = next(p for p in client.store["Process"].values()
+                  if p.name == "BRIDGE | Steel | kg")
+    have = ratings_of(session.engine.get_process_tags(bridge.id, "epd")["tags"])
+    assert have["TIME"] == {"level": "Poor", "reason": long.strip()}
+    assert "epd:data=SECONDARY" in bridge.tags      # the declaration is kept
+
+
+def test_a_description_edit_keeps_the_ratings(session, client):
+    build(session, client)
+    bridge = next(p for p in client.store["Process"].values()
+                  if p.name == "BRIDGE | Steel | kg")
+    done = session.engine.edit_process(bridge.id,
+                                       description="A new description")
+    assert "error" not in done, done
+    bridge = client.store["Process"][bridge.id]
+    assert bridge.description.startswith("A new description")
+    have = ratings_of(session.engine.get_process_tags(bridge.id, "epd")["tags"])
+    assert have["GEOGRAPHY"]["level"] == "Good"
+
+
+def test_declarations_too_long_for_openlca_are_refused(session, client):
+    """A save openLCA would refuse is an error, not a silent loss."""
+    build(session, client)
+    words = "x" * 300
+    r = session.run('EDIT PROCESS "BRIDGE | Steel | kg"\n'
+                    f'  DATA SECONDARY SOURCE "{words}" PROVIDER "p" YEAR 2024\n'
+                    'END EDIT')
+    refused(r, "openLCA keeps no more than 255")
+
+
+def test_a_save_openlca_refuses_is_an_error(client):
+    """olca-ipc returns None for a refused save; the engine raises."""
+    import olca_schema as o
+    import pytest as _pytest
+    from olcabasic.engine import Engine
+    engine = Engine(client)
+    p = o.Process(id="refused-save", name="Refused",
+                  tags=["t=" + "x" * 300])
+    with _pytest.raises(RuntimeError, match="did not save"):
+        engine.client.put(p)
 
 
 def test_reasons_round_trip():
@@ -459,7 +516,7 @@ END BRIDGE''')
     assert r.ok, r.errors
     bridge = next(p for p in client.store["Process"].values()
                   if p.name == "BRIDGE | Steel | kg")
-    assert "epd:rating_geography=Very good" in bridge.tags
+    assert "Geography: Very good. x" in bridge.description
 
 
 def test_a_level_that_is_not_on_the_scale_is_refused(session, client):
@@ -506,7 +563,7 @@ def test_edit_process_adds_a_rating(session, client):
     assert r.ok, r.errors
     bridge = next(p for p in client.store["Process"].values()
                   if p.name == "BRIDGE | Lorry | t*km")
-    assert "epd:rating_time=Poor" in bridge.tags
+    assert "Time: Poor. Fourteen years old" in bridge.description
 
 
 def test_data_quality_refuses_while_a_dataset_in_the_coverage_is_unrated(
@@ -1089,7 +1146,7 @@ def test_export_model(session, client, tmp_path):
     assert "BRIDGE | Steel | kg" in names and "A3: Manufacturing" in names
     kiln = names["A3 | Kilning and planing"]
     assert kiln["category"] == f"{FOLDER}/A3"
-    assert any(t.startswith("epd:rating_time=") for t in kiln["tags"])
+    assert "Time: " in kiln["description"]         # the ratings
     ex = next(x for x in kiln["exchanges"]
               if x["flow_name"] and "Electricity" in x["flow_name"])
     assert set(ex) >= {"flow_name", "flow_id", "is_input", "amount",

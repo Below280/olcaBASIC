@@ -480,6 +480,23 @@ def test_sensitivity_on_unknown_parameter(run, interp):
     assert "No matching input parameters found" in str(e.value)
 
 
+def test_sensitivity_does_not_take_another_process_parameter_for_a_global(
+        run, interp, client):
+    """openLCA lists the parameters of processes among the parameter
+    descriptors. One of another process, not in the system, was taken
+    for a global, 'varied' and changed nothing (found live)."""
+    import olca_schema as o
+    stray = o.Parameter(id="stray-parameter", name="p09_Other__thing_kg",
+                        value=3.0, is_input_parameter=True,
+                        parameter_scope=o.ParameterScope.PROCESS_SCOPE)
+    client.store["Parameter"][stray.id] = stray
+    run(WIDGET)
+    with pytest.raises(BasicError) as e:
+        interp.run_program('SENSITIVITY ON "Widget" USING "IPCC 2021" BY 10\n'
+                           '  VARY p09_Other__thing_kg\nEND SENSITIVITY')
+    assert "No matching input parameters found" in str(e.value)
+
+
 def test_montecarlo_statistics_shape(run, interp):
     run(WIDGET + 'MONTECARLO "Widget" USING "IPCC 2021" RUNS 5')
     res = interp.runtime.last_results
