@@ -161,6 +161,7 @@ class ExchangeDef:
     provider: Expr = None      # PROVIDER "name-or-uuid"
     formula: Expr = None       # explicit FORMULA "expr"
     location: Expr = None      # LOCATION "code" for disambiguation
+    flow_folder: Expr = None   # FOLDER "path": USE FLOW looks only there
     line: int = 0              # source line of this exchange
 
 

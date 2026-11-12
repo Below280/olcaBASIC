@@ -142,6 +142,57 @@ class ResolveMixin:
             return cls._flow_result(partial[0])
         return None
 
+    @staticmethod
+    def _under_folder(f, folder: str) -> bool:
+        base = (folder or "").strip("/").lower()
+        c = (getattr(f, "category", "") or "").strip("/").lower()
+        return c == base or c.startswith(base + "/")
+
+    def flow_candidates(self, name: str, folder: str = "") -> list:
+        """Every flow called exactly this (optionally only in one folder
+        and the folders below it), as [{"id", "name", "category",
+        "flow_type"}] sorted by category. Used to list the choices when
+        a flow name is ambiguous."""
+        out = []
+        for f in self.get_descriptors(o.Flow):
+            if f.name != name:
+                continue
+            if folder and not self._under_folder(f, folder):
+                continue
+            ft = getattr(f, "flow_type", None)
+            out.append({"id": f.id, "name": f.name,
+                        "category": getattr(f, "category", "") or "",
+                        "flow_type": getattr(ft, "value", ft) or ""})
+        return sorted(out, key=lambda c: (c["category"], c["id"]))
+
+    def flow_by_id(self, uid: str) -> Optional[Dict]:
+        """The flow with this UUID, as a find_flow result, or None."""
+        for f in self.get_descriptors(o.Flow):
+            if f.id == uid:
+                return self._flow_result(f)
+        return None
+
+    def find_flow_in_folder(self, name: str, folder: str) -> Dict:
+        """USE FLOW "name" FOLDER "path": only flows in that folder (and
+        below) count. Returns a find_flow result; {"ambiguous": n} with
+        no flow_id when several flows there share the exact name; or
+        {"error": ...} when nothing there matches."""
+        in_folder = [f for f in self.get_descriptors(o.Flow)
+                     if self._under_folder(f, folder)]
+        exact = [f for f in in_folder if f.name == name]
+        if len(exact) == 1:
+            return self._flow_result(exact[0])
+        if len(exact) > 1:
+            return {"ambiguous": len(exact)}
+        lower = name.lower()
+        partial = [f for f in in_folder if lower in f.name.lower()]
+        if len(partial) == 1:
+            return self._flow_result(partial[0])
+        if partial:
+            return {"error": (f"'{name}' is part of {len(partial)} flow "
+                              f"names in '{folder}'; give the full name")}
+        return {"error": f"No flow called '{name}' in '{folder}'"}
+
     def find_flow(self, name: str, unit: str = "",
                   category="", strict: bool = False) -> Optional[Dict]:
         """Find an existing flow by name. Returns dict with flow_id or None.

@@ -31,6 +31,11 @@ from .formatting import (
 )
 
 
+# A flow named by its UUID in place of its name (USE FLOW "uuid").
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}$")
+
 # Category prefixes used to find elementary flows. Matched
 # case-insensitively as a prefix, so "Elementary flows/resource"
 # covers in ground, in water, in air, land and biotic.
@@ -1213,6 +1218,15 @@ class Interpreter(EnforcementMixin):
                 # insists on one (it's how you get a provider).
                 location_filter = (self._eval_str(ex.location)
                                    if ex.location else "")
+                flow_folder = (self._eval_str(ex.flow_folder)
+                               if ex.flow_folder else "")
+                if flow_folder and ex.use_type != "FLOW":
+                    raise BasicError(
+                        "FOLDER picks between flows, so it goes with "
+                        "USE FLOW", line,
+                        hint=("Write INPUT USE FLOW \"name\", amount, unit "
+                              "FOLDER \"path\". To pick between processes "
+                              "use LOCATION or PROVIDER."))
                 if ex.use_type == "FLOW":
                     if location_filter:
                         raise BasicError(
@@ -1243,9 +1257,34 @@ class Interpreter(EnforcementMixin):
                         self._note_provider(provider_id, folder, line,
                                             check_only)
                 else:
-                    # Try to find a flow by name directly
-                    flow_match = self.bridge.find_flow(
-                        flow_name, unit, category)
+                    # Try to find a flow by name directly: a UUID,
+                    # then FOLDER if given, then by name.
+                    flow_match = (self.bridge.flow_by_id(flow_name)
+                                  if _UUID_RE.match(flow_name) else None)
+                    if flow_match:
+                        pass
+                    elif flow_folder:
+                        flow_match = self.bridge.find_flow_in_folder(
+                            flow_name, flow_folder)
+                        if "error" in flow_match:
+                            raise BasicError(
+                                flow_match["error"], line,
+                                hint=(f"FIND FLOW \"{flow_name}\" shows "
+                                      f"which folders it is in."))
+                    else:
+                        flow_match = self.bridge.find_flow(
+                            flow_name, unit, category)
+                    if flow_match and flow_match.get("ambiguous"):
+                        # Never pick between same-named flows
+                        scope = flow_folder
+                        cands = self.bridge.flow_candidates(
+                            flow_name, flow_folder)
+                        if not flow_folder and category:
+                            local = self.bridge.flow_candidates(
+                                flow_name, category)
+                            if len(local) > 1:
+                                cands, scope = local, category
+                        self._ambiguous_flow(flow_name, scope, line, cands)
                     if flow_match and location_filter:
                         raise BasicError(
                             f"LOCATION was given, but '{flow_name}' "
@@ -1254,10 +1293,6 @@ class Interpreter(EnforcementMixin):
                             line)
                     if flow_match:
                         flow_id = flow_match["flow_id"]
-                        if flow_match.get("ambiguous"):
-                            self.out.write(f"  WARNING: '{flow_name}' matched "
-                                  f"{flow_match['ambiguous']} flows, "
-                                  f"using first match.")
                     else:
                         # Nothing found
                         if ex.direction == "INPUT":

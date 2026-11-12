@@ -318,7 +318,7 @@ COMMANDS: List[Command] = [
   [LET name = value]
   OUTPUT MAKE FLOW "product", amount, unit, PRODUCT
   INPUT USE PROCESS "process name", amount, unit [LOCATION "code"] [PROVIDER "uuid"]
-  INPUT USE FLOW "flow name", amount, unit
+  INPUT USE FLOW "flow name or uuid", amount, unit [FOLDER "path"]
   INPUT MAKE FLOW "new flow", amount, unit
   OUTPUT "elementary flow", amount, unit TO AIR|WATER|SOIL
   INPUT "resource", amount, unit FROM NATURE
@@ -337,6 +337,9 @@ END PROCESS''',
               "USE PROCESS finds an existing process and links it as the "
               "provider; USE FLOW links a flow with no provider; MAKE FLOW "
               "creates the flow, or reuses one with the same name.\n"
+              "A name that matches several processes or flows is an error "
+              "that lists them: pick a process with LOCATION or PROVIDER, "
+              "and a flow with FOLDER or its UUID.\n"
               "An amount written as a number becomes a process parameter. "
               "An amount written with a variable stays a formula, and the "
               "variable becomes a global parameter.\n"

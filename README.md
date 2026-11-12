@@ -125,11 +125,12 @@ can't quietly drop an input from your model.
 `INPUT NEW` and `OUTPUT NEW` from earlier versions still work but are
 deprecated, and will be removed in a future version.
 
-### Choosing between processes with the same name
+### Choosing between processes or flows with the same name
 
 Some databases have several processes with the same name, one per
-location. olcaBASIC warns when a name matches more than one, and
-`LOCATION` picks the one you want:
+location. A name that matches more than one stops the program with an
+error listing each one's location and UUID, and `LOCATION` picks the
+one you want:
 
 ```basic
 INPUT USE PROCESS "market for cement, Portland", 300, kg LOCATION "RoW"
@@ -138,6 +139,17 @@ INPUT USE PROCESS "market for cement, Portland", 300, kg LOCATION "RoW"
 If the code doesn't match, the error lists the locations that exist.
 `PROVIDER` takes a process UUID for when a name isn't enough;
 `FIND PROCESS` shows the UUIDs.
+
+Flows work the same way. A `USE FLOW` name that several flows share is
+an error listing each one's folder and UUID. `FOLDER` says which folder
+to look in, or give the flow's UUID in place of its name:
+
+```basic
+INPUT USE FLOW "Custom blend", 5, kg FOLDER "00: Supplier B"
+```
+
+A flow in your own flow folder (`SET FLOW FOLDER`) is found before one
+elsewhere with the same name.
 
 ### Elementary flows
 
@@ -517,7 +529,7 @@ MAKE PROCESS "name" [LOCATION "code"]
   [LET name = value]
   OUTPUT MAKE FLOW "product", amount, unit, PRODUCT
   INPUT USE PROCESS "process name", amount, unit [LOCATION "code"] [PROVIDER "uuid"]
-  INPUT USE FLOW "flow name", amount, unit
+  INPUT USE FLOW "flow name or uuid", amount, unit [FOLDER "path"]
   INPUT MAKE FLOW "new flow", amount, unit
   OUTPUT "elementary flow", amount, unit TO AIR|WATER|SOIL
   INPUT "resource", amount, unit FROM NATURE
@@ -901,8 +913,6 @@ This is version 0.4. The known rough edges:
 - Functions in exchange amounts (`SQR`, `MIN` and so on) are passed to
   openLCA as written, and openLCA's formula functions have their own
   names.
-- A flow name that several flows share, used with `USE FLOW`, still
-  warns and takes the first.
 - The EPD workflow has been tested against a synthetic method, and its
   storage and electricity switch against a live ecoinvent database. It
   has not yet run end to end against the real `EN15804+A2 (EF 3.1)`

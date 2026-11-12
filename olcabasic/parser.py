@@ -1035,6 +1035,7 @@ class Parser:
         provider = None
         formula = None
         location = None
+        flow_folder = None
         pedigree = None
         comment = None
 
@@ -1073,6 +1074,9 @@ class Parser:
             elif kw == "LOCATION":
                 self.advance()
                 location = self.parse_string_or_expr()
+            elif kw == "FOLDER":
+                self.advance()
+                flow_folder = self.parse_string_or_expr()
             elif kw == "PEDIGREE":
                 self.advance()
                 pedigree = self.parse_pedigree()
@@ -1092,7 +1096,8 @@ class Parser:
             is_waste=is_waste, use_type=use_type, legacy_new=legacy_new,
             pedigree=pedigree, comment=comment,
             direction_compartment=compartment, provider=provider,
-            formula=formula, location=location, line=ex_line)
+            formula=formula, location=location, flow_folder=flow_folder,
+            line=ex_line)
 
     def parse_system(self, line: int) -> SystemStmt:
         self.advance()  # consume SYSTEM

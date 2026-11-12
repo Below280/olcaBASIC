@@ -95,6 +95,25 @@ class EnforcementMixin:
             f"'{name}' matches {len(candidates)} processes{where}:\n"
             f"{listing}", line, hint=fix)
 
+    def _ambiguous_flow(self, name: str, folder: str, line: int,
+                        candidates: List[Dict]):
+        """A flow name that could mean several flows is an error, the
+        same as for processes."""
+        rows = [f"    {c['category'] or '(no folder)':<40} {c['id']}"
+                for c in candidates[:MAX_CANDIDATES]]
+        more = len(candidates) - MAX_CANDIDATES
+        if more > 0:
+            rows.append(f"    ... and {more} more (FIND FLOW \"{name}\" "
+                        f"lists them all)")
+        where = f" in '{folder}'" if folder else ""
+        listing = "\n".join(rows)
+        raise BasicError(
+            f"'{name}' matches {len(candidates)} flows{where}:\n{listing}",
+            line,
+            hint=("Add FOLDER \"path\" to the line to say which folder the "
+                  "flow is in, or give the flow's UUID in place of its "
+                  "name."))
+
     # ── validation before calculation ────────────────────────
 
     def _record_validation(self, result: Dict):
