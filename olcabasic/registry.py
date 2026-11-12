@@ -2301,8 +2301,21 @@ line numbers. Comments start with REM or '.
 - DELETE needs CONFIRM DELETE ON earlier in the program.
 - Variables persist between runs in the same session. A top-level variable
   used as an amount becomes a global parameter in openLCA.
-- MAKE is idempotent: running a build twice does not duplicate anything.
+- Every background process goes through a bridge: BRIDGE "short name", unit
+  with PROVIDER "process" LOCATION "code", then INPUT USE PROCESS
+  "BRIDGE | short name | unit". Naming a background process straight in a
+  process is an error.
+- MAKE is idempotent: an identical block run again changes nothing. A MAKE
+  PROCESS block that differs from the stored process is an error listing
+  the differences: use EDIT PROCESS, or DELETE PROCESS and run it again.
+- After EDIT PROCESS, LINK, MOVE or PARAMETERISE, the product systems that
+  hold the process are out of date: DELETE SYSTEM, SYSTEM, VALIDATE.
 - A product system that fails VALIDATE cannot be calculated until it passes.
+- OUTPUT and INPUT never create a flow by themselves: write MAKE FLOW. A new
+  emission needs a characterisation factor in the method, or IGNORE FACTORS.
+- MONTECARLO needs UNCERTAINTY somewhere; ALLOCATE PHYSICAL|ECONOMIC needs
+  ALLOCATION factors on every process with several products.
+- RESULT reads more from the result CALCULATE left open (HELP RESULT).
 - Defaults that were applied are stated in the output (NOTE: default used).
 - SAVE PROGRAM "file.baslca" writes out what has run, as the record of the work.
 """

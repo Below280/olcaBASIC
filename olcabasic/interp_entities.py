@@ -137,12 +137,16 @@ class EntitiesInterpMixin:
         not make: refused without CONFIRM, and with it a person has to
         answer."""
         if not confirmed:
+            # Through a Session or the MCP nobody can answer the
+            # question CONFIRM leads to, so the hint does not send the
+            # program there: it says where the command can be run.
+            ahead = f"{FOREIGN_BACKUP} Then add CONFIRM: {command} CONFIRM."
+            if not getattr(self.out, "interactive", False):
+                ahead = f"{FOREIGN_NEEDS_A_PERSON} In the terminal: {ahead}"
             raise BasicError(
                 f"'{name}' was not made by olcaBASIC, and {command} would "
                 f"{what} {factors} characterisation "
-                f"factor{'s' if factors != 1 else ''}.", line,
-                hint=f"{FOREIGN_BACKUP} Then add CONFIRM: {command} "
-                     f"CONFIRM.")
+                f"factor{'s' if factors != 1 else ''}.", line, hint=ahead)
         self.out.write(
             f"  '{name}' was not made by olcaBASIC. This will {what} "
             f"{factors} characterisation factor{'s' if factors != 1 else ''}"
