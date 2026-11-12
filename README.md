@@ -925,6 +925,7 @@ EXTRACT [FOLDER] "folder"
 | `EPD CALCULATE` | olcaBASIC | Calculate every module with the EPD method |
 | `EPD DATA QUALITY` | olcaBASIC | Do the programme's data quality arithmetic and apply its limits |
 | `EPD REPORT` | olcaBASIC | Write the results table and the declarations to a CSV file |
+| `EPD SAVE` | olcaBASIC | Write the EPD into openLCA as its own EPD entity, with a stored result per module |
 | `EPD STATUS` / `EPD CLOSE` | olcaBASIC | Show how far the active EPD has got, or end EPD mode |
 | `DATA PRIMARY` / `DATA SECONDARY` / `DATA PROXY` / `CONTROL` | olcaBASIC | Declare where the data of a process or bridge comes from |
 | `ELECTRICITY` | olcaBASIC | Declare how the electricity of a bridge is modelled |
@@ -960,6 +961,11 @@ EPD CHECK [SKIP "reason"]
 EPD CALCULATE
 EPD DATA QUALITY
 EPD REPORT "file.csv" [LOCATION BASED]
+EPD SAVE [REPLACE]
+    [MANUFACTURER "actor"] [VERIFIER "actor"] [OPERATOR "actor"]
+    [GENERATOR "actor"] [PCR "source"] [REGISTRATION "number"] [URN "urn"]
+    [VALID FROM "DD/MM/YYYY"] [VALID UNTIL "DD/MM/YYYY"]
+    [DESCRIPTION "text"]
 EPD STATUS | EPD CLOSE
 DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025
 DATA SECONDARY SOURCE "Database" PROVIDER "ecoinvent 3.11" YEAR 2024

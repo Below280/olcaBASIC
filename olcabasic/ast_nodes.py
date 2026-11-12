@@ -675,6 +675,8 @@ class EpdCommandStmt(Statement):
     argument: Expr = None              # report file, or the SKIP reason
     skip: bool = False                 # EPD CHECK SKIP "reason"
     location_based: bool = False       # EPD REPORT ... LOCATION BASED
+    replace: bool = False              # EPD SAVE REPLACE
+    options: Dict = field(default_factory=dict)   # EPD SAVE: who and when
 
 
 @dataclass

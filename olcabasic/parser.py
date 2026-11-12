@@ -2558,7 +2558,21 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
 
     DATA_CATEGORIES = ("PRIMARY", "SECONDARY", "PROXY")
     EPD_COMMANDS = ("SYSTEMS", "CHECK", "CALCULATE", "REPORT", "DATA",
-                    "STATUS", "CLOSE")
+                    "STATUS", "CLOSE", "SAVE")
+
+    # EPD SAVE: word(s) -> (key, kind)
+    EPD_SAVE_OPTIONS = {
+        ("MANUFACTURER",): ("manufacturer", "actor"),
+        ("VERIFIER",): ("verifier", "actor"),
+        ("OPERATOR",): ("program_operator", "actor"),
+        ("GENERATOR",): ("data_generator", "actor"),
+        ("PCR",): ("pcr", "source"),
+        ("REGISTRATION",): ("registration_id", "text"),
+        ("URN",): ("urn", "text"),
+        ("VALID", "FROM"): ("valid_from", "date"),
+        ("VALID", "UNTIL"): ("valid_until", "date"),
+        ("DESCRIPTION",): ("description", "text"),
+    }
 
     def _percent(self, what: str) -> float:
         """A number followed by an optional % sign."""
@@ -2642,7 +2656,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                 hint='EPD "Product name" starts a definition (HELP EPD). '
                      'The commands are EPD SYSTEMS, EPD CHECK, EPD '
                      'CALCULATE, EPD DATA QUALITY, EPD REPORT "file.csv", '
-                     'EPD STATUS and EPD CLOSE.')
+                     'EPD SAVE, EPD STATUS and EPD CLOSE.')
         stmt = EpdStmt(line=line, name=self.parse_string_or_expr())
         self.expect_newline()
         self.skip_newlines()
@@ -2816,6 +2830,35 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin):
                 if not self.match_word("BASED"):
                     raise ParseError("Expected LOCATION BASED.", line)
                 stmt.location_based = True
+        elif command == "SAVE":
+            example = ('EPD SAVE [REPLACE] [MANUFACTURER "actor"] [VERIFIER '
+                       '"actor"] [OPERATOR "actor"] [PCR "source"] [VALID '
+                       'FROM "DD/MM/YYYY"] [VALID UNTIL "DD/MM/YYYY"]')
+            while self.peek().type in (TokenType.KEYWORD,
+                                       TokenType.IDENTIFIER):
+                if self.match_word("REPLACE"):
+                    stmt.replace = True
+                    continue
+                first = self.peek().upper()
+                second = self.peek_at(1).upper()
+                if (first, second) in self.EPD_SAVE_OPTIONS:
+                    key, _kind = self.EPD_SAVE_OPTIONS[(first, second)]
+                    self.advance()
+                    self.advance()
+                elif (first,) in self.EPD_SAVE_OPTIONS:
+                    key, _kind = self.EPD_SAVE_OPTIONS[(first,)]
+                    self.advance()
+                else:
+                    raise ParseError(
+                        f"EPD SAVE doesn't take '{self.peek().value}'.",
+                        line, hint=example)
+                if key in stmt.options:
+                    raise ParseError(f"{first} is given twice.", line)
+                if self.peek().type in (TokenType.NEWLINE, TokenType.EOF,
+                                        TokenType.COMMENT):
+                    raise ParseError(f"{first} needs a value.", line,
+                                     hint=example)
+                stmt.options[key] = self.parse_string_or_expr()
         self.expect_newline()
         return stmt
 

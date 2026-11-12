@@ -1518,6 +1518,36 @@ END MODULE''',
               "bridge on its LOCATION BASED PROVIDER.",
         statements=("EpdCommandStmt",)),
     Command(
+        name="EPD SAVE", topic="EPD",
+        usage='EPD SAVE [REPLACE] [MANUFACTURER "actor"] [VERIFIER "actor"] ...',
+        summary="Write the EPD into openLCA as its own EPD entity, with a stored result per module",
+        syntax='''EPD SAVE [REPLACE]
+    [MANUFACTURER "actor"] [VERIFIER "actor"] [OPERATOR "actor"]
+    [GENERATOR "actor"] [PCR "source"] [REGISTRATION "number"] [URN "urn"]
+    [VALID FROM "DD/MM/YYYY"] [VALID UNTIL "DD/MM/YYYY"]
+    [DESCRIPTION "text"]''',
+        example='EPD SAVE\nEPD SAVE REPLACE VERIFIER "Example Verifier" '
+                'VALID FROM "12/11/2026" VALID UNTIL "11/11/2031"',
+        notes="Refused until EPD REPORT has passed: what is stored is "
+              "what the report declares. Each declared module is "
+              "calculated once more and stored as an openLCA result "
+              "called \"EPD name | module\" in the Results folder of the "
+              "EPD; if a number differs from the report, the model has "
+              "changed and EPD SAVE stops. Then the EPD entity is "
+              "written in the EPD's folder: the product flow (the output "
+              "of A3), the declared unit, and one module entry per "
+              "declared module pointing at its stored result. The EPD "
+              "can then be opened, exported and sent on from openLCA. "
+              "The CSV report stays as it is.\n"
+              "The actors and the PCR source must exist (MAKE ACTOR, MAKE "
+              "SOURCE). An EPD of the same name is not written over "
+              "without REPLACE. SHOW EPD, FIND EPD, MOVE EPD and DELETE "
+              "EPD work on stored EPDs.\n"
+              "EPD SYSTEMS also sets one analysis group per module on "
+              "each module's product system, named after the module, so "
+              "openLCA and RESULT ... BY GROUP show results by module.",
+        statements=("EpdCommandStmt",)),
+    Command(
         name="EPD STATUS", aliases=("EPD CLOSE",), topic="EPD",
         usage="EPD STATUS | EPD CLOSE",
         summary="Show how far the active EPD has got, or end EPD mode",
@@ -1815,6 +1845,9 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "LINK": _READ + ("data/put",),
     "MOVE": _READ + ("data/put",),
     "DELETE": _READ + ("data/delete", "data/get/usage", "data/get/all"),
+    "EPD SAVE": _READ + ("data/put", "result/calculate", "result/state",
+                         "result/total-impacts", "result/total-flows",
+                         "result/demand", "result/dispose"),
     "FIND <TYPE>": ("data/get/descriptors",),
     "SHOW <TYPE>": _READ + ("data/get/usage", "data/get/all"),
     "MAKE ACTOR": _READ + ("data/put",),

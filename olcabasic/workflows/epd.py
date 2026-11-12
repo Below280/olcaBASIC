@@ -382,6 +382,7 @@ class EpdWorkflow:
         self.results: Dict[str, Dict[str, float]] = {}
         self.units = {c["name"]: c["unit"] for c in categories}
         self.dq: Optional[Dict] = None
+        self.reported = False           # EPD REPORT has passed
         self.current: Optional[Dict] = None      # process being built
         self._notes: List[str] = []
         self.gwp_indicator = self._find_gwp(definition["gwp_indicator"])
@@ -443,6 +444,7 @@ class EpdWorkflow:
         self.check_reason = ""
         self.results = {}
         self.dq = None
+        self.reported = False
 
     # ── EPD ... END EPD ──────────────────────────────────────
 
@@ -939,9 +941,25 @@ class EpdWorkflow:
                 self.i._forget_validation(result.get("system_id", ""))
             for w in result.get("warnings") or []:
                 self.out.write(f"  WARNING: {w}")
+            self._group_module(code, line)
             made.append(name)
         self._reset_progress()
         self.out.write(f"  {len(made)} product systems ready. Next: EPD CHECK")
+
+    def _group_module(self, code: str, line: int):
+        """One analysis group per module on the module's system, named
+        after the module and holding the module's own processes, so
+        openLCA shows results by module (and RESULT ... BY GROUP reads
+        them). What the module's processes buy in is counted with
+        them."""
+        system = self.modules[code]["system"]
+        own = [p["id"] for p in self.bridge.processes_in_folder(
+            self.module_folder(code), deep=True)]
+        done = self.bridge.set_analysis_group(system["id"], code, own)
+        if "error" in done:
+            raise BasicError(
+                f"Module {code}: could not set the analysis group on "
+                f"'{system['name']}': {done['error']}", line)
 
     # ── EPD CHECK ────────────────────────────────────────────
 
@@ -1130,6 +1148,7 @@ class EpdWorkflow:
             results[code] = got
         self.results = results
         self.dq = None
+        self.reported = False
         self.out.write(self._table_text(results))
         self.out.write("  Module D is shown on its own: it is never part of "
                        "a total.")
@@ -1656,6 +1675,7 @@ class EpdWorkflow:
                 csv.writer(fh).writerows(rows)
         except OSError as e:
             raise BasicError(f"Could not write '{filename}': {e}", line)
+        self.reported = True
         self.out.write(f"  EPD report saved to {filename}")
         self.out.write(f"  {len(self.categories)} indicators, modules "
                        f"{', '.join(self._columns())}.")
@@ -1665,6 +1685,105 @@ class EpdWorkflow:
             "A1-A3": self._stage_total(self.results),
             "electricity": electricity,
             "location_based": second})
+
+    # ── EPD SAVE ─────────────────────────────────────────────
+
+    RESULTS_FOLDER = "Results"
+
+    def save(self, line: int, replace: bool = False,
+             options: Optional[Dict] = None):
+        """Write the EPD into openLCA: one stored Result per declared
+        module and the Epd entity that points at them."""
+        if not self.reported:
+            why = ("EPD REPORT has not been run" if not self.results
+                   else "EPD REPORT has not passed since the results were "
+                        "last calculated")
+            raise BasicError(
+                f"EPD SAVE refused: {why}.", line,
+                hint='Run EPD REPORT "file.csv" first. EPD SAVE stores '
+                     'what the report declares, so the report has to '
+                     'pass.')
+        d = self.d
+        systems = self._require_systems(line, "EPD SAVE")
+        found = self.bridge.resolve_one("EPD", d["name"])
+        if "id" in found and not replace:
+            raise BasicError(
+                f"An EPD called '{d['name']}' is in the database already.",
+                line, hint="EPD SAVE REPLACE writes over it and over its "
+                           "stored results.")
+        if "id" not in found and not found.get("not_found"):
+            raise BasicError(found["error"], line,
+                             hint=found.get("hint", ""))
+        folder = f"{self.folder}/{self.RESULTS_FOLDER}"
+        modules = []
+        for code, system in systems.items():
+            self.i._require_valid(system["name"], line, "EPD SAVE")
+            self.out.write(f"  Storing the result of {code}: "
+                           f"{system['name']}...")
+            opened = self.bridge.open_result(system["name"], d["method"],
+                                             temporary=True)
+            if "error" in opened:
+                raise BasicError(f"Module {code}: {opened['error']}", line)
+            try:
+                got = {i["category"]: i["amount"]
+                       for i in opened["impacts"]}
+                for cat, want in self.results[code].items():
+                    have = got.get(cat)
+                    scale = max(abs(want), abs(have or 0.0), 1e-300)
+                    if have is None or abs(have - want) / scale > 1e-9:
+                        raise BasicError(
+                            f"Module {code}: '{cat}' is now "
+                            f"{_fmt(have or 0.0)}, but EPD CALCULATE and "
+                            f"the report gave {_fmt(want)}. The model has "
+                            f"changed since.", line,
+                            hint="Run EPD CHECK, EPD CALCULATE and EPD "
+                                 "REPORT again, then EPD SAVE.")
+                name = f"{d['name']} | {code}"
+                saved = self.bridge.save_result(
+                    opened["handle"], name, folder,
+                    description=f"Module {code} of the EPD '{d['name']}', "
+                                f"per {d['unit_amount']:g} {d['unit']}. "
+                                f"Stored by olcaBASIC EPD SAVE on "
+                                f"{self.today().strftime('%d/%m/%Y')}.",
+                    replace=True)
+                if "error" in saved:
+                    raise BasicError(f"Module {code}: {saved['error']}",
+                                     line)
+            finally:
+                self.bridge.close_result(opened["handle"])
+            modules.append({"name": code, "result_id": saved["id"],
+                            "result": name})
+        product_module = next((c for c in ("A3", "A1") if c in systems),
+                              next(iter(systems)))
+        product = next(m for m in modules if m["name"] == product_module)
+        fields = dict(options or {})
+        if "description" not in fields:
+            fields["description"] = (
+                f"{d['type']}. {d['unit_kind'].capitalize()} unit: "
+                f"{d['unit_amount']:g} {d['unit']}. Method: {d['method']}. "
+                f"Modules: {', '.join(d['modules'])}. "
+                + (f"Programme: {self.profile.title} (GPI {d['gpi']}). "
+                   if self.profile is not None else "")
+                + (f"PCR: {d['pcr']} {d['pcr_version']}. ".replace(" .", ".")
+                   if d["pcr"] else "")
+                + f"Written by olcaBASIC EPD SAVE on "
+                  f"{self.today().strftime('%d/%m/%Y')}.")
+        result = self.bridge.save_epd(
+            d["name"], self.folder, modules, product["result_id"],
+            d["unit_amount"], d["unit"], fields, replace=replace)
+        if "error" in result:
+            raise BasicError(result["error"], line,
+                             hint=result.get("hint") or "")
+        self.i._emit("epd_save", dict(result, results=modules,
+                                      folder=self.folder))
+        verb = "replaced" if result.get("replaced") else "saved"
+        self.out.write(
+            f"  EPD {verb} in openLCA: {d['name']} ({len(modules)} modules, "
+            f"product flow '{result['product']}', "
+            f"{d['unit_amount']:g} {d['unit']})")
+        self.out.write(f"  Stored results are in {folder}. SHOW EPD "
+                       f"\"{d['name']}\" shows it.")
+        self.bridge.refresh_caches()
 
     def _net_flows(self) -> List[Dict]:
         state = self.modules.get("D", {})
@@ -1705,5 +1824,6 @@ class EpdWorkflow:
             steps.append(("EPD DATA QUALITY",
                           "not run" if self.dq is None else
                           ("passed" if self.dq["passed"] else "failed")))
+        steps.append(("EPD REPORT", "passed" if self.reported else "not run"))
         for label, state in steps:
             out.write(f"  {label}: {state}")

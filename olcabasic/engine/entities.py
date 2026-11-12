@@ -22,7 +22,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import olca_schema as o
 from olca_ipc import Client
 
-from .fields import _Refused, make_uncertainty, uncertainty_dict
+from .fields import (_Refused, make_uncertainty, parse_date,
+                     uncertainty_dict)
 from .validators import validate_category as _validate_category
 
 #: The tag olcaBASIC puts on impact methods and categories it makes, so
@@ -1633,6 +1634,122 @@ class EntitiesMixin:
                     "method": r.method.name if r.method else "",
                     "impact_results": len(entity.impact_results or []),
                     "flow_results": len(flows)}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    # ── EPDs ─────────────────────────────────────────────────
+
+    def set_analysis_group(self, system_id: str, name: str,
+                           process_ids: List[str]) -> Dict:
+        """Put the processes of a product system that are in
+        process_ids into one analysis group (replacing the group of
+        that name). Processes that are not in the system are left out.
+        Nothing is written when the group is already as asked."""
+        try:
+            system = self.client.get(o.ProductSystem, system_id)
+            if system is None:
+                return {"error": f"Product system not found: {system_id}"}
+            wanted = set(process_ids)
+            refs = [o.Ref(id=d.id, name=d.name, ref_type=o.RefType.Process)
+                    for d in self._system_processes(system)
+                    if d.id in wanted]
+            groups = list(system.analysis_groups or [])
+            old = next((g for g in groups if g.name == name), None)
+            if old is not None and {r.id for r in old.processes or []} == {
+                    r.id for r in refs}:
+                return {"system_id": system_id, "group": name,
+                        "processes": len(refs), "changed": False}
+            taken = {r.id for g in groups if g.name != name
+                     for r in g.processes or []}
+            refs = [r for r in refs if r.id not in taken]
+            groups = [g for g in groups if g.name != name]
+            if refs:
+                groups.append(o.AnalysisGroup(name=name, processes=refs))
+            system.analysis_groups = groups
+            self.client.put(system)
+            self._cache.pop("ProductSystem", None)
+            return {"system_id": system_id, "group": name,
+                    "processes": len(refs), "changed": True}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def save_epd(self, name: str, folder: Optional[str],
+                 modules: List[Dict], product_result: str,
+                 amount: float, unit: str,
+                 fields: Optional[Dict[str, Any]] = None,
+                 replace: bool = False) -> Dict:
+        """
+        Write an openLCA Epd entity.
+
+        modules: [{"name", "result_id"}], one per declared module, each
+        pointing at a stored Result. product_result: the id of the
+        stored Result whose reference flow is the declared product.
+        amount and unit: the declared (or functional) unit. fields:
+        "manufacturer", "verifier", "program_operator", "data_generator"
+        (actors), "pcr" (a source), "registration_id", "urn",
+        "valid_from", "valid_until" (dates), "description".
+
+        An EPD of that name is replaced only with replace=True.
+        """
+        fields = dict(fields or {})
+        try:
+            if folder:
+                err = _validate_category(folder)
+                if err:
+                    return {"error": err}
+            existing = self._existing(o.Epd, name, None)
+            if existing is not None and not replace:
+                return {"error": f"An EPD called '{name}' is in the "
+                                 f"database already.", "exists": True,
+                        "hint": "EPD SAVE REPLACE writes over it."}
+            result = self.client.get(o.Result, product_result)
+            ref = next((f for f in (result.flow_results or [])
+                        if f.is_ref_flow), None) if result else None
+            if ref is None or ref.flow is None:
+                return {"error": "The stored result of the product has no "
+                                 "reference flow."}
+            fp_ref, unit_ref, err = self._exchange_unit(ref.flow.id, unit)
+            if err:
+                return {"error": f"The declared unit '{unit}' does not fit "
+                                 f"the product flow '{ref.flow.name}': "
+                                 f"{err}."}
+            epd = o.Epd(
+                id=existing.id if existing is not None else str(uuid.uuid4()),
+                name=name, category=folder or None, tags=[OWN_TAG],
+                product=o.EpdProduct(flow=ref.flow, flow_property=fp_ref,
+                                     unit=unit_ref, amount=float(amount)),
+                modules=[o.EpdModule(
+                    name=m["name"], multiplier=1.0,
+                    result=o.Ref(id=m["result_id"], name=m.get("result"),
+                                 ref_type=o.RefType.Result))
+                    for m in modules])
+            for key in ("manufacturer", "verifier", "program_operator",
+                        "data_generator"):
+                if fields.get(key):
+                    setattr(epd, key, self._field(key, self._actor,
+                                                  fields[key]))
+            if fields.get("pcr"):
+                epd.pcr = self._field("pcr", self._source, fields["pcr"])
+            for key in ("valid_from", "valid_until"):
+                if fields.get(key):
+                    iso, err = parse_date(fields[key])
+                    if err:
+                        raise _Refused(err, key)
+                    setattr(epd, key, iso)
+            if epd.valid_from and epd.valid_until \
+                    and epd.valid_until <= epd.valid_from:
+                raise _Refused("VALID UNTIL is not after VALID FROM.",
+                               "valid_until")
+            for key in ("registration_id", "urn", "description"):
+                if fields.get(key):
+                    setattr(epd, key, str(fields[key]))
+            self.client.put(epd)
+            self._cache.pop("Epd", None)
+            return {"id": epd.id, "name": name, "saved": True,
+                    "replaced": existing is not None,
+                    "product": ref.flow.name, "modules": len(modules)}
+        except _Refused as e:
+            return {"error": e.message, "where": e.where, "hint": e.hint}
         except Exception as ex:
             return {"error": str(ex)}
 

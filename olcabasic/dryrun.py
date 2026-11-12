@@ -402,6 +402,10 @@ def check(statements, runtime, connected: bool = True,
             elif stmt.command == "REPORT":
                 report.writes.append(
                     f"EPD REPORT \"{_literal(stmt.argument) or '?'}\" (file)")
+            elif stmt.command == "SAVE":
+                report.writes.append("EPD SAVE (an EPD and one stored "
+                                     "result per module, in openLCA)")
+                report.calculations.append("EPD SAVE")
             elif stmt.command == "CLOSE":
                 epd_defined, epd_modules = False, None
 

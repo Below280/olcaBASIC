@@ -1531,3 +1531,181 @@ def test_user_facing_text_has_no_dashes_or_standard_text(finished):
     _, r, rows = finished
     flat = r.text + " ".join(" ".join(row) for row in rows)
     assert "—" not in flat and "–" not in flat
+
+
+# ── EPD SAVE: the EPD as openLCA's own Epd entity ────────────
+
+import olca_schema as o  # noqa: E402
+
+
+def stored(client, cls, name):
+    found = client.by_name(cls, name)
+    assert len(found) == 1, f"{len(found)} {cls.__name__} called {name}"
+    return found[0]
+
+
+def test_save_is_refused_before_the_report(session, client):
+    build(session, client)
+    refused(session.run("EPD SAVE"), "EPD SAVE refused",
+            "EPD REPORT has not been run", 'EPD REPORT "file.csv"')
+    assert session.run("EPD SYSTEMS\nEPD CHECK\nEPD CALCULATE\n"
+                       "EPD DATA QUALITY").ok
+    refused(session.run("EPD SAVE"), "EPD SAVE refused",
+            "has not passed since the results were last calculated")
+    assert not client.store["Epd"] and not client.store["Result"]
+
+
+def test_save_writes_the_epd_and_a_result_per_module(finished, client):
+    session, _, rows = finished
+    r = session.run("EPD SAVE")
+    assert r.ok, r.errors
+    epd = stored(client, o.Epd, "Test block")
+    assert epd.category == FOLDER
+    assert [m.name for m in epd.modules] == ["A1", "A2", "A3", "C1", "C2",
+                                             "C3", "C4", "D"]
+    assert all(m.multiplier == 1.0 for m in epd.modules)
+    # the product is the output of manufacturing, in the declared unit
+    assert epd.product.flow.name == "A3: Manufacturing"
+    assert (epd.product.amount, epd.product.unit.name) == (1.0, "kg")
+    assert epd.product.flow_property.name == "Mass"
+    report = table(rows, "Results (market-based electricity)")
+    for module in epd.modules:
+        result = client.store["Result"][module.result.id]
+        assert result.name == f"Test block | {module.name}"
+        assert result.category == f"{FOLDER}/Results"
+        assert result.impact_method.name == EPD_METHOD
+        assert len(result.impact_results) == 38
+        gwp = next(i.amount for i in result.impact_results
+                   if i.indicator.name == EPD_GWP)
+        assert gwp == pytest.approx(report[EPD_GWP][module.name], abs=1e-12)
+        assert sum(1 for f in result.flow_results if f.is_ref_flow) == 1
+    assert "International EPD System (GPI 5.1.0)" in epd.description
+    assert "12/11/2026" in epd.description
+    assert "EPD saved in openLCA: Test block (8 modules" in r.text
+    assert client.undisposed() == 0
+    saved = r.data[-1]
+    assert saved["call"] == "epd_save" and saved["result"]["modules"] == 8
+
+
+def test_save_can_be_read_back_with_show_and_find(finished):
+    session, _, _ = finished
+    assert session.run("EPD SAVE").ok
+    text = session.run('SHOW EPD "Test block"').text
+    assert "Test block | A3" in text and "Declared amount: 1 kg" in text
+    assert "Test block" in session.run("FIND EPD").text
+    assert "Test block | D" in session.run('FIND RESULT "Test block"').text
+
+
+def test_save_does_not_write_over_an_epd_without_replace(finished, client):
+    session, _, _ = finished
+    assert session.run("EPD SAVE").ok
+    first = stored(client, o.Epd, "Test block").id
+    results = set(client.store["Result"])
+    refused(session.run("EPD SAVE"), "is in the database already",
+            "EPD SAVE REPLACE")
+    r = session.run("EPD SAVE REPLACE")
+    assert r.ok and "EPD replaced in openLCA" in r.text
+    assert stored(client, o.Epd, "Test block").id == first
+    assert set(client.store["Result"]) == results      # replaced, not added
+
+
+def test_save_takes_who_and_when(finished, client):
+    session, _, _ = finished
+    assert session.run('''
+SET PROCESS FOLDER "00: Test EPD"
+MAKE ACTOR "Synthetic maker"
+END ACTOR
+MAKE ACTOR "Synthetic verifier"
+END ACTOR
+MAKE SOURCE "Synthetic PCR"
+END SOURCE''').ok
+    r = session.run('EPD SAVE MANUFACTURER "Synthetic maker" VERIFIER '
+                    '"Synthetic verifier" PCR "Synthetic PCR" REGISTRATION '
+                    '"TEST-0001" VALID FROM "12/11/2026" VALID UNTIL '
+                    '"11/11/2031"')
+    assert r.ok, r.errors
+    epd = stored(client, o.Epd, "Test block")
+    assert epd.manufacturer.name == "Synthetic maker"
+    assert epd.verifier.name == "Synthetic verifier"
+    assert epd.pcr.name == "Synthetic PCR"
+    assert epd.registration_id == "TEST-0001"
+    assert (epd.valid_from, epd.valid_until) == ("2026-11-12", "2031-11-11")
+
+
+@pytest.mark.parametrize("options,message", [
+    ('MANUFACTURER "Nobody"', "No actor is called 'Nobody'"),
+    ('PCR "Nothing"', "No source is called 'Nothing'"),
+    ('VALID FROM "soon"', "is not a date"),
+    ('VALID FROM "12/11/2026" VALID UNTIL "11/11/2026"',
+     "VALID UNTIL is not after VALID FROM"),
+])
+def test_save_refusals_write_no_epd(finished, client, options, message):
+    session, _, _ = finished
+    refused(session.run(f"EPD SAVE {options}"), message)
+    assert not client.store["Epd"]
+
+
+def test_save_parse_errors():
+    with pytest.raises(ParseError, match="doesn't take 'COLOUR'"):
+        parse("EPD SAVE COLOUR")
+    with pytest.raises(ParseError, match="VERIFIER needs a value"):
+        parse("EPD SAVE VERIFIER")
+    with pytest.raises(ParseError, match="given twice"):
+        parse('EPD SAVE VERIFIER "a" VERIFIER "b"')
+
+
+def test_save_is_refused_when_the_model_changed_after_the_report(
+        finished, client):
+    session, _, _ = finished
+    # a change behind olcaBASIC's back: the electricity bought doubles
+    proc = stored(client, o.Process, "A3 | Manufacturing")
+    bought = [p for p in proc.parameters if p.value == 2]
+    assert len(bought) == 1
+    bought[0].value = 4
+    refused(session.run("EPD SAVE"), "Module A3", "The model has changed",
+            "EPD REPORT again")
+    assert not client.store["Epd"]
+    assert client.undisposed() == 0
+
+
+def test_a_rebuild_after_the_report_needs_the_report_again(finished, client):
+    session, _, _ = finished
+    assert session.run("EPD SYSTEMS").ok
+    refused(session.run("EPD SAVE"), "EPD REPORT has not been run")
+
+
+def test_status_shows_the_report_step(finished):
+    session, _, _ = finished
+    assert "EPD REPORT: passed" in session.run("EPD STATUS").text
+
+
+def test_each_module_system_has_its_module_as_an_analysis_group(
+        finished, client):
+    session, _, _ = finished
+    for code, own in (("A1", {"A1: Raw material supply",
+                              "A1 | Steel supply"}),
+                      ("A3", {"A3: Manufacturing", "A3 | Manufacturing"}),
+                      ("C1", {"C1: Deconstruction"})):
+        total = next(n for n in own if n.startswith(code + ":"))
+        system = stored(client, o.ProductSystem, total)
+        assert [g.name for g in system.analysis_groups] == [code]
+        assert {r.name for r in system.analysis_groups[0].processes} == own
+
+
+def test_results_by_group_read_the_module_group(finished, client):
+    session, _, _ = finished
+    r = session.run(f'CALCULATE "A3: Manufacturing" USING "{EPD_METHOD}"\n'
+                    f'RESULT IMPACTS BY GROUP CATEGORY "{EPD_GWP}"')
+    assert r.ok, r.errors
+    rows = {row["group"]: row["amount"]
+            for row in r.data[-1]["result"]["rows"]}
+    assert rows["A3"] == pytest.approx(2 * 0.25)
+    session.run("CLOSE RESULT ALL")
+
+
+def test_running_systems_again_leaves_the_groups_as_they_are(finished,
+                                                             client):
+    session, _, _ = finished
+    client.calls.clear()
+    assert session.run("EPD SYSTEMS").ok
+    assert not [c for c in client.calls if c[:2] == ("put", "ProductSystem")]

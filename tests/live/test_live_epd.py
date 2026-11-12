@@ -213,9 +213,11 @@ EPD SYSTEMS
 EPD CHECK
 EPD CALCULATE
 EPD REPORT "{out.as_posix()}"
+EPD SAVE REPLACE
 '''
     names = ["A1: Raw material supply", "A2: Transport", "A3: Manufacturing",
              "A3 | Manufacturing"]
+    epd_name = "olcaBASIC live EPD"
     try:
         r = live.session.run(program)
         assert r.ok, f"{r.errors}\n{r.text}"
@@ -231,7 +233,41 @@ EPD REPORT "{out.as_posix()}"
             assert a1 == 0 and a2 == 0
             assert abs(stage - a3) <= 1e-9 * max(abs(a3), 1e-30)
         assert any(float(row[4]) != 0 for row in results)
+
+        # EPD SAVE: openLCA's own Epd entity, one stored result per
+        # module, each with the report's numbers
+        import olca_schema as o
+        client = live.engine.client
+        found = [d for d in client.get_descriptors(o.Epd)
+                 if d.name == epd_name]
+        assert len(found) == 1
+        epd = client.get(o.Epd, found[0].id)
+        assert [m.name for m in epd.modules] == ["A1", "A2", "A3"]
+        assert epd.product is not None and epd.product.amount == 1.0
+        assert epd.product.flow.name == "A3: Manufacturing"
+        by_category = {row[0]: float(row[4]) for row in results}
+        for module in epd.modules:
+            stored = client.get(o.Result, module.result.id)
+            assert stored.name == f"{epd_name} | {module.name}"
+            assert len(stored.impact_results) == 38
+            if module.name == "A3":
+                for i in stored.impact_results:
+                    want = by_category[i.indicator.name]
+                    assert abs(i.amount - want) <= 1e-9 * max(abs(want),
+                                                              1e-30)
+        # one analysis group per module system, named after the module
+        systems = {d.name: d.id
+                   for d in client.get_descriptors(o.ProductSystem)}
+        a3 = client.get(o.ProductSystem, systems["A3: Manufacturing"])
+        assert [g.name for g in a3.analysis_groups] == ["A3"]
+        assert {p.name for p in a3.analysis_groups[0].processes} == {
+            "A3: Manufacturing", "A3 | Manufacturing"}
+        assert live.session.open_results == []
     finally:
+        live.session.run(
+            f'CONFIRM DELETE ON\nDELETE EPD "{epd_name}"\n' + "\n".join(
+                f'DELETE RESULT "{epd_name} | {m}"'
+                for m in ("A1", "A2", "A3")))
         cleanup = "CONFIRM DELETE ON\n" + "\n".join(
             f'DELETE SYSTEM "{n}"' for n in names if ":" in n) + "\n" + "\n".join(
             f'DELETE PROCESS "{n}"' for n in names)

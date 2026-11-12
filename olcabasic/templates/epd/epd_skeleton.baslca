@@ -126,3 +126,8 @@ EPD CHECK
 EPD CALCULATE
 EPD DATA QUALITY
 EPD REPORT "epd_results.csv"
+
+' Once the report is right, EPD SAVE writes the EPD into openLCA as
+' well: its own EPD entity with a stored result per module, which can
+' be opened, exported and sent on from openLCA.
+' EPD SAVE

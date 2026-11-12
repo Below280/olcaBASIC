@@ -1625,6 +1625,9 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         elif command == "REPORT":
             epd.report(stmt.line, self._eval_str(stmt.argument),
                        stmt.location_based)
+        elif command == "SAVE":
+            epd.save(stmt.line, stmt.replace,
+                     {k: self._eval_str(v) for k, v in stmt.options.items()})
         elif command == "STATUS":
             epd.status()
 
