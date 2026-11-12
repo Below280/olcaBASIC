@@ -335,9 +335,10 @@ def test_attach_needs_openlca_2_6_2(session, client, tmp_path):
     s2 = Session(client=client)
     e = err(s2, f'MAKE SOURCE "S"\n  ATTACH "{f}"\nEND SOURCE'
                 .replace("\\", "/"))
-    assert "was saved, but its file was not attached" in e["message"]
-    assert "2.6.2" in e["message"] + e["hint"]
-    assert client.by_name(o.Source, "S")
+    # changed on purpose (12/11/2026): refused before anything is saved
+    assert "needs openLCA 2.6.2 or later" in e["message"]
+    assert "Nothing was saved" in e["message"] and e["line"] == 2
+    assert not client.by_name(o.Source, "S")
 
 
 # ── currencies ───────────────────────────────────────────────

@@ -668,6 +668,14 @@ class EntitiesMixin:
                 raise _Refused(f"File not found: {attach}.", "attach",
                                hint="The path is relative to the folder "
                                     "the program runs in.")
+            # Refuse before anything is saved, not after
+            if attach is not None \
+                    and not self.ipc_supports("data/put/source-file"):
+                gone = self._unsupported("data/put/source-file",
+                                         "Attaching a file to a source")
+                raise _Refused(gone["error"] + " Nothing was saved.",
+                               "attach", hint=gone["hint"] + " Without "
+                               "ATTACH the source is saved on its own.")
         elif word == "CURRENCY":
             take("code")
             if not editing and not e.code:
