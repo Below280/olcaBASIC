@@ -462,6 +462,11 @@ END BRIDGE''',
               "in MAKE PROCESS, EDIT PROCESS or LINK. EDIT PROCESS on a "
               "bridge may name background processes, which is how a "
               "bridge with several providers (a mix) is made.\n"
+              "Run again for a bridge that exists, the block changes "
+              "nothing (its DATA and ELECTRICITY declarations are "
+              "updated). If it names another provider than the bridge "
+              "has, that is an error: change the bridge with EDIT "
+              "PROCESS, or DELETE PROCESS and run the block again.\n"
               "While an EPD is active a bridge with no FOLDER line goes "
               "into the EPD's Bridges folder. DATA and ELECTRICITY are "
               "described under HELP DATA PRIMARY and HELP ELECTRICITY.",

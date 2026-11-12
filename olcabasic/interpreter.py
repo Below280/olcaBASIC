@@ -1039,6 +1039,9 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             raise BasicError(result["error"], stmt.line)
 
         existed = result.get("already_existed", False)
+        if existed:
+            self._bridge_must_match(result["process_id"], name, provider_id,
+                                    second_id, stmt.line)
         status = "exists" if existed else "created"
         self.out.write(f"  Bridge {status}: {name} ({stmt.unit})")
         if result.get("note"):
@@ -1082,6 +1085,44 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 self.out.write("  Declarations on the bridge updated.")
         if epd is not None:
             epd._reset_progress()
+
+    def _bridge_must_match(self, bridge_id: str, name: str, provider_id,
+                           second_id, line: int):
+        """A BRIDGE block run again leaves the bridge as it is. If the
+        block now names another provider, the bridge would go on
+        passing the old one through without a word: that is an error,
+        as for a changed PROCESS block."""
+        wanted = [p for p in (provider_id, second_id) if p]
+        if not wanted:
+            return
+        st = self.bridge.process_structure(bridge_id)
+        if "error" in st:
+            return
+        have = {link["provider_id"]: link["provider"]
+                for link in st["links"]}
+        missing = [p for p in wanted if p not in have]
+        if not missing:
+            return
+
+        def label(pid):
+            info = self.bridge.describe_process(pid)
+            if info is None:
+                return pid
+            where = f" [{info['location']}]" if info.get("location") else ""
+            return f"'{info['name']}'{where}"
+
+        now = (", ".join(label(p) for p in have) if have else "no provider")
+        raise BasicError(
+            f"BRIDGE \"{name}\": the bridge exists and passes on {now}, "
+            f"not {' and '.join(label(p) for p in missing)} as this block "
+            f"says.", line,
+            hint=f"The bridge was not changed. To point it at another "
+                 f"process: EDIT PROCESS \"{name}\" / UPDATE INPUT \"flow "
+                 f"name\" PROVIDER \"{missing[0]}\" / END EDIT (each / is "
+                 f"a new line; SHOW PROCESS \"{name}\" shows the flow "
+                 f"name). Or CONFIRM DELETE ON, DELETE PROCESS \"{name}\" "
+                 f"and run the block again. Either way, build the product "
+                 f"systems that use the bridge again and VALIDATE them.")
 
     def _exec_process(self, stmt: ProcessStmt):
         self._require_bridge(stmt.line)

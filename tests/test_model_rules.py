@@ -558,3 +558,46 @@ def test_a_system_is_read_once_for_its_processes(session, client):
     session.engine.systems_containing(widget_id)
     assert len([c for c in client.calls if c[0] == "get"
                 and "ProductSystem" in str(c[1])]) == reads
+
+
+# ── rule 2 for bridges: a changed BRIDGE block ───────────────
+
+from fake_client import ELECTRICITY, STEEL        # noqa: E402
+
+GB = f'''BRIDGE "grid", kWh
+  PROVIDER "{ELECTRICITY}" LOCATION "GB"
+END BRIDGE
+'''
+
+
+def test_an_identical_bridge_block_is_a_no_op(session, client):
+    assert session.run(SETUP + GB).ok
+    before = snapshot(client)
+    r = session.run(SETUP + GB)
+    assert r.ok, r.errors
+    assert "Bridge exists: BRIDGE | grid | kWh" in r.text
+    assert snapshot(client) == before
+
+
+def test_a_bridge_block_that_names_another_provider_is_refused(session,
+                                                               client):
+    """It used to say 'Bridge exists' and go on passing the old
+    provider through."""
+    assert session.run(SETUP + GB).ok
+    before = snapshot(client)
+    code = SETUP + GB.replace('"GB"', '"DE"')
+    e = err(session.run(code))
+    assert e["line"] == line_of(code, 'BRIDGE "grid"')
+    assert "the bridge exists and passes on" in e["message"]
+    assert "[GB]" in e["message"] and "[DE]" in e["message"]
+    assert 'EDIT PROCESS "BRIDGE | grid | kWh"' in e["hint"]
+    assert 'DELETE PROCESS "BRIDGE | grid | kWh"' in e["hint"]
+    assert snapshot(client) == before
+
+
+def test_a_bridge_without_a_provider_is_not_given_one_silently(session,
+                                                               client):
+    assert session.run(SETUP + 'BRIDGE "spare", kg\nEND BRIDGE\n').ok
+    e = err(session.run(SETUP + f'BRIDGE "spare", kg\n  PROVIDER "{STEEL}"\n'
+                                f'END BRIDGE\n'))
+    assert "passes on no provider" in e["message"]
