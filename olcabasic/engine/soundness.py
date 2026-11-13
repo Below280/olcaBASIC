@@ -55,6 +55,14 @@ def _linkable(ex) -> bool:
     return False
 
 
+def _named_bridge(name: str, category: str = "") -> bool:
+    """A bridge is named 'BRIDGE | ...' or sits in a Bridges folder
+    (the same test as the interpreter's)."""
+    segments = [seg.strip().lower() for seg in (category or "").split("/")]
+    return ((name or "").upper().replace(" ", "").startswith("BRIDGE|")
+            or "bridges" in segments)
+
+
 class SoundnessMixin:
 
     # ── which processes a system holds ───────────────────────
@@ -212,6 +220,48 @@ class SoundnessMixin:
                             f"that the process no longer has")
             return {"system_id": desc.id, "system_name": desc.name,
                     "linking": linking, "drift": drift}
+        except Exception as ex:
+            return {"error": str(ex)}
+
+    def system_unbridged(self, system_ref: str,
+                         folders: Optional[List[str]] = None) -> Dict:
+        """Links in a product system that take a background process
+        straight into a foreground process, with no bridge between:
+        {"system_id", "system_name", "unbridged": [messages]}.
+
+        olcaBASIC refuses such an input when it builds a process, but a
+        system can also be made or relinked in the openLCA app or from
+        Python. This reads the system as it is in the database, so the
+        rule holds however the system was made. A bridge is a process
+        named 'BRIDGE | ...' or in a Bridges folder; the foreground is
+        the folder of the reference process and the program's build
+        folders."""
+        try:
+            desc = self.find_system(system_ref)
+            if desc is None:
+                return {"error": f"Product system '{system_ref}' not found"}
+            _, _, links, _ = self._system_info(desc.id)
+            fg = {d.id: d for d in self._foreground(desc, folders)}
+            names = {d.id: d for d in self._get_descriptors(o.Process)}
+            out: List[str] = []
+            for (pid, _iid), (provider_id, _flow) in links.items():
+                user = fg.get(pid)
+                if user is None or provider_id is None \
+                        or provider_id in fg:
+                    continue
+                if _named_bridge(user.name, getattr(user, "category", "")):
+                    continue
+                prov = names.get(provider_id)
+                pname = prov.name if prov is not None else provider_id
+                if prov is not None and _named_bridge(
+                        prov.name, getattr(prov, "category", "")):
+                    continue
+                msg = (f"'{user.name}' takes '{pname}' from the "
+                       f"background with no bridge")
+                if msg not in out:
+                    out.append(msg)
+            return {"system_id": desc.id, "system_name": desc.name,
+                    "unbridged": sorted(out)}
         except Exception as ex:
             return {"error": str(ex)}
 

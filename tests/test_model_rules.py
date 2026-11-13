@@ -745,3 +745,40 @@ def test_ignore_defaults_is_not_taken_for_a_new_provider(session, client):
     session.reset()
     r = session.run(CALC)
     assert r.ok, r.errors
+
+
+# ── rule 1 read from the database: a system relinked past its bridge ─
+
+def _relink_past_the_bridge(client, system_name, bridge_name, background):
+    """Point a link at the background process behind a bridge, as an
+    edit in the openLCA app or from Python could."""
+    system = next(s for s in client.store["ProductSystem"].values()
+                  if s.name == system_name)
+    bridge = next(p for p in client.store["Process"].values()
+                  if p.name == bridge_name)
+    target = next(p for p in client.store["Process"].values()
+                  if p.name == background)
+    for link in system.process_links:
+        if link.provider is not None and link.provider.id == bridge.id:
+            link.provider = o.Ref(id=target.id, name=target.name,
+                                  ref_type=o.RefType.Process)
+            return
+    raise AssertionError("no link through the bridge")
+
+
+def test_a_system_relinked_past_a_bridge_is_refused(client):
+    s = Session(client=client)
+    assert s.run(BUILT).ok
+    _relink_past_the_bridge(client, "Widget", B_STEEL, STEEL)
+    fresh = Session(client=client)        # a new session reads the system
+    e = err(fresh.run(CALC))
+    assert "no bridge" in e["message"]
+    assert f"'Widget' takes '{STEEL}'" in e["message"]
+    assert "BRIDGE" in e["hint"]
+
+
+def test_a_bridged_system_passes_the_bridge_check(client):
+    s = Session(client=client)
+    assert s.run(BUILT).ok
+    r = s.engine.system_unbridged("Widget", [])
+    assert r["unbridged"] == []

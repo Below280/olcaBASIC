@@ -393,10 +393,24 @@ def test_the_parts_add_up_on_a_model_built_through_bridges(session, client):
     assert all(not data["unbridged"] for data in split.values())
 
 
-def test_a_background_process_used_directly_gives_a_residual_error(
+def test_a_background_process_used_directly_is_refused_at_calculate(
         session, client):
     build(session, client)
     use_directly(client, "A1 | Forestry and sawing", STEEL, 0.5)
+    e = refused(session.run(STEPS), "EPD CALCULATE refused",
+                "no bridge", "A1 | Forestry and sawing")
+    assert "BRIDGE" in e["hint"]
+
+
+def test_a_background_process_used_directly_gives_a_residual_error(
+        session, client, monkeypatch):
+    """The residual check stays as a second line: with the bridge gate
+    out of the way, the split still finds the gap."""
+    build(session, client)
+    use_directly(client, "A1 | Forestry and sawing", STEEL, 0.5)
+    monkeypatch.setattr(
+        type(session.engine), "system_unbridged",
+        lambda self, ref, folders=None: {"unbridged": []})
     r = session.run(STEPS)
     assert r.ok, f"{r.errors}\n{r.text}"
     r = session.run("EPD DATA QUALITY")
@@ -1287,7 +1301,7 @@ def test_a_rating_on_a_shared_bridge_counts_for_every_product(session,
 
 def test_the_bridge_rule_holds_across_products(session, client):
     """A second product cannot use a background process directly
-    either: the residual check catches it for that product alone."""
+    either: the bridge gate refuses that product alone."""
     shared = bridges(client).replace(
         'END BRIDGE', '  FOLDER "00: Test shared/Bridges"\nEND BRIDGE')
     assert session.run(PARAMS + shared).ok
@@ -1303,11 +1317,7 @@ def test_the_bridge_rule_holds_across_products(session, client):
     two.name = "A1 | Forestry and sawing (two)"
     use_directly(client, two.name, STEEL, 0.5)
     two.name = "A1 | Forestry and sawing"
-    r = session.run(STEPS)
-    assert r.ok, f"{r.errors}\n{r.text}"
-    r = session.run("EPD DATA QUALITY")
-    refused(r, "EPD DATA QUALITY found")
-    said(r, "Used without a bridge in this module")
+    refused(session.run(STEPS), "EPD CALCULATE refused", "no bridge")
 
 
 # ── dry run and help ─────────────────────────────────────────

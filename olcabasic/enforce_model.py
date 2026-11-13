@@ -73,6 +73,23 @@ class ModelRulesMixin:
                      f"DELETE ON, DELETE SYSTEM \"{desc.name}\", SYSTEM "
                      f"\"{desc.name}\" (or EPD SYSTEMS for an EPD), then "
                      f"VALIDATE \"{desc.name}\".")
+        # The bridge rule, read from the database: holds for a system
+        # made or relinked outside olcaBASIC (the openLCA app, Python).
+        loose = self.bridge.system_unbridged(desc.id, self._build_folders())
+        if "error" not in loose and loose.get("unbridged"):
+            shown = loose["unbridged"][:5]
+            more = len(loose["unbridged"]) - len(shown)
+            listing = "\n".join(f"    {u}" for u in shown)
+            if more > 0:
+                listing += f"\n    ... and {more} more"
+            raise BasicError(
+                f"{command} refused: '{desc.name}' links background "
+                f"processes straight into its own processes, with no "
+                f"bridge:\n{listing}", line,
+                hint="Every background input goes through a bridge. Make "
+                     "the bridges (BRIDGE \"name\" ... END BRIDGE), point "
+                     "the inputs at them, then build the system again "
+                     "and VALIDATE it.")
         # The structure check: does the system still link what its
         # foreground processes ask for? It reads the database, so it
         # holds after RESET, in a new session, and after edits made in
