@@ -98,8 +98,9 @@ class EntitiesInterpMixin:
         if "error" in usage:
             raise BasicError(
                 usage["error"], line,
-                hint="openLCA answers this from version 2.7 "
-                     "(data/get/usage)." if etype in (
+                hint="It needs openLCA's IPC server to answer "
+                     "data/get/usage, which openLCA 2.7.0 does not "
+                     "yet." if etype in (
                          "PROCESS", "SYSTEM") else "")
         usage = dict(usage, type=etype, name=found["name"], id=found["id"])
         self._emit("entity_usage", usage)

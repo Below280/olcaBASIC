@@ -13,6 +13,7 @@ from olcabasic import Session
 from olcabasic.engine.entities import ENTITY_TYPES, OWN_TAG
 from olcabasic.errors import BasicError
 from olcabasic.parser import ParseError, parse
+from fake_client import FUTURE_VERSION
 from test_interpreter_lca import SETUP, WIDGET
 
 EF = "EF v3.1"
@@ -662,8 +663,8 @@ def test_an_actor_in_use_cannot_be_deleted(session, client):
     assert "reads every process" in r.text
 
 
-def test_usage_is_asked_of_openlca_from_2_7(client):
-    client.server_version = "2.7.0"
+def test_usage_is_asked_of_openlca_when_it_can_answer(client):
+    client.server_version = FUTURE_VERSION
     s = Session(client=client)
     ok(s, SETUP + 'MAKE ACTOR "Author"\nEND ACTOR')
     client.calls.clear()
@@ -676,10 +677,11 @@ def test_usage_is_asked_of_openlca_from_2_7(client):
     assert "Widget (ProductSystem)" in r.text
 
 
-def test_process_usage_needs_2_7(session):
+def test_process_usage_needs_a_later_openlca(session):
     ok(session, WIDGET)
     e = err(session, 'SHOW PROCESS "Widget" USAGE')
-    assert "2.7" in e["hint"]
+    assert "data/get/usage" in e["hint"]
+    assert "2.7.0 does not" in e["hint"]
 
 
 def test_delete_global_parameter_in_use_is_refused(session, client):

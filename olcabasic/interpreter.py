@@ -16,7 +16,7 @@ from .runtime import Runtime
 from .bridge import LCABridge
 from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
-from .errors import BasicError, split_hint
+from .errors import BasicError, explain_connection, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
 from .enforce_model import ModelRulesMixin
 from .interp_results import ResultsInterpMixin
@@ -242,7 +242,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 self.out.write(f"  Error: {e}")
             except Exception as e:
                 failed = True
-                self.out.write(f"  Error: {e}")
+                message, hint = explain_connection(str(e))
+                self.out.write(f"  Error: {' '.join(p for p in (message, hint) if p)}")
         if not failed and not all(isinstance(st, PROGRAM_COMMANDS)
                                   for st in statements):
             self.runtime.program_history.append(text)

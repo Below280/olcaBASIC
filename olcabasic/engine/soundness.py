@@ -110,11 +110,12 @@ class SoundnessMixin:
 
     def systems_containing(self, process_id: str) -> Dict:
         """The product systems that contain a process:
-        {"systems": [{"id", "name"}], "how"}. openLCA 2.7 answers
-        directly; before that every product system in the database is
+        {"systems": [{"id", "name"}], "how"}. A server with data/get/usage
+        answers directly (no released openLCA has it yet, 2.7.0
+        included); otherwise every product system in the database is
         looked at (each is read once and remembered)."""
         try:
-            # openLCA 2.7 can say where a process is used
+            # a server with data/get/usage can say where a process is used
             if self.ipc_supports("data/get/usage"):
                 data, err = self.client.rpc_call(
                     "data/get/usage",

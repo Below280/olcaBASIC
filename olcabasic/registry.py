@@ -546,9 +546,9 @@ END SYSTEM''',
               "The type is any of: PROCESS, SYSTEM, FLOW, PROPERTY (flow property), UNITS (unit group), PARAMETER (global parameter), METHOD, CATEGORY (impact category), LOCATION, DQ SYSTEM, ACTOR, SOURCE, CURRENCY, SOCIAL INDICATOR, PROJECT, RESULT (stored result), EPD and FLOW MAP. Every type is "
               "checked the same way: an actor, source, currency, location, "
               "data quality system, social indicator or global parameter "
-              "that a process still points at is not deleted (from openLCA "
-              "2.7 the server answers this; before that every process is "
-              "read). A unit group used by a flow property, or a flow "
+              "that a process still points at is not deleted (every process "
+              "is read; a later openLCA with data/get/usage will answer "
+              "this directly). A unit group used by a flow property, or a flow "
               "property used by a flow, is not deleted.\n"
               "DELETE METHOD and DELETE CATEGORY on a method olcaBASIC did "
               "not make are refused without CONFIRM, and with it need a "
@@ -690,14 +690,15 @@ END EDIT''',
               "is read only: no command writes JSON into the database, "
               "because that would let a program put anything in, past "
               "every rule.\n"
-              "USAGE lists what points at the entity. From openLCA 2.7 "
-              "the server answers (data/get/usage). Before that, olcaBASIC "
+              "USAGE lists what points at the entity. olcaBASIC "
               "reads every entity that could point at it, which for "
               "actors, sources, currencies, locations, data quality "
               "systems, social indicators and global parameters means "
               "every process: slow on a large database, but complete. "
-              "SHOW PROCESS ... USAGE and SHOW SYSTEM ... USAGE need "
-              "openLCA 2.7; SHOW FLOW ... USAGE has its own entry.",
+              "A later openLCA whose server answers data/get/usage will be "
+              "asked directly. SHOW PROCESS ... USAGE and SHOW SYSTEM ... "
+              "USAGE need that method; openLCA 2.7.0 does not have it. "
+              "SHOW FLOW ... USAGE has its own entry.",
         statements=("EntityShowStmt", "ShowStmt")),
     Command(
         name="MAKE ACTOR", topic="ENTITIES",
@@ -1107,7 +1108,8 @@ RESULT IMPACTS BY TAG CATEGORY "category"''',
               "SYSTEM ... ANALYSIS GROUP). A process that is in no group "
               "counts towards the group of what it supplies. BY TAG sums "
               "the direct results of the processes carrying each tag, and "
-              "needs openLCA 2.7.",
+              "needs the result/tag-results-of-* methods, which openLCA "
+              "2.7.0 does not have yet.",
         statements=("ResultQueryStmt",)),
     Command(
         name="RESULT CATEGORIES", topic="RESULT",

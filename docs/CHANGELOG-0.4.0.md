@@ -151,3 +151,5 @@ Clause numbers are given throughout; none of the text of EN 15804, the programme
 
 - A failed product system creation that left a system behind now says so and names the commands to inspect or remove it.
 - The `DATA` example in `HELP` quoted the name but not the unit, which parsed and then failed when run. Units in `DATA` go in quotes: `DATA "BRIDGE | Cement | kg", 300, "kg"`.
+- Usage look-ups (`data/get/usage`) and results by tag (`result/tag-results-of-*`) no longer say they need openLCA 2.7. Checked live on 13/11/2026: openLCA 2.7.0 does not have them. olcaBASIC still asks the server, so they will work once a release has them. Attaching a file to a source works on 2.7.0.
+- A connection that openLCA drops in the middle of a request, or refuses, is reported in plain words with what to check, not as the HTTP library's error. Found live: openLCA 2.7.0 on its default memory (3.5 GB) dropped the connection during a contribution analysis of an ecoinvent system and restarted itself.

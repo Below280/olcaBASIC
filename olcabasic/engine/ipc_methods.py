@@ -23,6 +23,13 @@ class IpcMethod(NamedTuple):
     note: str = ""
 
 
+# For methods that GreenDelta's server code has but no released openLCA
+# serves yet. Checked live on 13/11/2026: openLCA 2.7.0 answers "Does not
+# understand" to data/get/usage and to the three tag-results methods.
+UNRELEASED = "unreleased"
+LATEST_CHECKED = "2.7.0"
+
+
 # Methods the server did not always have. A server that lacks one answers
 # "Does not understand"; the engine then says which openLCA version is
 # needed instead of failing obscurely.
@@ -37,7 +44,7 @@ IPC_METHODS: Dict[str, IpcMethod] = {
     "data/get/parameters": IpcMethod("get_parameters"),
     "data/get/providers": IpcMethod("get_providers"),
     "data/get/usage": IpcMethod(
-        None, "2.7", "where an entity is used; not in the client"),
+        None, UNRELEASED, "where an entity is used; not in the client"),
     "data/put": IpcMethod("put"),
     "data/put/source-file": IpcMethod("put_source_file", "2.6.2"),
     # ── export and runtime ──────────────────────────────────
@@ -88,11 +95,11 @@ IPC_METHODS: Dict[str, IpcMethod] = {
     "result/simulate/next": IpcMethod("simulate_next"),
     "result/state": IpcMethod("get_state"),
     "result/tag-results-of-costs": IpcMethod(
-        None, "2.7", "results by process tag; not in the client"),
+        None, UNRELEASED, "results by process tag; not in the client"),
     "result/tag-results-of-flow": IpcMethod(
-        None, "2.7", "results by process tag; not in the client"),
+        None, UNRELEASED, "results by process tag; not in the client"),
     "result/tag-results-of-impact": IpcMethod(
-        None, "2.7", "results by process tag; not in the client"),
+        None, UNRELEASED, "results by process tag; not in the client"),
     "result/tech-flows": IpcMethod("get_tech_flows"),
     "result/total-costs": IpcMethod("get_total_costs"),
     "result/total-costs-of": IpcMethod(
@@ -127,6 +134,16 @@ CLIENT_MISNAMED: Dict[str, str] = {
 
 
 def needs_version(method: str) -> str:
-    """The openLCA version a method needs, for an error message."""
+    """The openLCA version a method needs, for an error message, or
+    UNRELEASED when no released openLCA has it yet."""
     entry = IPC_METHODS.get(method)
     return entry.since if entry else ""
+
+
+def needs_text(method: str) -> str:
+    """'openLCA 2.6.2 or later', or, for a method no released openLCA
+    has, 'a later openLCA than 2.7.0'."""
+    since = needs_version(method)
+    if since == UNRELEASED:
+        return f"a later openLCA than {LATEST_CHECKED}"
+    return f"openLCA {since} or later" if since else "a later openLCA"

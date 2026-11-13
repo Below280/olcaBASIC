@@ -351,7 +351,8 @@ class EntitiesMixin:
     # ── where is it used ─────────────────────────────────────
 
     def _usage_from_server(self, cls, entity_id: str):
-        """Users of an entity from data/get/usage (openLCA 2.7), or None
+        """Users of an entity from data/get/usage (not in a released
+        openLCA yet), or None
         when the server has no such method."""
         if not self.ipc_supports("data/get/usage"):
             return None
@@ -371,9 +372,9 @@ class EntitiesMixin:
                      workers: int = 8) -> Dict:
         """
         Where an entity is used: {"in_use", "users": [...], "complete",
-        "how"}. With openLCA 2.7 the server answers directly. Before
-        that, every entity that could point at it is read; for types
-        that processes point at (actors, sources, currencies, locations,
+        "how"}. A server with data/get/usage answers directly.
+        Without it (openLCA 2.7.0 and earlier), every entity that could
+        point at it is read; for types that processes point at (actors, sources, currencies, locations,
         data quality systems, social indicators, global parameters) that
         means every process, which is slow on a large database, but
         nothing is reported unused that was not checked.

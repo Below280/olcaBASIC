@@ -10,6 +10,42 @@ import re
 from typing import Dict, Tuple
 
 
+# What the requests library says when openLCA's IPC server goes away in
+# the middle of a call or is not there at all. Found live: openLCA 2.7.0
+# on its default memory (3.5 GB) dropped the connection during a
+# contribution analysis of an ecoinvent system and restarted itself.
+_CONNECTION_LOST = ("connection aborted", "forcibly closed",
+                    "connectionreseterror", "remotedisconnected",
+                    "connection reset", "winerror 10054")
+_CONNECTION_REFUSED = ("connection refused", "winerror 10061",
+                       "actively refused", "max retries exceeded",
+                       "failed to establish a new connection")
+
+LOST_MESSAGE = ("openLCA closed the connection in the middle of the "
+                "request.")
+LOST_HINT = ("This usually means openLCA ran out of memory, and it may "
+             "have restarted. Check its maximum memory (File > "
+             "Preferences > Configuration in openLCA; large background "
+             "databases need far more than the default), restart openLCA "
+             "and its IPC server, then run the command again.")
+REFUSED_MESSAGE = "openLCA's IPC server is not answering."
+REFUSED_HINT = ("Check that openLCA is open with a database and that its "
+                "IPC server is running on the port olcaBASIC uses. If "
+                "openLCA was in the middle of a large calculation, it may "
+                "have run out of memory and closed.")
+
+
+def explain_connection(message: str, hint: str = "") -> Tuple[str, str]:
+    """A plain message and hint in place of a raw connection error from
+    the HTTP library; anything else comes back unchanged."""
+    low = str(message).lower()
+    if any(k in low for k in _CONNECTION_LOST):
+        return LOST_MESSAGE, hint or LOST_HINT
+    if any(k in low for k in _CONNECTION_REFUSED):
+        return REFUSED_MESSAGE, hint or REFUSED_HINT
+    return message, hint
+
+
 class BasicError(Exception):
     """Runtime error in olcaBASIC, with the line and an optional hint.
 
@@ -20,6 +56,7 @@ class BasicError(Exception):
     """
 
     def __init__(self, message: str, line: int = 0, hint: str = ""):
+        message, hint = explain_connection(message, hint)
         self.line = line
         self.message = message
         self.hint = hint
@@ -76,6 +113,7 @@ def error_dict(message: str, line: int = 0, hint: str = "") -> Dict:
     if m:
         line = line or int(m.group(1))
         message = message[m.end():]
+    message, hint = explain_connection(message, hint)
     if not hint:
         message, hint = split_hint(message)
     return {"line": int(line or 0), "message": message, "hint": hint}

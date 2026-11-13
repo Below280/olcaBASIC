@@ -17,7 +17,7 @@ import json
 import pytest
 import olca_schema as o
 
-from fake_client import ELECTRICITY, STEEL, FakeResult
+from fake_client import ELECTRICITY, FUTURE_VERSION, STEEL, FakeResult
 from olcabasic import Session
 from olcabasic.engine.results import MAX_OPEN_RESULTS
 from test_interpreter_lca import (B_ELEC, B_ELEC_DE, B_STEEL, WIDGET,
@@ -806,16 +806,16 @@ def test_groups_need_groups(calc):
         assert "ANALYSIS GROUP" in e["hint"]
 
 
-# ── results by tag need openLCA 2.7 ──────────────────────────
+# ── results by tag need the tag-results methods ──────────────────────────
 
 def test_by_tag_says_which_version_it_needs(calc):
     e = err(calc.run(f'RESULT IMPACTS BY TAG CATEGORY "{FOSSIL}"'))
-    assert "needs openLCA 2.7 or later" in e["message"]
+    assert "needs a later openLCA than 2.7.0" in e["message"]
     assert "result/tag-results-of-impact" in e["message"]
 
 
 def test_by_tag_on_a_server_that_has_it(session, client):
-    client.server_version = "2.7.0"
+    client.server_version = FUTURE_VERSION
     process(client, "Widget").tags = ["foreground", "site"]
     session.run(CALC.strip() + " WITH COSTS")
     r = query(session, f'RESULT IMPACTS BY TAG CATEGORY "{FOSSIL}"')

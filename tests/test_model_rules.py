@@ -527,15 +527,15 @@ def test_other_commands_check_allocation_too(session, client):
 # ── what the engine reads for these rules ────────────────────
 
 def test_openlca_27_is_asked_which_systems_hold_a_process(session, client):
-    """Before 2.7 every product system is read; from 2.7 the server
-    answers and none is."""
+    """Without data/get/usage every product system is read; a server
+    that has it answers and none is."""
     assert session.run(BUILT).ok
     widget_id = client.by_name(o.Process, "Widget")[0].id
     old = session.engine.systems_containing(widget_id)
     assert [s["name"] for s in old["systems"]] == ["Widget"]
     assert old["how"] == "read every product system"
 
-    client.server_version = "2.7.0"
+    client.server_version = FUTURE_VERSION
     newer = Session(client=client)
     before = len([c for c in client.calls
                   if c[:2] == ("get", "ProductSystem")])
@@ -562,7 +562,7 @@ def test_a_system_is_read_once_for_its_processes(session, client):
 
 # ── rule 2 for bridges: a changed BRIDGE block ───────────────
 
-from fake_client import ELECTRICITY, STEEL        # noqa: E402
+from fake_client import ELECTRICITY, FUTURE_VERSION, STEEL  # noqa: E402
 
 GB = f'''BRIDGE "grid", kWh
   PROVIDER "{ELECTRICITY}" LOCATION "GB"

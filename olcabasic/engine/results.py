@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import olca_schema as o
 
-from .ipc_methods import IPC_METHODS, needs_version
+from .ipc_methods import IPC_METHODS, needs_text
 
 #: A Session holds no more than this many open results at once.
 MAX_OPEN_RESULTS = 5
@@ -111,10 +111,11 @@ class ResultsMixin:
         return known[method]
 
     def _unsupported(self, method: str, what: str) -> Dict:
-        since = needs_version(method)
-        return {"error": f"{what} needs openLCA {since} or later: this "
-                         f"openLCA's IPC server has no '{method}' method.",
-                "hint": f"Update openLCA to {since} or later to use it."}
+        need = needs_text(method)
+        return {"error": f"{what} needs {need}: this openLCA's IPC "
+                         f"server has no '{method}' method.",
+                "hint": f"It works once openLCA's IPC server has "
+                        f"'{method}'."}
 
     # ── opening and closing ──────────────────────────────────
 

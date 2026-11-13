@@ -168,8 +168,11 @@ class Session:
                     break
                 except Exception as e:  # engine or openLCA failure
                     line = sink.line or getattr(stmt, "line", 0)
-                    errors.append(error_dict(str(e) or type(e).__name__, line))
-                    sink.write(f"  Error: Line {line}: {e}")
+                    err = error_dict(str(e) or type(e).__name__, line)
+                    errors.append(err)
+                    shown = " ".join(p for p in (err["message"],
+                                                 err["hint"]) if p)
+                    sink.write(f"  Error: Line {line}: {shown}")
                     break
             if not errors and not all(
                     type(st).__name__ in ("SaveProgramStmt", "HelpStmt",
