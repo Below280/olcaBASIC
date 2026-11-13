@@ -37,6 +37,7 @@ from typing import Dict, List, Optional
 
 from ..errors import BasicError
 from . import en15804, programmes
+from .epd_document import DocumentMixin
 from .epd_toolkit import EpdToolkitMixin
 
 MODULE_ORDER = ["A1", "A2", "A3", "A4", "A5",
@@ -446,7 +447,7 @@ def field_values(stmt, eval_str, eval_num) -> Dict:
 
 # ── the workflow ─────────────────────────────────────────────
 
-class EpdWorkflow(EpdToolkitMixin):
+class EpdWorkflow(EpdToolkitMixin, DocumentMixin):
     """The active EPD of a session: its definition and how far the
     work has got. Held in runtime.epd."""
 

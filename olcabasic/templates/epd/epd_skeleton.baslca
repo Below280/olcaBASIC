@@ -160,6 +160,29 @@ EPD REPORT "epd_results.csv"
 ' The whole model as one file, for the verifier.
 ' EPD EXPORT MODEL "model.json"
 
+' DECIDE: the EPD document itself, in the programme's sections. Until
+' every line below is filled in it is refused; until the statements,
+' registration, dates and verification are given it is a draft.
+' The statements file is your own copy of the programme's required
+' wording (keys: cover, iso14025, operator, ownership, comparability,
+' relative, end_of_life, primary_share). HELP EPD DOCUMENT lists it all.
+' EPD DOCUMENT "epd.md"
+'   STATEMENTS "ies_statements.txt"
+'   OWNER "Company name"
+'   OWNER ADDRESS "Street, town, postcode, country"
+'   OWNER CONTACT "e-mail"
+'   OWNER DESCRIPTION "What the company does"
+'   PRODUCT DESCRIPTION "What the product is, its performance and use"
+'   PRODUCT IDENTIFICATION "Standard or other identification"
+'   MANUFACTURING "The main manufacturing processes"
+'   SITE "Town, country"
+'   CONTENT "Main material", 1 kg
+'   SVHC NONE
+'   GEOGRAPHY A1, A2, A3, C1, C2, C3, C4, D "GB"
+'   SCENARIO C1, C2, C3, C4, D "The end-of-life scenario"
+'   OMITTED A4, A5, B1, B2, B3, B4, B5, B6, B7 "Why they are left out"
+' END EPD DOCUMENT
+
 ' Once the report is right, EPD SAVE writes the EPD into openLCA as
 ' well: its own EPD entity with a stored result per module, which can
 ' be opened, exported and sent on from openLCA.

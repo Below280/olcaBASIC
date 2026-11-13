@@ -1722,6 +1722,89 @@ END EPD SENSITIVITY''',
               "then down and up for each group.",
         statements=("EpdSensitivityStmt",)),
     Command(
+        name="EPD DOCUMENT", topic="EPD",
+        usage='EPD DOCUMENT "file.md" ... END EPD DOCUMENT',
+        summary="Write the EPD itself, in the sections of the International EPD System",
+        syntax='''EPD DOCUMENT "file.md"
+  STATEMENTS "statements.txt"
+  OWNER "name"
+  OWNER ADDRESS "address"
+  OWNER CONTACT "e-mail or phone"
+  OWNER DESCRIPTION "the organisation"
+  [PRACTITIONER "who did the LCA, with contact details"]
+  PRODUCT DESCRIPTION "what it is, its performance and use"
+  PRODUCT IDENTIFICATION "standard, concession or other means"
+  [PRODUCT CODE "UN CPC", "code", "name"]
+  MANUFACTURING "the main processes"
+  SITE "city, country"                       (one per site)
+  [LIFESPAN "text"] [WEBSITE "address"] [RSL "text"]
+  CONTENT "material", n kg [RECYCLED n%] [PRECONSUMER n%] [BIOGENIC n%]
+  [PACKAGING "material", n kg]
+  SVHC NONE | SVHC "name", "EC No.", "CAS No.", n%
+  GEOGRAPHY module, module ... "scope"       (every declared module)
+  SCENARIO module, module ... "description"  (every declared module after A3)
+  OMITTED module, module ... "why"           (every module not declared)
+  [MASS PER UNIT n] [AREA DENSITY n] [THICKNESS n] [DENSITY n] [LINEAR DENSITY n]
+  [SOFTWARE "name and version"] [METHOD VERSION "EF 3.1"]
+  [INFRASTRUCTURE "how capital goods are modelled"]
+  [VERIFICATION "how"] [VERIFIER "who"] [APPROVED BY "who"] [TOOL "name"]
+  [FOLLOW UP YES|NO]
+  [REGISTRATION "number"] [VERSION DATE "YYYY-MM-DD"] [VALID UNTIL "YYYY-MM-DD"]
+  [LICENSEE "name"] [DIAGRAM "file"] [IMAGE "file"] [LOGO "file"]
+  [HISTORY "YYYY-MM-DD", "what changed"] [REFERENCE "text"]
+  [ABBREVIATION "short", "meaning"] [ADDITIONAL "text"]
+END EPD DOCUMENT''',
+        example='''EPD DOCUMENT "epd.md"
+  STATEMENTS "ies_statements.txt"
+  OWNER "Example Timber Ltd"
+  OWNER ADDRESS "1 Mill Lane, Hexham, United Kingdom"
+  OWNER CONTACT "epd@example.com"
+  OWNER DESCRIPTION "A family sawmill."
+  PRODUCT DESCRIPTION "Kiln-dried sawn softwood for construction."
+  PRODUCT IDENTIFICATION "Strength class C16 to EN 338"
+  MANUFACTURING "Logs are sawn, kiln-dried and planed."
+  SITE "Hexham, United Kingdom"
+  CONTENT "Timber", 1 kg BIOGENIC 100%
+  SVHC NONE
+  GEOGRAPHY A1, A2, A3, C1, C2, C3, C4, D "GB"
+  SCENARIO C1, C2, C3, C4, D "Demolished by hand, 90% burnt for energy"
+  OMITTED A4, A5, B1, B2, B3, B4, B5, B6, B7 "Depend on the building"
+END EPD DOCUMENT''',
+        notes="Writes the EPD as a Markdown document, in the sections and "
+              "order of GPI 5.1.0, 7.4: cover page, general information, "
+              "the EPD owner, the product, the content declaration, LCA "
+              "information, environmental performance, version history, "
+              "abbreviations and references. Needs PROGRAMME \"IES\" and "
+              "is refused until EPD REPORT has passed: the document "
+              "declares what the report declares.\n"
+              "From the model: the product, the declared unit, the EPD "
+              "type, the modules, every result to two significant digits "
+              "(7.2), the data sources and the share of primary data, the "
+              "data quality ratings of the datasets that give 80% of each "
+              "impact indicator, cut-offs, electricity, biogenic carbon, "
+              "module D's net flows and the method. From the block: what "
+              "only the EPD owner knows. Anything the programme requires "
+              "that is missing is refused, all of it listed at once, and "
+              "nothing is written.\n"
+              "Every declared module needs a GEOGRAPHY, every declared "
+              "module after A3 a SCENARIO, and every module not declared "
+              "a reason (OMITTED), except C and D under an EXEMPT block. "
+              "With biogenic carbon, every CONTENT line gives BIOGENIC n%. "
+              "A declared unit that is not a mass needs MASS PER UNIT; "
+              "area, volume and length units need their density.\n"
+              "The statements the programme requires word for word are "
+              "not part of olcaBASIC: keep them in a text file of your "
+              "own, one 'key: text' per line, with the keys cover, "
+              "iso14025, operator, ownership, comparability, relative, "
+              "end_of_life and primary_share, and name it with "
+              "STATEMENTS. Until the statements, the registration number, "
+              "the dates, the verification details, the software, the "
+              "method version, the diagram, the picture and the logo are "
+              "all given, the document is marked as a draft and lists "
+              "what is missing. It still has to be verified before it is "
+              "published.",
+        statements=("EpdDocumentStmt",)),
+    Command(
         name="EPD EXPORT MODEL", topic="EPD",
         usage='EPD EXPORT MODEL "file.json"',
         summary="Write the whole model of the EPD folder as JSON, for a verifier",
@@ -2036,6 +2119,7 @@ IPC_USE: Dict[str, Tuple[str, ...]] = {
     "DELETE": _READ + ("data/delete", "data/get/usage", "data/get/all"),
     "EPD DQ SHEET": _READ + ("result/calculate", "result/dispose"),
     "EPD DQ TABLE": _READ + ("result/calculate", "result/dispose"),
+    "EPD DOCUMENT": _READ + ("result/calculate", "result/dispose"),
     "EPD SENSITIVITY": _READ + ("data/get/parameters", "result/calculate",
                                 "result/state", "result/total-impacts",
                                 "result/dispose"),

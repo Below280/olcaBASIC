@@ -2583,7 +2583,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
     DATA_CATEGORIES = ("PRIMARY", "SECONDARY", "PROXY")
     EPD_COMMANDS = ("SYSTEMS", "CHECK", "CALCULATE", "REPORT", "DATA",
                     "STATUS", "CLOSE", "SAVE", "DQ", "SENSITIVITY",
-                    "EXPORT")
+                    "EXPORT", "DOCUMENT")
 
     # EPD SAVE: word(s) -> (key, kind)
     EPD_SAVE_OPTIONS = {
@@ -2842,6 +2842,8 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
         command = self.advance().upper()
         if command == "SENSITIVITY":
             return self.parse_epd_sensitivity(line)
+        if command == "DOCUMENT":
+            return self.parse_epd_document(line)
         stmt = EpdCommandStmt(line=line, command=command)
         if command == "DATA":
             if not self.match_keyword("QUALITY"):

@@ -485,7 +485,8 @@ def test_every_threshold_is_a_named_value_of_the_profile():
     assert p.module_d_in_totals is False
     assert set(p.clauses.values()) <= {
         "A.3.3", "A.5.1", "A.5.2", "A.5.3", "A.5.4", "A.6.2", "A.7.1",
-        "A.7.5", "A.8"}
+        "A.7.5", "A.8", "7.2", "7.4", "7.4.5", "7.4.6"}
+    assert (p.svhc_declare_pct, p.result_digits) == (0.1, 2)
 
 
 def test_the_workflow_holds_no_programme_numbers():

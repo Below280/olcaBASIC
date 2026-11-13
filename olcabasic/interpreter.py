@@ -92,6 +92,7 @@ class _QuietSink(OutputSink):
 
 _ENTITY_HANDLERS = {
     "EpdSensitivityStmt": "_exec_epd_sensitivity",
+    "EpdDocumentStmt": "_exec_epd_document",
     "EntityFindStmt": "_exec_entity_find",
     "EntityShowStmt": "_exec_entity_show",
     "EntityDeleteStmt": "_exec_entity_delete",
@@ -106,6 +107,7 @@ _ENTITY_HANDLERS = {
 
 _ENTITY_COMMANDS = {
     "EpdSensitivityStmt": "EPD SENSITIVITY",
+    "EpdDocumentStmt": "EPD DOCUMENT",
     "EntityFindStmt": "FIND", "EntityShowStmt": "SHOW",
     "EntityDeleteStmt": "DELETE", "EntityMoveStmt": "MOVE",
     "EntityExportStmt": "EXPORT", "MakeEntityStmt": "MAKE",
@@ -1850,6 +1852,39 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         epd.sensitivity(stmt.line, stmt.percent, groups,
                         self._eval_str(stmt.save)
                         if stmt.save is not None else "")
+
+    def _exec_epd_document(self, stmt):
+        self._require_bridge(stmt.line)
+        epd = self._require_epd(stmt.line, "EPD DOCUMENT")
+        if self.runtime.epd_module:
+            raise BasicError(
+                f"EPD DOCUMENT cannot run inside MODULE "
+                f"{self.runtime.epd_module}.", stmt.line,
+                hint="Close the module with END MODULE first.")
+
+        def number(expr, key, ln):
+            value = self._eval(expr)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                raise BasicError(f"{key} needs a number, got '{value}'.", ln)
+
+        lines = []
+        for e in stmt.lines:
+            key, ln = e["key"], e["line"]
+            args = []
+            for n, arg in enumerate(e["args"]):
+                if isinstance(arg, (bool, float, int)) or arg == "NONE":
+                    args.append(arg)          # parsed already
+                elif key in ("CONTENT", "PACKAGING") and n == 1:
+                    args.append(number(arg, key, ln))
+                elif key in ("MASS PER UNIT", "AREA DENSITY", "THICKNESS",
+                             "LINEAR DENSITY", "DENSITY"):
+                    args.append(number(arg, key, ln))
+                else:
+                    args.append(self._eval_str(arg))
+            lines.append(dict(e, args=args))
+        epd.document(stmt.line, self._eval_str(stmt.filename), lines)
 
     # ── EPD workflow ─────────────────────────────────────
 

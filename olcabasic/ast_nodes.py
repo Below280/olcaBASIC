@@ -867,6 +867,15 @@ class ShutdownStmt(Statement):
 # ── EPD toolkit (olcaBASIC 0.4.0) ────────────────────────
 
 @dataclass
+class EpdDocumentStmt(Statement):
+    """EPD DOCUMENT "file.md" ... END EPD DOCUMENT"""
+    filename: Expr = None
+    lines: List[Dict] = field(default_factory=list)
+    # each {"key", "args": [Expr], "options": {word: Expr}, "modules":
+    # [codes], "unit": str, "line"}
+
+
+@dataclass
 class EpdSensitivityStmt(Statement):
     """EPD SENSITIVITY BY n% ... GROUP "name" VARY a, b ... END EPD
     SENSITIVITY"""

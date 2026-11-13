@@ -420,6 +420,14 @@ def check(statements, runtime, connected: bool = True,
             elif stmt.command == "CLOSE":
                 epd_defined, epd_modules = False, None
 
+        elif isinstance(stmt, ast.EpdDocumentStmt):
+            if not epd_defined:
+                report.error(line, "EPD DOCUMENT needs an EPD, and none "
+                                   "is defined before it.",
+                             "Define one first: EPD \"name\" ... END EPD.")
+            report.writes.append(
+                f"EPD DOCUMENT \"{_literal(stmt.filename) or '?'}\" (file)")
+
         elif isinstance(stmt, ast.EpdSensitivityStmt):
             if not epd_defined:
                 report.error(line, "EPD SENSITIVITY needs an EPD, and none "

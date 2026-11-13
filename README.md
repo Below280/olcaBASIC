@@ -1115,6 +1115,7 @@ EXTRACT [FOLDER] "folder"
 | `EPD DQ SHEET` | olcaBASIC | Write the register of the datasets the data quality assessment has to cover |
 | `EPD DQ TABLE` | olcaBASIC | Write the data quality assessment table for the accompanying report |
 | `EPD SENSITIVITY` | olcaBASIC | Vary groups of parameters together and sum the modules |
+| `EPD DOCUMENT` | olcaBASIC | Write the EPD itself, in the sections of the International EPD System |
 | `EPD EXPORT MODEL` | olcaBASIC | Write the whole model of the EPD folder as JSON, for a verifier |
 | `EPD STATUS` / `EPD CLOSE` | olcaBASIC | Show how far the active EPD has got, or end EPD mode |
 | `DATA PRIMARY` / `DATA SECONDARY` / `DATA PROXY` / `CONTROL` | olcaBASIC | Declare where the data of a process or bridge comes from |
@@ -1168,6 +1169,35 @@ EPD SENSITIVITY BY n% [SAVE "file.csv"]
   GROUP "name" VARY parameter, parameter, ...
   ...
 END EPD SENSITIVITY
+EPD DOCUMENT "file.md"
+  STATEMENTS "statements.txt"
+  OWNER "name"
+  OWNER ADDRESS "address"
+  OWNER CONTACT "e-mail or phone"
+  OWNER DESCRIPTION "the organisation"
+  [PRACTITIONER "who did the LCA, with contact details"]
+  PRODUCT DESCRIPTION "what it is, its performance and use"
+  PRODUCT IDENTIFICATION "standard, concession or other means"
+  [PRODUCT CODE "UN CPC", "code", "name"]
+  MANUFACTURING "the main processes"
+  SITE "city, country"                       (one per site)
+  [LIFESPAN "text"] [WEBSITE "address"] [RSL "text"]
+  CONTENT "material", n kg [RECYCLED n%] [PRECONSUMER n%] [BIOGENIC n%]
+  [PACKAGING "material", n kg]
+  SVHC NONE | SVHC "name", "EC No.", "CAS No.", n%
+  GEOGRAPHY module, module ... "scope"       (every declared module)
+  SCENARIO module, module ... "description"  (every declared module after A3)
+  OMITTED module, module ... "why"           (every module not declared)
+  [MASS PER UNIT n] [AREA DENSITY n] [THICKNESS n] [DENSITY n] [LINEAR DENSITY n]
+  [SOFTWARE "name and version"] [METHOD VERSION "EF 3.1"]
+  [INFRASTRUCTURE "how capital goods are modelled"]
+  [VERIFICATION "how"] [VERIFIER "who"] [APPROVED BY "who"] [TOOL "name"]
+  [FOLLOW UP YES|NO]
+  [REGISTRATION "number"] [VERSION DATE "YYYY-MM-DD"] [VALID UNTIL "YYYY-MM-DD"]
+  [LICENSEE "name"] [DIAGRAM "file"] [IMAGE "file"] [LOGO "file"]
+  [HISTORY "YYYY-MM-DD", "what changed"] [REFERENCE "text"]
+  [ABBREVIATION "short", "meaning"] [ADDITIONAL "text"]
+END EPD DOCUMENT
 EPD EXPORT MODEL "file.json"
 EPD STATUS | EPD CLOSE
 DATA PRIMARY SOURCE "Collected" PROVIDER "EPD owner" YEAR 2025

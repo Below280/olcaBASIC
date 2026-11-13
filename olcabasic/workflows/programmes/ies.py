@@ -117,6 +117,31 @@ class Profile:
     # Data categories (A.5.1)
     data_categories: Tuple[str, ...] = ("PRIMARY", "SECONDARY", "PROXY")
 
+    # Section 7: the EPD document. Names and addresses are facts the
+    # document states; the statements the programme requires word for
+    # word are not reproduced here: EPD DOCUMENT reads them from a file
+    # the user keeps (STATEMENTS), by these keys, and marks the document
+    # as a draft while any is missing.
+    programme_title: str = "The International EPD System"
+    operator_name: str = "EPD International AB"
+    programme_website: str = "www.environdec.com"
+    statement_keys: Dict[str, str] = field(default_factory=lambda: {
+        "cover": "7.4.1 (cover page: updates and the latest version)",
+        "iso14025": "7.4.1 (cover page: conformity with ISO 14025)",
+        "operator": "7.4.2.1 (programme operator's address)",
+        "ownership": "7.4.2.4 (ownership and liability)",
+        "comparability": "7.4.2.4 (comparability of EPDs)",
+        "relative": "7.4.7 (results are relative expressions)",
+        "end_of_life": "7.4.7 (consider the end-of-life results)",
+        "primary_share": "A.5.4 (how the share of primary data is "
+                         "calculated)",
+    })
+    # 7.4.5: a substance of very high concern above this share of the
+    # product's mass is declared
+    svhc_declare_pct: float = 0.1
+    # 7.2: significant digits in result tables
+    result_digits: int = 2
+
     # Where each rule comes from, for error messages and the report
     clauses: Dict[str, str] = field(default_factory=lambda: {
         "cutoff": "A.3.3",
@@ -134,6 +159,10 @@ class Profile:
         "location_based": "A.6.2",
         "impact_indicators": "A.5.4",
         "ratings": "A.5.4",
+        "document": "7.4",
+        "content": "7.4.5",
+        "lca_information": "7.4.6",
+        "units": "7.2",
     })
 
     # Rules that come from the PCR, not the GPI
