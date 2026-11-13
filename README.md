@@ -50,6 +50,18 @@ If openLCA isn't running, olcaBASIC starts in offline mode and tells
 you how to start the IPC server. Press Tab to complete commands and
 names (on Windows, install `pip install olcabasic[completion]` first).
 
+### Give openLCA enough memory
+
+The openLCA installer sets openLCA's maximum memory to about 3.5 GB.
+That is not enough for a product system on a large background database
+such as ecoinvent: during a contribution analysis or a full read of a
+system, openLCA runs out of memory, drops the IPC connection and may
+restart itself. Set the maximum memory in openLCA (File > Preferences >
+Configuration) to 10 GB or more if the computer has it, then restart
+openLCA. olcaBASIC cannot read this setting through IPC, so it can only
+tell you afterwards: when openLCA drops the connection, the error says
+so and points here.
+
 ## What 0.4 changed
 
 olcaBASIC now holds the engine that talks to openLCA, and no longer
