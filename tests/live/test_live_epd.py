@@ -337,6 +337,7 @@ def test_the_toolkit_on_a_small_epd(live, bridge, tmp_path):
     sens = tmp_path / "sensitivity.csv"
     model = tmp_path / "model.json"
     report = tmp_path / "report.csv"
+    document = tmp_path / "epd.md"
     ratings = ('  RATING GEOGRAPHY "Good" REASON "Live test, same market"\n'
                '  RATING TECHNOLOGY "Good" REASON "Live test"\n'
                '  RATING TIME "Fair" REASON "Live test"\n')
@@ -401,6 +402,20 @@ EPD SENSITIVITY BY 10% SAVE "{sens.as_posix()}"
 END EPD SENSITIVITY
 EPD EXPORT MODEL "{model.as_posix()}"
 EPD REPORT "{report.as_posix()}"
+EPD DOCUMENT "{document.as_posix()}"
+  OWNER "Live test owner"
+  OWNER ADDRESS "Live test address"
+  OWNER CONTACT "live@example.com"
+  OWNER DESCRIPTION "Live test organisation."
+  PRODUCT DESCRIPTION "Live test product."
+  PRODUCT IDENTIFICATION "Live test identification"
+  MANUFACTURING "One process that uses electricity."
+  SITE "Live test town, United Kingdom"
+  CONTENT "Live test material", 1 kg
+  SVHC NONE
+  GEOGRAPHY A1, A2, A3 "GB"
+  OMITTED A4, A5, B1, B2, B3, B4, B5, B6, B7 "Live test"
+END EPD DOCUMENT
 '''
     try:
         r = live.session.run(program)
@@ -455,6 +470,14 @@ EPD REPORT "{report.as_posix()}"
         assert ex["amount_formula"] == TOOLKIT_PARAM
         assert any(g["name"] == TOOLKIT_PARAM
                    for g in data["global_parameters"])
+        # the EPD document: every result of the real method, a draft
+        # until the statements and the verification are given
+        doc = document.read_text(encoding="utf-8")
+        assert doc.startswith("> **DRAFT, not for publication.**")
+        assert "## Environmental performance" in doc
+        assert "| GWP-GHG |" in doc and "| X | X | X | ND |" in doc
+        assert "exemption of EN 15804+A2, 5.2" in doc
+        assert calls["epd_document"]["draft"] is True
         assert live.session.open_results == []
     finally:
         cleanup()
