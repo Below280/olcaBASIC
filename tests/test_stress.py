@@ -200,3 +200,31 @@ def test_calculating_a_background_process_on_its_own_is_allowed(s):
     the bridge rule: there is no model of yours in it."""
     r = s.run(f'SYSTEM "{STEEL}"\nCALCULATE "{STEEL}" USING "{EF}"')
     assert r.ok, r.errors
+
+
+def _epd_calculated(monkeypatch):
+    import test_epd_toolkit as t
+    monkeypatch.setattr(EpdWorkflow, "today",
+                        staticmethod(lambda: datetime.date(2026, 11, 12)))
+    c = t.add_epd_methods(seed_ecoinvent_like())
+    s = Session(client=c)
+    s.run('DATABASE FAMILY "ecoinvent"')
+    r = s.run(t.PARAMS + t.block() + t.bridges(c) + t.modules() + t.STEPS)
+    assert r.ok, r.text
+    return s
+
+
+def test_a_parameter_written_after_epd_calculate_sets_the_results_aside(
+        monkeypatch, tmp_path):
+    s = _epd_calculated(monkeypatch)
+    r = s.run("UPDATE PARAMETER kiln_kwh = 99")
+    assert "was calculated with the old value of kiln_kwh" in r.text
+    refused(s.run(f'EPD DATA QUALITY\nEPD REPORT "{tmp_path / "r.csv"}"'),
+            "needs the results")
+
+
+def test_let_on_a_global_says_openlca_still_has_the_old_value(monkeypatch):
+    s = _epd_calculated(monkeypatch)
+    r = s.run("LET kiln_kwh = 99")
+    assert r.ok
+    assert "kiln_kwh is a global parameter in openLCA, where it is 2" in r.text

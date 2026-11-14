@@ -809,6 +809,19 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
     def _exec_let(self, stmt: LetStmt):
         value = self._eval(stmt.expr)
+        synced = self.runtime.synced_globals.get(stmt.name)
+        if (synced is not None and synced[0] == "value"
+                and self.runtime.current_scope is self.runtime.global_scope
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and float(value) != synced[1]
+                and not getattr(self, "_in_update_param", False)):
+            self.out.write(
+                f"  NOTE: {stmt.name} is a global parameter in openLCA, "
+                f"where it is {_fmt_num(synced[1])}. This LET changes the "
+                f"program's copy only, until a PROCESS that uses it is "
+                f"built again. UPDATE PARAMETER {stmt.name} = ... writes it "
+                f"to openLCA now.")
         self.runtime.set_var(stmt.name, value)
         # Top-level variables defined from other variables keep their
         # expression, so they become formula parameters in openLCA
@@ -1522,6 +1535,15 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                   f"this database that use it will change too.")
         self.runtime.synced_globals[name] = desired
         self._sync_uncertainty(name, line)
+        # the EPD's results were worked out with the old value
+        epd = self.runtime.epd
+        if previous is not None and previous != desired and epd is not None \
+                and epd.results:
+            epd._reset_progress()
+            self.out.write(f"  NOTE: the EPD '{epd.name}' was calculated "
+                           f"with the old value of {name}. Its checks and "
+                           f"results are set aside: run EPD CHECK and EPD "
+                           f"CALCULATE again.")
 
     def _check_overridable(self, names, what: str, line: int):
         """Derived variables are calculated by openLCA; point users at
@@ -2852,7 +2874,12 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                              stmt.line)
         before = (self.runtime.get_var(stmt.name)
                   if self.runtime.has_var(stmt.name) else None)
-        self._exec_let(LetStmt(line=stmt.line, name=stmt.name, expr=stmt.expr))
+        self._in_update_param = True
+        try:
+            self._exec_let(LetStmt(line=stmt.line, name=stmt.name,
+                                   expr=stmt.expr))
+        finally:
+            self._in_update_param = False
         self._sync_global(stmt.name, stmt.line, force=True)
         expr = self.runtime.var_exprs.get(stmt.name)
         now = self.runtime.get_var(stmt.name)
