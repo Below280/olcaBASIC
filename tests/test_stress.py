@@ -316,3 +316,32 @@ def test_free_text_that_looks_like_markup_stays_text(monkeypatch, tmp_path,
             "word/document.xml").decode("utf-8")
         assert '<w:t xml:space="preserve"># Not a heading</w:t>' in xml
         assert "\x01" not in xml
+
+
+# ── SUB and FUNCTION heads that used to hang the parser ──────
+
+@pytest.mark.parametrize("code, words", [
+    ("SUB A(1)\nEND SUB", "the values it takes are names"),
+    ("SUB A(x\nPRINT 1", "got the end of the line"),
+    ("FUNCTION F(1, 2)\nEND FUNCTION", "the values it takes are names"),
+    ("SUB 5\nEND SUB", "SUB needs a name"),
+    ("SUB A(x, x)\nEND SUB", "names 'x' twice"),
+    ("SUB A\nEND FUNCTION", "ends with END SUB"),
+    ("FUNCTION F(x) AS\nEND FUNCTION", "AS needs a type name"),
+])
+def test_a_bad_sub_or_function_head_is_an_error_not_a_hang(s, code, words):
+    refused(s.run(code), words)
+
+
+@pytest.mark.parametrize("code, words", [
+    ("PRINT ABS(1", "missing its closing )"),
+    ("PRINT ABS(1 2)", "expected a comma or )"),
+    ("PRINT ABS(", "The line ends where a value was expected"),
+    ("PRINT SQR(4, 5)", "SQR takes 1 value, and was given 2"),
+    ("PRINT ABS()", "ABS takes 1 value, and was given 0"),
+    ('PRINT MID$("abc", 0, 2)', "the start is 1 or more"),
+    ('PRINT LEFT$("abc", -1)', "cannot be below 0"),
+    ('FOR i = "a" TO 3\nNEXT i', 'FOR needs a number for the start'),
+])
+def test_function_calls_and_loops_with_wrong_values(s, code, words):
+    refused(s.run(code), words)

@@ -191,6 +191,34 @@ def _val(text):
         raise ValueError("the text is not a number")
 
 
+# how many values each built-in function takes: (fewest, most); None is
+# no upper limit
+BUILTIN_ARITY = {
+    "ABS": (1, 1), "INT": (1, 1), "SQR": (1, 1), "LOG": (1, 1),
+    "EXP": (1, 1), "SIN": (1, 1), "COS": (1, 1), "TAN": (1, 1),
+    "MIN": (1, None), "MAX": (1, None), "ROUND": (1, 2), "LEN": (1, 1),
+    "VAL": (1, 1), "LEFT$": (2, 2), "RIGHT$": (2, 2), "MID$": (2, 3),
+    "INSTR": (2, 2), "SGN": (1, 1), "STR$": (1, 1), "TRIM$": (1, 1),
+    "UCASE$": (1, 1), "LCASE$": (1, 1),
+}
+
+
+def _count(n, what: str = "a count") -> int:
+    if isinstance(n, str):
+        raise ValueError(f"{what} is a number, not text")
+    if n < 0:
+        raise ValueError(f"{what} cannot be below 0")
+    return int(n)
+
+
+def _start(n) -> int:
+    if isinstance(n, str):
+        raise ValueError("the start is a number, not text")
+    if n < 1:
+        raise ValueError("the start is 1 or more (the first character)")
+    return int(n)
+
+
 def _why(e: Exception) -> str:
     text = str(e)
     if "must be real number" in text or "not supported between" in text \
@@ -229,13 +257,12 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             "ROUND": round,
             "LEN": len,
             "VAL": _val,
-            "LEFT$": lambda s, n: str(s)[:max(int(n), 0)],
-            "RIGHT$": lambda s, n: str(s)[-int(n):] if int(n) > 0 else "",
+            "LEFT$": lambda s, n: str(s)[:_count(n)],
+            "RIGHT$": lambda s, n: str(s)[-_count(n):] if _count(n) else "",
             "MID$": lambda s, start, n=None: (
-                str(s)[max(int(start), 1) - 1:]
+                str(s)[_start(start) - 1:]
                 if n is None else
-                str(s)[max(int(start), 1) - 1:max(int(start), 1) - 1
-                       + max(int(n), 0)]),
+                str(s)[_start(start) - 1:_start(start) - 1 + _count(n)]),
             "INSTR": lambda s, find: str(s).find(str(find)) + 1,
             "SGN": lambda x: (x > 0) - (x < 0),
             "STR$": str,
@@ -746,6 +773,15 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         # Built-in functions
         if name_upper in self._builtins:
+            low, high = BUILTIN_ARITY.get(name_upper, (0, None))
+            if len(args) < low or (high is not None and len(args) > high):
+                takes = (f"{low}" if low == high else
+                         f"{low} or more" if high is None else
+                         f"{low} or {high}")
+                raise BasicError(
+                    f"{name_upper} takes {takes} "
+                    f"value{'' if takes == '1' else 's'}, and was given "
+                    f"{len(args)}.", 0)
             try:
                 value = self._builtins[name_upper](*args)
             except (ValueError, OverflowError, TypeError, ZeroDivisionError) \
@@ -2747,9 +2783,15 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             self._execute_block(stmt.else_body)
 
     def _exec_for(self, stmt: ForStmt):
-        start = float(self._eval(stmt.start))
-        end = float(self._eval(stmt.end))
-        step = float(self._eval(stmt.step)) if stmt.step else 1.0
+        def number(expr, what):
+            value = self._eval(expr)
+            if isinstance(value, str):
+                raise BasicError(f"FOR needs a number for {what}, and was "
+                                 f"given the text \"{value}\".", stmt.line)
+            return float(value)
+        start = number(stmt.start, "the start")
+        end = number(stmt.end, "the end (TO)")
+        step = number(stmt.step, "STEP") if stmt.step else 1.0
 
         if step == 0:
             raise BasicError("FOR loop STEP cannot be 0", stmt.line)

@@ -268,12 +268,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
             if self.peek().type == TokenType.LPAREN:
                 self.advance()
                 args = []
-                while self.peek().type != TokenType.RPAREN:
-                    args.append(self.parse_expr())
-                    if self.peek().type == TokenType.COMMA:
-                        self.advance()
-                if self.peek().type == TokenType.RPAREN:
-                    self.advance()
+                args = self._call_args(name)
                 return FuncCall(name, args)
             return Identifier(name)
 
@@ -282,12 +277,7 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
                 and self.peek_at(1).type == TokenType.LPAREN):
             self.advance()
             self.advance()
-            args = []
-            while self.peek().type != TokenType.RPAREN:
-                args.append(self.parse_expr())
-                if self.peek().type == TokenType.COMMA:
-                    self.advance()
-            self.advance()
+            args = self._call_args(tok.value)
             return FuncCall(tok.value, args)
 
         # Allow keywords to be used as identifiers in expressions
@@ -296,7 +286,10 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
             self.advance()
             return Identifier(tok.value)
 
-        raise ParseError(f"Unexpected token: '{tok.value}'", tok.line)
+        if tok.type in (TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT):
+            raise ParseError("The line ends where a value was expected.",
+                             tok.line)
+        raise ParseError(f"Expected a value, got '{tok.value}'.", tok.line)
 
     def parse_string_or_expr(self) -> Expr:
         """Parse something that is expected to be a string
@@ -2194,19 +2187,71 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
 
         return WhileStmt(line=line, condition=condition, body=body)
 
-    def parse_sub_def(self, line: int) -> SubDef:
-        self.advance()  # SUB
+    def _call_args(self, name: str) -> list:
+        """The values of NAME(a, b, ...), after its (."""
+        args = []
+        while self.peek().type != TokenType.RPAREN:
+            args.append(self.parse_expr())
+            tok = self.peek()
+            if tok.type == TokenType.COMMA:
+                self.advance()
+                continue
+            if tok.type != TokenType.RPAREN:
+                if tok.type in (TokenType.NEWLINE, TokenType.EOF,
+                                TokenType.COMMENT):
+                    raise ParseError(f"{name}( is missing its closing ).",
+                                     self.current_line())
+                raise ParseError(f"{name}(...): expected a comma or ) "
+                                 f"before '{tok.value}'.",
+                                 self.current_line())
+        self.advance()  # )
+        return args
+
+    def _routine_head(self, kind: str, line: int):
+        """The name of a SUB or FUNCTION and its (a, b, ...) list."""
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER:
+            what = ("nothing" if tok.type in (TokenType.NEWLINE,
+                                              TokenType.EOF)
+                    else f"'{tok.value}'")
+            raise ParseError(f"{kind} needs a name, and got {what}.", line,
+                             hint=f"For example: {kind} Total(a, b)")
         name = self.advance().value
         params = []
         if self.peek().type == TokenType.LPAREN:
             self.advance()
             while self.peek().type != TokenType.RPAREN:
-                if self.peek().type in (TokenType.IDENTIFIER,
-                                         TokenType.KEYWORD):
-                    params.append(self.advance().value)
+                tok = self.peek()
+                if tok.type != TokenType.IDENTIFIER:
+                    what = ("the end of the line" if tok.type in (
+                        TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT)
+                        else f"'{tok.value}'")
+                    raise ParseError(
+                        f"{kind} {name}: the values it takes are names "
+                        f"separated by commas and closed with ), and here "
+                        f"there is {what}.", line,
+                        hint=f"For example: {kind} {name}(a, b)")
+                if tok.value in params:
+                    raise ParseError(f"{kind} {name} names '{tok.value}' "
+                                     f"twice.", line)
+                params.append(self.advance().value)
                 if self.peek().type == TokenType.COMMA:
                     self.advance()
+                elif self.peek().type != TokenType.RPAREN:
+                    tok = self.peek()
+                    got = ("the end of the line" if tok.type in (
+                        TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT)
+                        else f"'{tok.value}'")
+                    raise ParseError(
+                        f"{kind} {name}: expected a comma or ), got "
+                        f"{got}.", line,
+                        hint=f"For example: {kind} {name}(a, b)")
             self.advance()  # consume )
+        return name, params
+
+    def parse_sub_def(self, line: int) -> SubDef:
+        self.advance()  # SUB
+        name, params = self._routine_head("SUB", line)
         self.expect_newline()
         self.skip_newlines()
 
@@ -2220,26 +2265,23 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
             self.skip_newlines()
 
         self.expect_keyword("END")
-        self.match_keyword("SUB")
+        if not self.match_keyword("SUB") and self.peek().type not in (
+                TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT):
+            raise ParseError(f"SUB {name} ends with END SUB, not END "
+                             f"{self.peek().value}.", self.current_line())
         self.expect_newline()
 
         return SubDef(line=line, name=name, params=params, body=body)
 
     def parse_function_def(self, line: int) -> FunctionDef:
         self.advance()  # FUNCTION
-        name = self.advance().value
-        params = []
-        if self.peek().type == TokenType.LPAREN:
-            self.advance()
-            while self.peek().type != TokenType.RPAREN:
-                if self.peek().type in (TokenType.IDENTIFIER,
-                                         TokenType.KEYWORD):
-                    params.append(self.advance().value)
-                if self.peek().type == TokenType.COMMA:
-                    self.advance()
-            self.advance()
+        name, params = self._routine_head("FUNCTION", line)
         # Optional AS type
         if self.match_keyword("AS"):
+            if self.peek().type not in (TokenType.IDENTIFIER,
+                                        TokenType.KEYWORD):
+                raise ParseError("AS needs a type name after it, or leave "
+                                 "AS out.", line)
             self.advance()  # skip type name
         self.expect_newline()
         self.skip_newlines()
@@ -2254,7 +2296,10 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
             self.skip_newlines()
 
         self.expect_keyword("END")
-        self.match_keyword("FUNCTION")
+        if not self.match_keyword("FUNCTION") and self.peek().type not in (
+                TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT):
+            raise ParseError(f"FUNCTION {name} ends with END FUNCTION, not "
+                             f"END {self.peek().value}.", self.current_line())
         self.expect_newline()
 
         return FunctionDef(line=line, name=name, params=params,
