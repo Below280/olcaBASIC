@@ -486,8 +486,9 @@ END EPD DOCUMENT
             xml = z.read("word/document.xml").decode("utf-8")
         assert "GWP-GHG" in xml and "Environmental performance" in xml
         # A.5.4: the core process's reference year is declared
-        assert "Other A3 (core) process" in doc or \
-            dq["rows"][0]["process"] == bridge["name"]
+        assert {"process": "A3 | Manufacturing", "year": 2025} in \
+            dq["a3_years"]
+        assert "| A3 / Manufacturing | 2025 |" in doc
         assert live.session.open_results == []
     finally:
         cleanup()
