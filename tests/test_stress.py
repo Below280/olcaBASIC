@@ -372,3 +372,59 @@ def test_a_program_past_its_time_limit_is_stopped(s):
     # the next run has no limit left over
     assert s.run("PRINT 1").ok
     assert s.interpreter.deadline is None
+
+
+def test_a_chain_of_powers_needs_brackets(s):
+    refused(s.run("PRINT 2 ^ 3 ^ 2"), "can be read two ways")
+    r = s.run("PRINT (2 ^ 3) ^ 2\nPRINT 2 ^ (3 ^ 2)\nPRINT -2 ^ 2\n"
+              "PRINT 2 ^ -1")
+    assert r.ok and r.text.split() == ["64", "512", "-4", "0.5"]
+
+
+# ── formulas written to openLCA (checked on openLCA 2.7.0, 14/11/2026:
+#    sqr is x squared there, log is base 10, int cuts towards zero,
+#    values are separated by ;, and a comparison is not a number) ──────
+
+def _formula(s, client, amount):
+    r = s.run(SETUP + f'LET x = 4\nMAKE PROCESS "F"\n  OUTPUT MAKE FLOW '
+                      f'"F", 1, kg, PRODUCT\n  OUTPUT "Carbon dioxide, '
+                      f'fossil", {amount}, kg TO AIR\nEND PROCESS')
+    if not r.ok:
+        return r
+    p = client.by_name(o.Process, "F")[0]
+    return next(e for e in p.exchanges if not e.is_quantitative_reference)
+
+
+@pytest.mark.parametrize("amount, formula", [
+    ("SQR(x)", "sqrt(x)"),
+    ("LOG(x)", "ln(x)"),
+    ("INT(-x / 3)", "floor(((-x) / 3.0))"),
+    ("MIN(x, 2)", "min(x; 2.0)"),
+    ("ROUND(x / 8)", "round((x / 8.0))"),
+])
+def test_functions_are_written_as_openlca_reads_them(s, client, amount,
+                                                     formula):
+    assert _formula(s, client, amount).amount_formula == formula
+
+
+@pytest.mark.parametrize("amount, words", [
+    ("SGN(x)", "SGN() cannot go into an openLCA formula"),
+    ("ROUND(x, 1)", "ROUND() cannot go into an openLCA formula"),
+    ("(x > 2)", "'>' cannot go into an openLCA formula"),
+    ("(x > 2) AND (x < 9)", "cannot go into an openLCA formula"),
+])
+def test_what_openlca_would_read_differently_is_refused(s, client, amount,
+                                                        words):
+    refused(_formula(s, client, amount), words)
+
+
+def test_round_rounds_halves_up_as_openlca_does(s):
+    r = s.run("PRINT ROUND(2.5)\nPRINT ROUND(-2.5)\nPRINT ROUND(1.25, 1)")
+    assert r.text.split() == ["3", "-2", "1.3"]
+
+
+def test_a_comma_between_function_values_in_a_formula_is_refused():
+    from olcabasic.engine.validators import validate_formula
+    assert "separates the values" in validate_formula("min(a,b)")
+    assert validate_formula("min(a; b) * 2") is None
+    assert validate_formula("if(a > 0; 1; 0)") is None

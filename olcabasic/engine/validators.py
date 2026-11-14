@@ -34,7 +34,7 @@ def validate_param_name(name: str, index: int = 0) -> Optional[str]:
 
 
 FORMULA_ALLOWED = re.compile(
-    r'^[A-Za-z0-9_\s\.\+\-\*/\(\),\^%<>=!&|?:]+$'
+    r'^[A-Za-z0-9_\s\.\+\-\*/\(\),;\^%<>=!&|?:]+$'
 )
 
 def validate_formula(formula: str, index: int = 0) -> Optional[str]:
@@ -54,12 +54,20 @@ def validate_formula(formula: str, index: int = 0) -> Optional[str]:
         )
     # Reject characters outside the allowed set for openLCA formulas
     if not FORMULA_ALLOWED.match(formula):
-        bad_chars = set(c for c in formula if not re.match(r'[A-Za-z0-9_\s\.\+\-\*/\(\),\^%<>=!&|?:]', c))
+        bad_chars = set(c for c in formula if not re.match(r'[A-Za-z0-9_\s\.\+\-\*/\(\),;\^%<>=!&|?:]', c))
         return (
             f"Exchange {index}: formula contains invalid characters: "
             f"{bad_chars}. openLCA formulas support arithmetic "
             f"expressions, parameter names, and functions like "
-            f"min(), max(), abs(), sqrt(), ln(), exp()."
+            f"min(a; b), max(a; b), abs(), sqrt(), ln(), exp()."
+        )
+    # openLCA separates the values of a function with ;. Given a comma,
+    # min(3,2) comes out as 1 on openLCA 2.7.0, with no error.
+    if re.search(r"[A-Za-z_]\w*\s*\([^()]*,", formula):
+        return (
+            f"Exchange {index}: formula '{formula}' separates the values "
+            f"of a function with a comma. openLCA reads them with ; "
+            f"(min(a; b)), and gets a comma wrong without saying so."
         )
     return None
 

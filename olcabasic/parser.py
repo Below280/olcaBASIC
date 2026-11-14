@@ -238,7 +238,19 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
         base = self.parse_primary()
         if self.peek().type == TokenType.CARET:
             self.advance()
-            exponent = self.parse_unary()   # right-associative
+            if self.peek().type == TokenType.MINUS:
+                self.advance()
+                exponent = UnaryOp("-", self.parse_primary())
+            else:
+                exponent = self.parse_primary()
+            if self.peek().type == TokenType.CARET:
+                # BASIC and Excel read a^b^c as (a^b)^c, maths and Python
+                # as a^(b^c); a formula passed to openLCA must not depend
+                # on which, so brackets are required
+                raise ParseError(
+                    "a ^ b ^ c can be read two ways, so it needs brackets.",
+                    self.peek().line,
+                    hint="Write (a ^ b) ^ c or a ^ (b ^ c).")
             return BinOp(base, "^", exponent)
         return base
 

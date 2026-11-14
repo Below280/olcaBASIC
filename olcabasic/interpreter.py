@@ -204,6 +204,27 @@ BUILTIN_ARITY = {
 }
 
 
+# olcaBASIC's functions as openLCA's formula interpreter names them,
+# checked on openLCA 2.7.0: there sqr(x) is x squared, log is base 10
+# and int cuts towards zero, so SQR, LOG and INT have to be renamed
+FORMULA_FUNCTIONS = {
+    "ABS": "abs", "SQR": "sqrt", "LOG": "ln", "EXP": "exp", "SIN": "sin",
+    "COS": "cos", "TAN": "tan", "MIN": "min", "MAX": "max", "INT": "floor",
+    "ROUND": "round",
+}
+
+
+def _round(x, digits=None):
+    """Halves round up, as openLCA's round does (Java's Math.round):
+    ROUND(2.5) is 3 and ROUND(-2.5) is -2. Python's round would give 2."""
+    if isinstance(x, str) or isinstance(digits, str):
+        raise ValueError("ROUND works on numbers")
+    if digits is None:
+        return float(math.floor(x + 0.5))
+    scale = 10 ** int(digits)
+    return math.floor(x * scale + 0.5) / scale
+
+
 def _count(n, what: str = "a count") -> int:
     if isinstance(n, str):
         raise ValueError(f"{what} is a number, not text")
@@ -257,7 +278,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             "TAN": math.tan,
             "MIN": min,
             "MAX": max,
-            "ROUND": round,
+            "ROUND": _round,
             "LEN": len,
             "VAL": _val,
             "LEFT$": lambda s, n: str(s)[:_count(n)],
@@ -852,15 +873,47 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                     return repr(float(value))
             return expr.name
         if isinstance(expr, BinOp):
+            if expr.op not in ("+", "-", "*", "/", "^"):
+                raise BasicError(
+                    f"'{expr.op}' cannot go into an openLCA formula: there "
+                    f"a comparison is not a number, and openLCA would keep "
+                    f"the old amount without saying so.", self._line,
+                    hint="Decide with IF ... THEN in the program and give "
+                         "the amount as a sum.")
             left = self._expr_to_formula(expr.left)
             right = self._expr_to_formula(expr.right)
             return f"({left} {expr.op} {right})"
         if isinstance(expr, UnaryOp):
+            if expr.op != "-":
+                raise BasicError(
+                    f"{expr.op} cannot go into an openLCA formula.",
+                    self._line,
+                    hint="Decide with IF ... THEN in the program and give "
+                         "the amount as a sum.")
             operand = self._expr_to_formula(expr.operand)
             return f"({expr.op}{operand})"
+        if isinstance(expr, (Comparison, LogicalOp)):
+            raise BasicError(
+                f"'{expr.op}' cannot go into an openLCA formula: there a "
+                f"comparison is not a number, and openLCA would keep the "
+                f"old amount without saying so.", self._line,
+                hint="Decide with IF ... THEN in the program and give the "
+                     "amount as a sum.")
         if isinstance(expr, FuncCall):
-            args = ", ".join(self._expr_to_formula(a) for a in expr.args)
-            return f"{expr.name}({args})"
+            name = expr.name.upper()
+            target = FORMULA_FUNCTIONS.get(name)
+            if target is None or (name == "ROUND" and len(expr.args) != 1):
+                raise BasicError(
+                    f"{expr.name}() cannot go into an openLCA formula: "
+                    f"openLCA has no function that works the same way, so "
+                    f"the amount would be worked out differently there.",
+                    self._line,
+                    hint="Work the value out with LET first, or use ABS, "
+                         "SQR, LOG, EXP, SIN, COS, TAN, MIN, MAX, INT or "
+                         "ROUND(x).")
+            # openLCA separates the values of a function with ;
+            args = "; ".join(self._expr_to_formula(a) for a in expr.args)
+            return f"{target}({args})"
         # Fallback: evaluate and return as string
         return str(self._eval(expr))
 
@@ -878,6 +931,9 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             return self._expr_is_variable(expr.operand)
         if isinstance(expr, FuncCall):
             return any(self._expr_is_variable(a) for a in expr.args)
+        if isinstance(expr, (Comparison, LogicalOp)):
+            return (self._expr_is_variable(expr.left)
+                    or self._expr_is_variable(expr.right))
         return False
 
     # ── Statement executors ──────────────────────────────

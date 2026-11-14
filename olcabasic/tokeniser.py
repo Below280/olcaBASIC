@@ -239,7 +239,10 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
             else:
                 # Try negative number
                 m = _NUMBER_PAT.match(text, pos + 1)
-                if m and m.start() == pos + 1:
+                # -2 ^ 2 is -(2 ^ 2), as -x ^ 2 is: a minus before a power
+                # stays an operator
+                if (m and m.start() == pos + 1
+                        and not text[m.end():].lstrip().startswith("^")):
                     _finite(m.group(1), line_number)
                     tokens.append(Token(TokenType.NUMBER,
                                         "-" + m.group(1),
