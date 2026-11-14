@@ -567,7 +567,7 @@ def test_delete_missing_thing_is_not_an_error(run):
 
 
 def test_delete_asks_when_confirm_is_off(run, client, monkeypatch):
-    run(WIDGET + "CONFIRM DELETE OFF")
+    run(WIDGET + 'DELETE SYSTEM "Widget"\nCONFIRM DELETE OFF')
     monkeypatch.setattr("builtins.input", lambda prompt="": "no")
     out = run('DELETE PROCESS "Widget"')
     assert "Cancelled." in out

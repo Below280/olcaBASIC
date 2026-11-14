@@ -131,7 +131,9 @@ KEYWORDS = {
 # instead, so we just tokenise each word individually.
 
 # Regex patterns
-_STRING_PAT = re.compile(r'"([^"]*)"')
+# A doubled quote inside a string stands for one quote, as in BASIC:
+# "Bob""s widget" is Bob"s widget.
+_STRING_PAT = re.compile(r'"((?:[^"]|"")*)"')
 _NUMBER_PAT = re.compile(
     r'(?<![A-Za-z_])((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)'
 )
@@ -173,7 +175,8 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
         if text[pos] == '"':
             m = _STRING_PAT.match(text, pos)
             if m:
-                tokens.append(Token(TokenType.STRING, m.group(1),
+                tokens.append(Token(TokenType.STRING,
+                                    m.group(1).replace('""', '"'),
                                     line_number, pos))
                 pos = m.end()
                 continue
@@ -324,6 +327,8 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
 
 def tokenise(source: str) -> List[Token]:
     """Tokenise a complete olcaBASIC program."""
+    # a file saved with a byte order mark (Windows Notepad) starts with it
+    source = source.lstrip("\ufeff")
     all_tokens = []
     lines = source.split("\n")
     accumulated = ""

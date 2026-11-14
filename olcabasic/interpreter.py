@@ -16,6 +16,7 @@ from .runtime import Runtime
 from .bridge import LCABridge
 from .output import OutputSink, PrintSink, NoInteraction
 from .parser import parse, parse_line, ParseError
+from .background import REFUSAL_HINT as BACKGROUND_HINT, is_background_folder
 from .errors import BasicError, explain_connection, split_hint
 from .enforce import EnforcementMixin, TIER_1_CAVEAT
 from .enforce_model import ModelRulesMixin
@@ -132,6 +133,27 @@ def _command_word(stmt) -> str:
         if name.endswith(suffix):
             name = name[:-len(suffix)]
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).upper()
+
+
+# A loop that runs more often than this is stopped: in a Session (the
+# MCP) nothing else can run until it ends.
+LOOP_LIMIT = 1_000_000
+
+
+def _kind(value) -> str:
+    if isinstance(value, bool):
+        return "a true/false value"
+    if isinstance(value, (int, float)):
+        return f"the number {value:g}"
+    if isinstance(value, str):
+        return f"the text \"{value[:30]}\""
+    return f"'{value}'"
+
+
+def _why(e: Exception) -> str:
+    text = str(e)
+    return {"math domain error": "outside the range the function takes",
+            "math range error": "the result is too large"}.get(text, text)
 
 
 class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
@@ -483,6 +505,13 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         elif isinstance(stmt, SetFolderStmt):
             folder = self._eval_str(stmt.folder)
+            self._refuse_background_folder(
+                folder, f"SET {stmt.target or 'PROCESS'} FOLDER", stmt.line)
+            if not folder.strip().strip("/"):
+                raise BasicError(
+                    f"SET {stmt.target or 'PROCESS'} FOLDER needs a folder "
+                    f"name.", stmt.line,
+                    hint='For example: SET PROCESS FOLDER "00: My model"')
             if stmt.target == "FLOW":
                 self.runtime.flow_folder = folder
                 self.out.write(f"  Flow folder set: {folder}")
@@ -577,18 +606,36 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if isinstance(expr, BinOp):
             left = self._eval(expr.left)
             right = self._eval(expr.right)
-            if expr.op == "+":
-                return left + right
-            elif expr.op == "-":
-                return left - right
-            elif expr.op == "*":
-                return left * right
-            elif expr.op == "/":
-                if right == 0:
-                    raise BasicError("Division by zero", 0)
-                return left / right
-            elif expr.op == "^":
-                return left ** right
+            try:
+                if expr.op == "+":
+                    value = left + right
+                elif expr.op == "-":
+                    value = left - right
+                elif expr.op == "*":
+                    value = left * right
+                elif expr.op == "/":
+                    if right == 0:
+                        raise BasicError("Division by zero", 0)
+                    value = left / right
+                elif expr.op == "^":
+                    value = left ** right
+                else:
+                    value = None
+            except TypeError:
+                raise BasicError(
+                    f"'{expr.op}' cannot work on {_kind(left)} and "
+                    f"{_kind(right)}.", 0,
+                    hint="Text joins with +; arithmetic needs numbers. "
+                         "VAL(\"3\") turns text into a number.")
+            except OverflowError:
+                raise BasicError("The result is too large for a number.", 0)
+            if isinstance(value, complex):
+                raise BasicError(
+                    f"{left} ^ {right} has no real value.", 0)
+            if isinstance(value, float) and not math.isfinite(value):
+                raise BasicError("The result is too large for a number.", 0)
+            if value is not None:
+                return value
 
         if isinstance(expr, UnaryOp):
             val = self._eval(expr.operand)
@@ -605,6 +652,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if isinstance(expr, Comparison):
             left = self._eval(expr.left)
             right = self._eval(expr.right)
+            if expr.op in ("<", ">", "<=", ">=") and (
+                    isinstance(left, str) != isinstance(right, str)):
+                raise BasicError(
+                    f"'{expr.op}' cannot compare {_kind(left)} with "
+                    f"{_kind(right)}.", 0)
             if expr.op == "=":
                 return left == right
             elif expr.op == "<>":
@@ -642,7 +694,19 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         # Built-in functions
         if name_upper in self._builtins:
-            return self._builtins[name_upper](*args)
+            try:
+                value = self._builtins[name_upper](*args)
+            except (ValueError, OverflowError, TypeError, ZeroDivisionError) \
+                    as e:
+                shown = ", ".join(repr(a) if isinstance(a, str) else f"{a:g}"
+                                  if isinstance(a, float) else str(a)
+                                  for a in args)
+                raise BasicError(f"{name_upper}({shown}) has no value: "
+                                 f"{_why(e)}.", 0)
+            if isinstance(value, float) and not math.isfinite(value):
+                raise BasicError(f"{name_upper} gives a number too large to "
+                                 f"use.", 0)
+            return value
 
         # User-defined functions
         if expr.name in self.runtime.functions:
@@ -872,6 +936,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
         folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.flow_folder
+        self._refuse_background_folder(folder or "", "FOLDER", stmt.line)
 
         ft = stmt.flow_type.lower()
         if stmt.direction:
@@ -948,6 +1013,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         epd = self.runtime.epd
         if stmt.folder:
             folder = self._eval_str(stmt.folder)
+            self._refuse_background_folder(folder, "BRIDGE ... FOLDER",
+                                           stmt.line)
         elif epd is not None:
             folder = epd.bridges_folder     # the EPD keeps its bridges together
         else:
@@ -1131,6 +1198,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         name = self._eval_str(stmt.name)
         folder = self._eval_str(stmt.folder) if stmt.folder else self.runtime.process_folder
+        self._refuse_background_folder(folder or "", "FOLDER", stmt.line)
         description = self._eval_str(stmt.description) if stmt.description else ""
         location = self._eval_str(stmt.location) if stmt.location else None
         flow_schema = self._eval_str(stmt.flow_schema) if stmt.flow_schema else None
@@ -1709,7 +1777,37 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         epd = getattr(rt, "epd", None)
         if epd is not None:
             tops.append(epd.folder.strip("/").lower())
-        return tops
+        # a background folder is never the program's own
+        return [t for t in tops if not is_background_folder(t)]
+
+    def _refuse_background_folder(self, folder: str, command: str,
+                                  line: int):
+        if is_background_folder(folder):
+            raise BasicError(
+                f"{command} refused: '{folder}' is a background folder.",
+                line, hint=BACKGROUND_HINT)
+
+    def _refuse_background_entity(self, etype: str, entity_id: str,
+                                  name: str, command: str, line: int):
+        """Background data is not edited, moved, deleted or
+        parameterised."""
+        import olca_schema as o
+        cls = {"process": o.Process, "flow": o.Flow,
+               "product_system": o.ProductSystem}.get(etype.lower())
+        if cls is None:
+            cls = getattr(o, "".join(w.capitalize() for w in
+                                     etype.replace("_", " ").split()), None)
+        if cls is None or not entity_id:
+            return
+        try:
+            d = self.bridge.client.get_descriptor(cls, entity_id)
+        except Exception:
+            d = None
+        category = getattr(d, "category", "") if d is not None else ""
+        if is_background_folder(category or ""):
+            raise BasicError(
+                f"{command} refused: '{name}' is background data, in "
+                f"'{category}'.", line, hint=BACKGROUND_HINT)
 
     def _is_own_process(self, info: dict, folder: str = "") -> bool:
         """True for a bridge, a process this session built, or a
@@ -1718,6 +1816,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             return True
         if info["id"] in self.runtime.built_processes:
             return True
+        if is_background_folder(info["category"] or ""):
+            return False
         category = (info["category"] or "").strip("/").lower()
         tops = self._build_folders(folder)
         if not (folder or self.runtime.process_folder):
@@ -2090,6 +2190,7 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._require_bridge(stmt.line)
         proc_ref = self._eval_str(stmt.process_ref)
         folder = self._eval_str(stmt.folder) if stmt.folder else None
+        self._refuse_background_folder(folder or "", "FOLDER", stmt.line)
         linking = stmt.linking.lower()
         target_amount = float(self._eval(stmt.target_amount)) if stmt.target_amount else 1.0
         target_unit = stmt.target_unit or None
@@ -2440,6 +2541,26 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if target.get("not_found"):
             self.out.write(f"  Not found: {ref} (nothing to delete)")
             return
+        if etype in ("process", "flow"):
+            self._refuse_background_entity(etype, target.get("id", ""),
+                                           target.get("name", ref), "DELETE",
+                                           stmt.line)
+        if etype == "process":
+            # A system that holds the process would link to nothing
+            held = self.bridge.systems_containing(target["id"])
+            names = [s["name"] for s in held.get("systems", [])]
+            if names:
+                listed = ", ".join(f'"{n}"' for n in names[:5]) + (
+                    f" and {len(names) - 5} more" if len(names) > 5 else "")
+                raise BasicError(
+                    f"'{target['name']}' is in product system"
+                    f"{'s' if len(names) != 1 else ''} {listed}, so it was "
+                    f"not deleted: {'they' if len(names) != 1 else 'it'} "
+                    f"would link to a process that no longer exists.",
+                    stmt.line,
+                    hint="Delete the system first (CONFIRM DELETE ON, "
+                         f"DELETE SYSTEM \"{names[0]}\"), or build it "
+                         "again without the process.")
 
         if etype == "flow":
             # Deleting a flow that is still used leaves processes and
@@ -2551,8 +2672,15 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         if step == 0:
             raise BasicError("FOR loop STEP cannot be 0", stmt.line)
+        if not all(math.isfinite(v) for v in (start, end, step)):
+            raise BasicError("FOR needs finite numbers.", stmt.line)
         # Count iterations up front so float steps (0.1) don't drift
         n = int(math.floor((end - start) / step + 1e-9)) + 1
+        if n > LOOP_LIMIT:
+            raise BasicError(
+                f"This FOR loop would run {n:,} times; the limit is "
+                f"{LOOP_LIMIT:,}.", stmt.line,
+                hint="Check the bounds and the STEP.")
         whole = all(float(v).is_integer() for v in (start, step))
         for k in range(max(n, 0)):
             i = start + k * step
@@ -2570,7 +2698,16 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                 break
 
     def _exec_while(self, stmt: WhileStmt):
+        rounds = 0
         while self._eval(stmt.condition):
+            rounds += 1
+            if rounds > LOOP_LIMIT:
+                raise BasicError(
+                    f"This WHILE loop has run {LOOP_LIMIT:,} times and its "
+                    f"condition is still true, so it was stopped.",
+                    stmt.line,
+                    hint="Make sure something in the loop changes the "
+                         "condition.")
             self._execute_block(stmt.body)
             if self._stop_requested:
                 break
@@ -2684,6 +2821,12 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             raise BasicError(f"'{target}' matches {found['ambiguous']} flows. "
                              f"Give the exact name of the one you mean.",
                              stmt.line)
+        # Adding a flow property to a background flow (so that a unit
+        # converts) changes no amount: allowed, with a note. Anything else
+        # on background data is refused.
+        if any(op["op"] != "add" for op in stmt.operations):
+            self._refuse_background_entity("flow", found.get("flow_id", ""),
+                                           target, "EDIT FLOW", stmt.line)
         ops = []
         sets = {}
         for op in stmt.operations:
@@ -2739,6 +2882,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if "error" in found:
             raise BasicError(found["error"], stmt.line)
         proc_id = found["process_id"]
+        self._refuse_background_entity("process", proc_id, target,
+                                       "EDIT PROCESS", stmt.line)
         proc = self.bridge.get_process_object(proc_id)
         if proc is None:
             raise BasicError(f"Could not load process '{target}'", stmt.line)
@@ -3519,10 +3664,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                              hint='For example: MKDIR "00: My model"')
         current = self._active_folder()
         new_path = (current.rstrip("/") + "/" + name) if current else name
+        if any(not part.strip() for part in new_path.split("/")):
+            raise BasicError(f"'{new_path}' has an empty folder name in it.",
+                             stmt.line, hint="Folders are separated by one /.")
         if self.bridge and self.bridge.connected and self.bridge.folder_exists(
                 new_path, self._nav_entity_type()):
             self.out.write(f"  Folder already exists: {new_path}")
             return
+        self._refuse_background_folder(new_path, "MKDIR", stmt.line)
         self.runtime.pending_folders.add(new_path)
         self.out.write(f"  Created: {new_path}")
         self.out.write("  You are still in: "
@@ -3573,6 +3722,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         else:
             new_path = name
         self._set_active_folder(new_path)
+        if is_background_folder(new_path):
+            # browsing background data is fine; building in it is not
+            self.out.write(f"  In: {new_path}")
+            self.out.write("  This is a background folder: you can look "
+                           "around, but nothing is built here. New "
+                           "processes still go to "
+                           f"{self.runtime.process_folder or '(root)'}.")
+            return
         self.runtime.pending_folders.add(new_path)
         # A folder is created to put things in, so it becomes the
         # build folder for this tree
@@ -3663,6 +3820,9 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                              stmt.line,
                              hint=f"FIND {etype} \"{ref}\" searches by "
                                   f"part of a name.")
+        self._refuse_background_folder(dest, "MOVE", stmt.line)
+        self._refuse_background_entity(kind, found["id"], ref, "MOVE",
+                                       stmt.line)
         result = self.bridge.move_entity(kind, found["id"], dest)
         self._emit("move_entity", result)
         if "error" in result:

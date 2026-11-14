@@ -86,7 +86,11 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
             raise ParseError(f"Expected a number after {what}, "
                              f"got '{tok.value}'", tok.line)
         self.advance()
-        return int(float(tok.value))
+        value = int(float(tok.value))
+        if what.upper() in ("TOP", "RUNS", "ITERATIONS") and value < 1:
+            raise ParseError(f"{what} needs a number above 0.", tok.line,
+                             hint="Give 1 or more (HELP RESULT shows the forms).")
+        return value
 
     def parse_number(self, what: str) -> float:
         tok = self.peek()
@@ -2258,6 +2262,9 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
 
     def parse_sub_call(self, line: int) -> SubCall:
         name = self.advance().value
+        # CALL name ... is the other common way to call a SUB
+        if name.upper() == "CALL" and self.peek().type == TokenType.IDENTIFIER:
+            name = self.advance().value
         args = []
         while self.peek().type not in (TokenType.NEWLINE,
                                         TokenType.EOF,

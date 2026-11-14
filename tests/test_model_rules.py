@@ -782,3 +782,49 @@ def test_a_bridged_system_passes_the_bridge_check(client):
     assert s.run(BUILT).ok
     r = s.engine.system_unbridged("Widget", [])
     assert r["unbridged"] == []
+
+
+# ── background data is the database's, not the program's ────
+
+from fake_client import STEEL as _STEEL_BG  # noqa: E402
+
+
+@pytest.mark.parametrize("code, words", [
+    ('SET PROCESS FOLDER "C:Test manufacturing"', "SET PROCESS FOLDER refused"),
+    ('SET FLOW FOLDER "C:Test manufacturing/x"', "SET FLOW FOLDER refused"),
+    (f'MOVE PROCESS "{_STEEL_BG}" TO "00: Test"', "MOVE refused"),
+    (f'CONFIRM DELETE ON\nDELETE PROCESS "{_STEEL_BG}"', "DELETE refused"),
+    (f'EDIT PROCESS "{_STEEL_BG}"\n  SET DESCRIPTION "x"\nEND EDIT',
+     "EDIT PROCESS refused"),
+    ('EDIT FLOW "test water"\n  SET DESCRIPTION "x"\nEND EDIT',
+     "EDIT FLOW refused"),
+    ('MKDIR "C:Test manufacturing/mine"', "MKDIR refused"),
+    ('MAKE PROCESS "A"\n  FOLDER "D:Test supply"\n  OUTPUT MAKE FLOW "A", 1, '
+     'kg, PRODUCT\nEND PROCESS', "is a background folder"),
+])
+def test_background_data_cannot_be_claimed_or_changed(client, code, words):
+    s = Session(client=client)
+    before = snapshot(client)
+    r = s.run(code)
+    assert not r.ok
+    assert words in r.errors[0]["message"], r.errors
+    assert "classification codes" in r.errors[0]["hint"]
+    assert snapshot(client) == before
+
+
+def test_cdir_into_background_is_browse_only(client):
+    s = Session(client=client)
+    r = s.run(f'SET FLOW FOLDER "00: X"\nCDIR "C:Test manufacturing"\n'
+              f'MAKE PROCESS "Cheat"\n  OUTPUT MAKE FLOW "Cheat", 1, kg, '
+              f'PRODUCT\n  INPUT USE PROCESS "{_STEEL_BG}", 1, kg\n'
+              f'END PROCESS')
+    assert not r.ok and "background process" in r.errors[0]["message"]
+    assert "nothing is built here" in r.text
+
+
+def test_a_process_in_a_system_is_not_deleted(client):
+    s = Session(client=client)
+    assert s.run(BUILT).ok
+    e = err(s.run(f'CONFIRM DELETE ON\nDELETE PROCESS "{B_STEEL}"'))
+    assert 'is in product system "Widget"' in e["message"]
+    assert client.by_name(o.Process, B_STEEL)

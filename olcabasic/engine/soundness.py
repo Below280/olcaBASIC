@@ -252,8 +252,14 @@ class SoundnessMixin:
                 if _named_bridge(user.name, getattr(user, "category", "")):
                     continue
                 prov = names.get(provider_id)
-                pname = prov.name if prov is not None else provider_id
-                if prov is not None and _named_bridge(
+                if prov is None:
+                    msg = (f"'{user.name}' links to a process that no "
+                           f"longer exists ({provider_id})")
+                    if msg not in out:
+                        out.append(msg)
+                    continue
+                pname = prov.name
+                if _named_bridge(
                         prov.name, getattr(prov, "category", "")):
                     continue
                 msg = (f"'{user.name}' takes '{pname}' from the "
@@ -276,6 +282,8 @@ class SoundnessMixin:
         if ref in by_id:
             tops.add((getattr(by_id[ref], "category", "") or "")
                      .strip("/").split("/")[0].lower())
+        from ..background import is_background_folder
+        tops = {t for t in tops if not is_background_folder(t)}
         out = []
         for pid in members:
             d = by_id.get(pid)

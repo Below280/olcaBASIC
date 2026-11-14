@@ -324,6 +324,11 @@ def check_definition(name: str, f: Dict, lines: Dict, line: int) -> Dict:
 
     biogenic_content, biogenic_exports = _check_biogenic(f, modules, at)
 
+    from ..background import REFUSAL_HINT, is_background_folder
+    if is_background_folder(str(f["folder"])):
+        raise BasicError(f"The EPD's FOLDER '{f['folder']}' is a background "
+                         f"folder.", at("folder"), hint=REFUSAL_HINT)
+
     return {
         "biogenic_content": biogenic_content,
         "biogenic_exports": biogenic_exports,

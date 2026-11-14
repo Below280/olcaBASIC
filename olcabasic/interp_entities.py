@@ -55,7 +55,9 @@ class EntitiesInterpMixin:
         """The folder a new entity goes into: the one on the line, or
         the process folder (said once)."""
         if given is not None:
-            return self._eval_str(given)
+            folder = self._eval_str(given)
+            self._refuse_background_folder(folder, "FOLDER", line)
+            return folder
         folder = self.runtime.process_folder
         if folder:
             self._default("FOLDER", folder)
@@ -220,6 +222,7 @@ class EntitiesInterpMixin:
         self._refuse_flow_map(stmt)
         ref = self._eval_str(stmt.ref)
         dest = self._eval_str(stmt.destination)
+        self._refuse_background_folder(dest, "MOVE", stmt.line)
         result = self.bridge.move_any(stmt.entity_type, ref, dest)
         if "error" in result:
             self._engine_fail(result, stmt.line)

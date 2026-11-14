@@ -141,6 +141,13 @@ class Session:
                 errors.append(e.as_dict())
                 sink.write(f"  Error: {e}")
                 return self._result(sink, errors)
+            except RecursionError:
+                errors.append(error_dict(
+                    "The program nests too deeply to read (brackets, "
+                    "expressions or blocks inside one another, thousands "
+                    "deep).", 0, "Split the expression with LET."))
+                sink.write(f"Parse error: {errors[-1]['message']}")
+                return self._result(sink, errors)
 
             if dry_run:
                 report = dryrun.check(statements, self.runtime,
@@ -165,6 +172,17 @@ class Session:
                 except BasicError as e:
                     errors.append(e.as_dict())
                     sink.write(f"  Error: {e}")
+                    break
+                except RecursionError:
+                    line = sink.line or getattr(stmt, "line", 0)
+                    err = error_dict(
+                        "This line nests too deeply to work out (an "
+                        "expression thousands of terms long, or a SUB or "
+                        "FUNCTION that calls itself without end).", line,
+                        "Split the expression with LET, or give the "
+                        "recursion a way to stop.")
+                    errors.append(err)
+                    sink.write(f"  Error: Line {line}: {err['message']}")
                     break
                 except Exception as e:  # engine or openLCA failure
                     line = sink.line or getattr(stmt, "line", 0)

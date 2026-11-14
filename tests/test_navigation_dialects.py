@@ -102,12 +102,19 @@ def test_cdir_creates_enters_and_builds_there():
 
 def test_mkdir_creates_without_entering_or_changing_the_build_folder():
     s = fresh()
-    s.run('DIR "C:Test manufacturing"\nSET PROCESS FOLDER "00: Elsewhere"')
+    s.run('MKDIR "00: Here"\nDIR "00: Here"\nSET PROCESS FOLDER "00: Elsewhere"')
     before = state(s)
     r = s.run('MKDIR "New sub"')
-    assert r.ok and "Created: C:Test manufacturing/New sub" in r.text
-    assert "You are still in: C:Test manufacturing" in r.text
+    assert r.ok and "Created: 00: Here/New sub" in r.text
+    assert "You are still in: 00: Here" in r.text
     assert state(s) == before
+
+
+def test_mkdir_in_a_background_folder_is_refused():
+    s = fresh()
+    s.run('DIR "C:Test manufacturing"')
+    r = s.run('MKDIR "New sub"')
+    assert not r.ok and "background folder" in r.errors[0]["message"]
 
 
 def test_folder_made_with_mkdir_can_be_listed_and_entered():

@@ -30,6 +30,11 @@ from .validators import (
 )
 
 
+
+# Monte Carlo runs one full calculation per run; more than this would
+# tie openLCA up for hours.
+MAX_ITERATIONS = 100_000
+
 class CalculateMixin:
     """Single calculations on a product system: impacts, contributions,"""
 
@@ -428,6 +433,13 @@ class CalculateMixin:
             return {
                 "error": f"iterations must be a positive integer (got {iterations}). "
                          f"Use at least 100 for meaningful results."
+            }
+        if iterations > MAX_ITERATIONS:
+            return {
+                "error": f"{iterations:,} runs is more than the limit of "
+                         f"{MAX_ITERATIONS:,}: each run is a full "
+                         f"calculation in openLCA. Use at most "
+                         f"{MAX_ITERATIONS:,}."
             }
 
         system = self._resolve_system(system_ref)

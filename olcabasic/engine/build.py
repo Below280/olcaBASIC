@@ -6,6 +6,7 @@ Part of olcabasic.engine.Engine (see engine.py).
 """
 
 from olca_ipc import Client
+import math
 import olca_schema as o
 from typing import Dict, List, Optional, Any
 import logging
@@ -774,19 +775,26 @@ class BuildMixin:
                         return {"error": f"Parameter {i}: give either a "
                                          f"value or a formula."}
 
-            # V03: Reject negative amounts on quantitative references
+            # V03: Reject negative or zero amounts on quantitative
+            # references (zero cannot be scaled), and amounts that are
+            # not finite anywhere
             for i, ex_def in enumerate(exchanges):
-                if ex_def.get("is_qref") and not ex_def.get("formula"):
-                    try:
-                        amt = float(ex_def.get("amount", 0.0))
-                        if amt < 0:
-                            return {
-                                "error": f"Exchange {i}: quantitative reference "
-                                         f"amount ({amt}) cannot be negative. "
-                                         f"Use a positive value."
-                            }
-                    except (ValueError, TypeError):
-                        pass  # caught later in B06
+                if ex_def.get("formula") or "amount" not in ex_def:
+                    continue
+                try:
+                    amt = float(ex_def.get("amount", 0.0))
+                except (ValueError, TypeError):
+                    continue  # caught later in B06
+                if not math.isfinite(amt):
+                    return {"error": f"Exchange {i}: the amount ({amt}) is "
+                                     f"not a finite number."}
+                if ex_def.get("is_qref") and amt <= 0:
+                    word = "negative" if amt < 0 else "zero"
+                    return {
+                        "error": f"Exchange {i}: quantitative reference "
+                                 f"amount ({amt:g}) cannot be {word}. "
+                                 f"Use a positive value."
+                    }
 
             # Pre-flight: check if this process already exists
             existing = [] if _build_only else self._get_descriptors(o.Process)

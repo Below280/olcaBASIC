@@ -343,7 +343,7 @@ def test_unexpected_exception_becomes_an_error(session, client):
 
 
 def test_nothing_can_be_asked_in_a_session(session):
-    session.run(WIDGET + "CONFIRM DELETE OFF")
+    session.run(WIDGET + 'DELETE SYSTEM "Widget"\nCONFIRM DELETE OFF')
     r = session.run('DELETE PROCESS "Widget"')
     assert not r.ok
     assert "nobody is there to give one" in r.errors[0]["message"]
