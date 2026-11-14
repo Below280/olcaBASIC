@@ -828,3 +828,26 @@ def test_a_process_in_a_system_is_not_deleted(client):
     e = err(s.run(f'CONFIRM DELETE ON\nDELETE PROCESS "{B_STEEL}"'))
     assert 'is in product system "Widget"' in e["message"]
     assert client.by_name(o.Process, B_STEEL)
+
+
+def test_a_new_emission_in_another_model_does_not_stop_this_one(session,
+                                                                 client):
+    """Found by the live suite: a flow made for one model (and later
+    deleted) refused every other calculation in the same session."""
+    assert session.run(widget() + 'SYSTEM "Widget"\n').ok
+    assert session.run('MAKE PROCESS "Other"\n  OUTPUT MAKE FLOW "Other", '
+                       '1, kg, PRODUCT\n' + GAS + '\nEND PROCESS').ok
+    assert session.run(CALC).ok
+    e = err(session.run('SYSTEM "Other"\n'
+                        f'CALCULATE "Other" USING "{EF}"'))
+    assert "no characterisation factor for 'Mystery gas'" in e["message"]
+
+
+def test_a_deleted_emission_is_forgotten(session, client):
+    assert session.run(widget(extra=GAS) + 'SYSTEM "Widget"\n').ok
+    gas = client.by_name(o.Flow, "Mystery gas")[0].id
+    assert gas in session.runtime.own_elementary
+    r = session.run('CONFIRM DELETE ON\nDELETE SYSTEM "Widget"\n'
+                    'DELETE PROCESS "Widget"\nDELETE FLOW "Mystery gas"')
+    assert r.ok, r.errors
+    assert gas not in session.runtime.own_elementary

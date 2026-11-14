@@ -422,6 +422,25 @@ class SoundnessMixin:
     def forget_characterised_flows(self):
         self.__dict__.setdefault("_characterised_cache", {}).clear()
 
+    def foreground_flow_ids(self, system_ref: str,
+                            folders: Optional[List[str]] = None) -> Dict:
+        """The flows the foreground processes of a system exchange:
+        {"flows": [ids]}. The foreground is read afresh (a few
+        processes)."""
+        try:
+            desc = self.find_system(system_ref)
+            if desc is None:
+                return {"error": f"Product system '{system_ref}' not found"}
+            ids = set()
+            for d in self._foreground(desc, folders):
+                proc = self.client.get(o.Process, d.id)
+                for ex in (proc.exchanges or []) if proc else []:
+                    if ex.flow:
+                        ids.add(ex.flow.id)
+            return {"flows": sorted(ids)}
+        except Exception as ex:
+            return {"error": str(ex)}
+
     def uncharacterised_flows(self, method_ref: str,
                               flow_ids: List[str]) -> Dict:
         """

@@ -141,7 +141,7 @@ class EnforcementMixin:
         self._require_validated(desc, line, command)
         self._require_fresh(desc, line, command)
         if method:
-            self._require_factors(method, line, command)
+            self._require_factors(method, line, command, system=desc.id)
         if check_allocation:
             self._require_allocation_factors(desc.id, allocation, line,
                                              command)

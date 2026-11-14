@@ -2922,6 +2922,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.out.write(f"  Deleted: {result.get('name', ref)}")
+        if etype == "flow":
+            self.runtime.own_elementary.pop(target["id"], None)
         if etype == "product_system":
             self._forget_validation(target["id"])
             self._system_rebuilt(target["id"])     # gone: no longer stale

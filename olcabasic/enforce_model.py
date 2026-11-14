@@ -162,11 +162,20 @@ class ModelRulesMixin:
             self.runtime.accepted_no_factors.add((method, flow["id"]))
 
     def _without_factors(self, method: str, line: int,
-                         accepted: bool = True) -> List[Dict]:
-        own = self.runtime.own_elementary
+                         accepted: bool = True,
+                         system: str = "") -> List[Dict]:
+        own = list(self.runtime.own_elementary)
+        if own and system:
+            # only the flows of yours that this system holds: one made
+            # for another model, or deleted since, does not matter here
+            used = self.bridge.foreground_flow_ids(system,
+                                                   self._build_folders())
+            if "error" not in used:
+                inside = set(used["flows"])
+                own = [f for f in own if f in inside]
         if not own:
             return []
-        found = self.bridge.uncharacterised_flows(method, list(own))
+        found = self.bridge.uncharacterised_flows(method, own)
         if "error" in found:
             raise BasicError(found["error"], line)
         flows = found["flows"]
@@ -175,8 +184,9 @@ class ModelRulesMixin:
                      not in self.runtime.accepted_no_factors]
         return flows
 
-    def _require_factors(self, method: str, line: int, command: str):
-        missing = self._without_factors(method, line)
+    def _require_factors(self, method: str, line: int, command: str,
+                         system: str = ""):
+        missing = self._without_factors(method, line, system=system)
         if missing:
             names = ", ".join(f"'{f['name']}'" for f in missing)
             one = len(missing) == 1
