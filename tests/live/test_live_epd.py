@@ -338,6 +338,7 @@ def test_the_toolkit_on_a_small_epd(live, bridge, tmp_path):
     model = tmp_path / "model.json"
     report = tmp_path / "report.csv"
     document = tmp_path / "epd.md"
+    word = tmp_path / "epd.docx"
     ratings = ('  RATING GEOGRAPHY "Good" REASON "Live test, same market"\n'
                '  RATING TECHNOLOGY "Good" REASON "Live test"\n'
                '  RATING TIME "Fair" REASON "Live test"\n')
@@ -417,6 +418,8 @@ EPD DOCUMENT "{document.as_posix()}"
   OMITTED A4, A5, B1, B2, B3, B4, B5, B6, B7 "Live test"
 END EPD DOCUMENT
 '''
+    program += program[program.index("EPD DOCUMENT"):].replace(
+        document.as_posix(), word.as_posix())
     try:
         r = live.session.run(program)
         assert r.ok, f"{r.errors}\n{r.text[-4000:]}"
@@ -478,6 +481,13 @@ END EPD DOCUMENT
         assert "| GWP-GHG |" in doc and "| X | X | X | ND |" in doc
         assert "exemption of EN 15804+A2, 5.2" in doc
         assert calls["epd_document"]["draft"] is True
+        import zipfile
+        with zipfile.ZipFile(word) as z:
+            xml = z.read("word/document.xml").decode("utf-8")
+        assert "GWP-GHG" in xml and "Environmental performance" in xml
+        # A.5.4: the core process's reference year is declared
+        assert "Other A3 (core) process" in doc or \
+            dq["rows"][0]["process"] == bridge["name"]
         assert live.session.open_results == []
     finally:
         cleanup()
