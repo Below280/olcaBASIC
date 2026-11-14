@@ -238,29 +238,13 @@ class FieldsMixin:
                        hint="Use the UUID in place of the name.")
 
     def _location(self, code: str):
-        items = self._get_descriptors(o.Location)
-        found = [d for d in items if d.id == code
-                 or (getattr(d, "code", None) or "") == code]
-        if not found:
-            found = [d for d in items if d.name == code]
-        if not found:
-            # descriptors of some servers carry no code
-            for d in items:
-                if d.name and d.name.lower() == code.lower():
-                    found.append(d)
-        if not found:
-            for loc in self.client.get_all(o.Location):
-                if (loc.code or "") == code:
-                    found.append(loc)
-        if len(found) >= 1 and len({d.id for d in found}) == 1:
-            return o.Ref(id=found[0].id, name=found[0].name,
-                         ref_type=o.RefType.Location)
-        if not found:
-            raise _Refused(f"No location has the code or name '{code}'.",
-                           hint="FIND LOCATION \"text\" searches the "
-                                "locations; MAKE LOCATION creates one.")
-        raise _Refused(f"'{code}' matches {len(found)} locations.",
-                       hint="Use the UUID in place of the code.")
+        from .locations import find
+        found, why = find(list(self._get_descriptors(o.Location)), code)
+        if found is None:
+            raise _Refused(why, hint="FIND LOCATION \"text\" searches the "
+                                     "locations; MAKE LOCATION creates one.")
+        return o.Ref(id=found.id, name=found.name,
+                     ref_type=o.RefType.Location)
 
     # ── processes ────────────────────────────────────────────
 

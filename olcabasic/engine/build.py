@@ -714,26 +714,11 @@ class BuildMixin:
             return {"error": str(ex)}
 
     def _find_location(self, location: str):
-        """(descriptor, error) for a location given by code or name. An
-        exact code or name wins; a part of a name only when it fits one
-        location. Nothing found is an error, not a silent blank."""
-        locs = list(self.client.get_descriptors(o.Location))
-        want = location.strip().lower()
-        for ld in locs:
-            if (getattr(ld, "code", "") or "").lower() == want \
-                    or (ld.name or "").lower() == want:
-                return ld, None
-        part = [ld for ld in locs if want and want in (ld.name or "").lower()]
-        if len(part) == 1:
-            return part[0], None
-        if part:
-            shown = ", ".join(sorted(f"{ld.name} ({getattr(ld, 'code', '')})"
-                                     for ld in part[:6]))
-            return None, (f"Location '{location}' fits {len(part)} "
-                          f"locations: {shown}. Give the code.")
-        return None, (f"No location has the code or name '{location}'. "
-                      f"FIND LOCATION \"{location}\" searches by part of "
-                      f"a name.")
+        """(descriptor, error) for a location given by code, name or
+        UUID (engine/locations.py). Nothing found is an error, not a
+        silent blank."""
+        from .locations import find
+        return find(list(self.client.get_descriptors(o.Location)), location)
 
     def create_process(self, name: str, category: str,
                        exchanges: List[Dict],

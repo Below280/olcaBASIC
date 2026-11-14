@@ -150,7 +150,7 @@ def test_a_reference_year_is_a_real_year(s, year):
 def test_an_unknown_location_is_refused(s):
     refused(s.run(SETUP + 'MAKE PROCESS "T"\n  LOCATION "XX-NOPE"\n  OUTPUT '
                           'MAKE FLOW "T", 1, kg, PRODUCT\nEND PROCESS'),
-            "No location has the code or name 'XX-NOPE'")
+            "No location has the code, name or UUID 'XX-NOPE'")
 
 
 def test_a_flow_of_another_type_is_not_reused(s):
@@ -428,3 +428,17 @@ def test_a_comma_between_function_values_in_a_formula_is_refused():
     assert "separates the values" in validate_formula("min(a,b)")
     assert validate_formula("min(a; b) * 2") is None
     assert validate_formula("if(a > 0; 1; 0)") is None
+
+
+def test_a_location_is_found_by_its_code_without_reading_its_geometry():
+    """openLCA's descriptors carry no code, so 'GB' is found from the
+    UUID openLCA's KeyGen gives it (checked on 2.7.0)."""
+    from olcabasic.engine.locations import find, key_of
+    assert key_of("gb") == "7885444a-f42e-3b30-8518-c5be17c8850b"
+    uk = o.Ref(id=key_of("gb"), name="United Kingdom of Great Britain and "
+                                       "Northern Ireland (the)")
+    other = o.Ref(id=key_of("de"), name="Germany")
+    assert find([uk, other], "GB")[0] is uk
+    assert find([uk, other], "gb")[0] is uk
+    assert find([uk, other], "germany")[0] is other
+    assert find([uk, other], "XX")[0] is None

@@ -1379,7 +1379,9 @@ class FakeClient:
         return [e for e in self._table(model_type).values() if e.name == name]
 
     def add_location(self, code: str, name: str) -> o.Ref:
-        loc = o.Location(id=_uid("loc", code), code=code, name=name)
+        # openLCA's reference data: the UUID of the lower-case code
+        from olcabasic.engine.locations import key_of
+        loc = o.Location(id=key_of(code.lower()), code=code, name=name)
         self.store["Location"][loc.id] = loc
         return o.Ref(id=loc.id, name=name, ref_type=o.RefType.Location)
 
