@@ -495,3 +495,23 @@ def test_validate_fails_a_system_with_a_background_link_and_no_bridge(
     r = s.run('VALIDATE "Widget"')
     assert "with no bridge" in r.text
     assert "did not pass" in r.text
+
+
+def test_a_second_flow_usage_check_does_not_read_the_background_again(
+        s, client):
+    """Found by the agent test: six DELETE FLOW lines read the whole
+    database six times and held the MCP for over half an hour."""
+    from fake_client import STEEL as _S
+    assert s.run(SETUP + 'MAKE FLOW "Spare one", kg, PRODUCT\n'
+                         'MAKE FLOW "Spare two", kg, PRODUCT').ok
+    one = client.by_name(o.Flow, "Spare one")[0].id
+    two = client.by_name(o.Flow, "Spare two")[0].id
+    background = client.by_name(o.Process, _S)[0].id
+    client.calls.clear()
+    assert not s.engine.find_flow_usage(one)["in_use"]
+    first = [c for c in client.calls if c[:2] == ("get", "Process")]
+    assert ("get", "Process", background) in first
+    client.calls.clear()
+    assert not s.engine.find_flow_usage(two)["in_use"]
+    second = [c for c in client.calls if c[:2] == ("get", "Process")]
+    assert ("get", "Process", background) not in second

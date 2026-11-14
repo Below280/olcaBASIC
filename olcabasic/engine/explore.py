@@ -514,16 +514,34 @@ class ExploreMixin:
                     local.c = Client(url)
                 return local.c
 
+            # The flows of background processes are remembered for 30
+            # minutes: olcaBASIC does not edit background data (and the
+            # Python route may not), so a second DELETE FLOW does not
+            # read the whole database again. Your own processes are
+            # always read afresh, as they change.
+            from ..background import is_background_folder
+            index = self.__dict__.setdefault("_bg_flow_index", {})
+            stamp = self.__dict__.get("_bg_flow_index_time", 0.0)
+            if time.time() - stamp > 1800:
+                index.clear()
+                self.__dict__["_bg_flow_index_time"] = time.time()
+
             def uses(d):
+                background = is_background_folder(
+                    getattr(d, "category", "") or "")
+                if background and d.id in index:
+                    return flow_id in index[d.id]
                 proc = worker_client().get(o.Process, d.id)
                 if proc is None:
                     # A process that can't be read can't be ruled out
                     raise RuntimeError(
                         f"could not read process '{d.name}' ({d.id}), so "
                         f"the search for uses of the flow is incomplete")
-                return any(
-                    ex.flow and ex.flow.id == flow_id
-                    for ex in (proc.exchanges or []))
+                flows = frozenset(ex.flow.id for ex in (proc.exchanges or [])
+                                  if ex.flow)
+                if background:
+                    index[d.id] = flows
+                return flow_id in flows
 
             checked = 0
             batch = max(workers * 25, 50)
