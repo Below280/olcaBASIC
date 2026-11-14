@@ -460,3 +460,38 @@ def test_a_bridge_input_carries_the_flow_property_of_its_unit(s, client):
     p = client.by_name(o.Process, "BRIDGE | steel | kg")[0]
     bg = next(e for e in p.exchanges if e.is_input)
     assert bg.flow_property is not None and bg.flow_property.name == "Mass"
+
+
+def _qref_flow_name(client, process_name):
+    p = client.by_name(o.Process, process_name)[0]
+    return next(e.flow.name for e in p.exchanges if e.is_quantitative_reference)
+
+
+def test_use_flow_of_a_background_product_is_refused(s, client):
+    """Found by the agent test: INPUT USE FLOW of a flow only background
+    processes make went round the bridge rule, and SYSTEM linked an
+    ecoinvent provider straight in."""
+    steel = _qref_flow_name(client, STEEL)
+    r = s.run(SETUP + f'MAKE PROCESS "Direct"\n  OUTPUT MAKE FLOW "Direct", 1, '
+                      f'kg, PRODUCT\n  INPUT USE FLOW "{steel}", 1, kg\n'
+                      f'END PROCESS')
+    refused(r, "is made only by background processes", "BRIDGE")
+
+
+def test_validate_fails_a_system_with_a_background_link_and_no_bridge(
+        s, client):
+    """A system relinked outside olcaBASIC: VALIDATE now reads the bridge
+    rule from the database, as CALCULATE does."""
+    assert s.run(WIDGET + 'VALIDATE "Widget"').ok
+    sysd = client.by_name(o.ProductSystem, "Widget")[0]
+    bridge = client.by_name(o.Process, B_STEEL)[0]
+    steel = client.by_name(o.Process, STEEL)[0]
+    for link in sysd.process_links:
+        if link.provider and link.provider.id == bridge.id:
+            link.provider = o.Ref(id=steel.id, name=steel.name,
+                                  ref_type=o.RefType.Process)
+    client.put(sysd)
+    s.engine.clear_caches()
+    r = s.run('VALIDATE "Widget"')
+    assert "with no bridge" in r.text
+    assert "did not pass" in r.text

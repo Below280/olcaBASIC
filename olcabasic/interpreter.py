@@ -1879,6 +1879,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                             line)
                     if flow_match:
                         flow_id = flow_match["flow_id"]
+                        self._refuse_background_only_flow(
+                            flow_id, flow_name, folder, line, ex.unit or "")
                     else:
                         # Nothing found
                         if ex.direction == "INPUT":
@@ -2056,6 +2058,42 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                  f"then INPUT USE PROCESS \"BRIDGE | short name | {unit}\", "
                  f"amount, {unit}. (Each / is a new line.) HELP BRIDGE has "
                  f"the details.")
+
+    def _refuse_background_only_flow(self, flow_id: str, flow_name: str,
+                                     folder: str, line: int, unit: str = ""):
+        """USE FLOW names a flow with no provider, and SYSTEM links it to
+        whatever process makes it. If only background processes make
+        it, that is a background input with no bridge, so it is refused
+        as INPUT USE PROCESS of a background process is."""
+        if getattr(self, "_editing_bridge", False):
+            return
+        try:
+            import olca_schema as o
+            providers = self.bridge.client.get_providers(
+                o.Ref(id=flow_id, ref_type=o.RefType.Flow))
+        except Exception:
+            return
+        if not providers:
+            return
+        for tf in providers:
+            prov = getattr(tf, "provider", None)
+            if prov is None:
+                continue
+            info = self.bridge.describe_process(prov.id)
+            if info is None or self._is_own_process(info, folder):
+                return              # one of your own processes makes it
+        unit = unit or "unit"
+        first = providers[0].provider
+        raise BasicError(
+            f"'{flow_name}' is made only by background processes "
+            f"({len(providers)}, such as '{first.name}'). With USE FLOW, "
+            f"SYSTEM would link one of them straight into your process, "
+            f"with no bridge.", line,
+            hint=f"Write a bridge to the provider you mean: BRIDGE \"short "
+                 f"name\", {unit} / PROVIDER \"uuid\" / END BRIDGE, then "
+                 f"INPUT USE PROCESS \"BRIDGE | short name | {unit}\", "
+                 f"amount, {unit}. FIND PROCESS lists the providers. (Each "
+                 f"/ is a new line.)")
 
     def _note_provider(self, provider_id: str, folder: str, line: int,
                        check_only: bool, unit: str = ""):
@@ -2634,6 +2672,21 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._emit("validate_system", result)
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
+        # the bridge rule, read from the database, as CALCULATE reads it:
+        # a system that would be refused there does not pass here
+        sid = result.get("system_id")
+        if sid:
+            loose = self.bridge.system_unbridged(sid, self._build_folders())
+            if "error" not in loose and loose.get("unbridged"):
+                result["valid"] = False
+                shown = loose["unbridged"][:5]
+                more = len(loose["unbridged"]) - len(shown)
+                self.out.write("  Background processes linked straight into "
+                               "your own, with no bridge:")
+                for u in shown:
+                    self.out.write(f"    {u}")
+                if more > 0:
+                    self.out.write(f"    ... and {more} more")
         self._record_validation(result)
         self.out.write(format_generic(result))
         if not result.get("valid", True):

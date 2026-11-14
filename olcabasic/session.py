@@ -174,6 +174,14 @@ class Session:
 
             if not self.offline and not self.connected:
                 self.connect()
+            # What a program reads about product systems is read again
+            # for each run: a system can be relinked between two runs in
+            # the openLCA app or by another tool, and the gates at
+            # CALCULATE and VALIDATE must see it as it is now.
+            engine = self.engine
+            if engine is not None and hasattr(engine,
+                                               "forget_system_members"):
+                engine.forget_system_members()
 
             interp._stop_requested = False
             # a run inside a run (session.run from python_exec) keeps the
