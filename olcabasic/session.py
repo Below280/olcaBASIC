@@ -162,6 +162,9 @@ class Session:
                 self.connect()
 
             interp._stop_requested = False
+            # a program always starts at the top level, whatever the last
+            # one was doing when it stopped
+            interp.runtime.current_scope = interp.runtime.global_scope
             for stmt in statements:
                 if stmt is None:
                     continue

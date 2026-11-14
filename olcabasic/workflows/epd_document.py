@@ -304,6 +304,11 @@ class DocumentMixin:
             errors.append("SVHC: NONE and a list of substances are both "
                           "given")
         for e in svhc:
+            if e["args"] != ["NONE"] and e["args"][3] > 100:
+                errors.append(f"SVHC '{e['args'][0]}' (line {e['line']}) is "
+                              f"at {e['args'][3]:g}%, more than the whole "
+                              f"product")
+                continue
             if e["args"] != ["NONE"] and e["args"][3] <= p.svhc_declare_pct:
                 errors.append(
                     f"SVHC '{e['args'][0]}' (line {e['line']}) is at "

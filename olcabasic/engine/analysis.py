@@ -75,6 +75,23 @@ class AnalysisMixin:
         missing_params = split["missing"]
         dependent_params = split["dependent"]
         usable = set(split["ok"])
+        # A scenario that names a parameter the system does not have
+        # would run as the baseline under another name: refused.
+        if missing_params:
+            which = sorted(n for s, v in scenarios.items() for n in v
+                           if n in missing_params)
+            return {"error": f"The system '{system.name}' has no input "
+                             f"parameter called "
+                             f"{', '.join(repr(n) for n in sorted(set(which))[:10])}"
+                             f", so the scenarios were not run.",
+                    "hint": "SHOW SYSTEM \"name\" PARAMS lists the "
+                            "parameters it has."}
+        if dependent_params:
+            return {"error": f"{', '.join(repr(n) for n in dependent_params[:10])} "
+                             f"{'is' if len(dependent_params) == 1 else 'are'} "
+                             f"calculated from a formula and cannot be set "
+                             f"in a scenario, so the scenarios were not run.",
+                    "hint": "Set the input parameters the formula uses."}
 
         results = {}
         for scenario_name, param_values in scenarios.items():
@@ -336,17 +353,13 @@ class AnalysisMixin:
         # W03: Sanity-check variation percentage
         if variation_pct <= 0:
             return {"error": "variation_pct must be positive."}
-        if variation_pct > 10000:
+        if variation_pct >= 100:
             return {
-                "error": f"variation_pct of {variation_pct}% is unreasonably "
-                         f"large (max 10,000%). Use a realistic range.",
+                "error": f"A variation of {variation_pct:g}% takes each "
+                         f"parameter down to zero or below. Use less than "
+                         f"100%.",
             }
         sensitivity_warnings = []
-        if variation_pct > 200:
-            sensitivity_warnings.append(
-                f"variation_pct of {variation_pct}% is very large. "
-                f"Results above ~200% may not be physically meaningful."
-            )
 
         # Every copy of every parameter (see _parameter_targets)
         targets = self._parameter_targets(system, set(parameter_names))
@@ -361,6 +374,12 @@ class AnalysisMixin:
                 "missing": missing,
                 "dependent": dependent,
             }
+        if missing:
+            return {"error": f"The system '{system.name}' has no input "
+                             f"parameter called "
+                             f"{', '.join(repr(n) for n in missing[:10])}; "
+                             f"nothing was varied.",
+                    "missing": missing, "dependent": dependent}
 
         variation_factor = variation_pct / 100.0
 

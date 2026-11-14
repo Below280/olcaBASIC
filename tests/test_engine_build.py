@@ -449,9 +449,11 @@ def test_process_details_shape(engine, widget):
 def test_scenarios_and_sensitivity_shapes(engine, widget):
     engine.create_product_system("Widget")
     name = "p01_Widget__test_steel_low_alloy_kg"
-    s = engine.run_scenarios("Widget", "IPCC 2021", {"More": {name: 4.0, "nope": 1}})
-    assert set(s) >= {"system", "method", "scenario_count", "results", "missing"}
-    assert s["missing"] == ["nope"]
+    s = engine.run_scenarios("Widget", "IPCC 2021", {"More": {name: 4.0}})
+    assert set(s) >= {"system", "method", "scenario_count", "results"}
+    bad = engine.run_scenarios("Widget", "IPCC 2021",
+                               {"More": {name: 4.0, "nope": 1}})
+    assert "no input parameter called 'nope'" in bad["error"]
     v = engine.run_sensitivity("Widget", "IPCC 2021", [name], 20.0)
     assert set(v) == {"system", "method", "variation_pct", "baseline",
                       "sensitivity", "tested", "missing"}

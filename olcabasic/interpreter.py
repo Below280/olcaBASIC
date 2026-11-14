@@ -140,6 +140,15 @@ def _command_word(stmt) -> str:
 LOOP_LIMIT = 1_000_000
 
 
+def _arity(kind: str, name: str, params, args, line: int = 0):
+    if len(args) != len(params):
+        want = ", ".join(params) or "nothing"
+        raise BasicError(
+            f"{kind} {name} takes {len(params)} value"
+            f"{'s' if len(params) != 1 else ''} ({want}), and was given "
+            f"{len(args)}.", line)
+
+
 def _kind(value) -> str:
     if isinstance(value, bool):
         return "a true/false value"
@@ -150,8 +159,21 @@ def _kind(value) -> str:
     return f"'{value}'"
 
 
+def _val(text):
+    """VAL("12.5") is 12.5. Text that is not a number is an error."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return float(text)
+    try:
+        return float(str(text).strip())
+    except ValueError:
+        raise ValueError("the text is not a number")
+
+
 def _why(e: Exception) -> str:
     text = str(e)
+    if "must be real number" in text or "not supported between" in text \
+            or "unsupported operand" in text:
+        return "it needs a number"
     return {"math domain error": "outside the range the function takes",
             "math range error": "the result is too large"}.get(text, text)
 
@@ -184,7 +206,16 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             "MAX": max,
             "ROUND": round,
             "LEN": len,
-            "VAL": float,
+            "VAL": _val,
+            "LEFT$": lambda s, n: str(s)[:max(int(n), 0)],
+            "RIGHT$": lambda s, n: str(s)[-int(n):] if int(n) > 0 else "",
+            "MID$": lambda s, start, n=None: (
+                str(s)[max(int(start), 1) - 1:]
+                if n is None else
+                str(s)[max(int(start), 1) - 1:max(int(start), 1) - 1
+                       + max(int(n), 0)]),
+            "INSTR": lambda s, find: str(s).find(str(find)) + 1,
+            "SGN": lambda x: (x > 0) - (x < 0),
             "STR$": str,
             "TRIM$": str.strip,
             "UCASE$": str.upper,
@@ -711,14 +742,21 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         # User-defined functions
         if expr.name in self.runtime.functions:
             func_def = self.runtime.functions[expr.name]
+            _arity("FUNCTION", expr.name, func_def.params, args)
             self.runtime.push_scope()
-            for i, param in enumerate(func_def.params):
-                if i < len(args):
-                    self.runtime.set_var(param, args[i])
-            self._execute_block(func_def.body)
-            # Return value is stored in a variable named after the function
-            result = self.runtime.get_var(expr.name) if self.runtime.has_var(expr.name) else None
-            self.runtime.pop_scope()
+            try:
+                for param, arg in zip(func_def.params, args):
+                    self.runtime.set_var(param, arg)
+                self._execute_block(func_def.body)
+                # The value is in a variable named after the function
+                result = (self.runtime.get_var(expr.name)
+                          if self.runtime.has_var(expr.name) else None)
+            finally:
+                self.runtime.pop_scope()
+            if result is None:
+                raise BasicError(
+                    f"FUNCTION {expr.name} gave no value: set it with "
+                    f"LET {expr.name} = ... inside the function.")
             return result
 
         raise BasicError(f"Unknown function: {expr.name}")
@@ -2715,17 +2753,30 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
     def _exec_sub_call(self, stmt: SubCall):
         name = stmt.name
         if name not in self.runtime.subs:
-            raise BasicError(f"SUB '{name}' is not defined", stmt.line)
+            from .registry import COMMANDS
+            words = {c.name.split()[0] for c in COMMANDS}
+            if name.upper() in words:
+                raise BasicError(
+                    f"{name.upper()} does not stand on its own here: it "
+                    f"goes inside a block or needs more after it.",
+                    stmt.line, hint=f"HELP {name.upper()} shows where it "
+                                    f"goes.")
+            raise BasicError(
+                f"'{name}' is not a command, and no SUB has that name.",
+                stmt.line, hint="HELP lists the commands; SUB name ... "
+                                "END SUB defines one of your own.")
 
         sub_def = self.runtime.subs[name]
         args = [self._eval(a) for a in stmt.args]
+        _arity("SUB", name, sub_def.params, args, stmt.line)
 
         self.runtime.push_scope()
-        for i, param in enumerate(sub_def.params):
-            if i < len(args):
-                self.runtime.set_var(param, args[i])
-        self._execute_block(sub_def.body)
-        self.runtime.pop_scope()
+        try:
+            for param, arg in zip(sub_def.params, args):
+                self.runtime.set_var(param, arg)
+            self._execute_block(sub_def.body)
+        finally:
+            self.runtime.pop_scope()
 
     def _exec_load(self, stmt: LoadStmt):
         """LOAD "file": the program in memory becomes the file, as on a

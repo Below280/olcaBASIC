@@ -577,6 +577,19 @@ class EpdWorkflow(EpdToolkitMixin, DocumentMixin):
                 hint="Give the category's full name. SHOW METHOD "
                      f"\"{d['method']}\" lists them.")
 
+        # the declared unit has to be a unit openLCA knows, or the first
+        # module would fail on it long after the EPD block
+        try:
+            known = interp.bridge.knows_unit(d["unit"])
+        except Exception:
+            known = True        # cannot tell: leave it to the build
+        if not known:
+            raise BasicError(
+                f"'{d['unit']}' is not a unit openLCA knows, so it cannot "
+                f"be the {d['unit_kind']} unit.", at("unit"),
+                hint="FIND UNIT \"name\" searches the units, for example "
+                     "kg, m2, m3, piece.")
+
         old = interp.runtime.epd
         epd = cls(interp, d, cats["categories"])
         interp.runtime.epd = epd

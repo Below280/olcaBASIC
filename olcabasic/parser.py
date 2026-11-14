@@ -2632,6 +2632,13 @@ class Parser(ResultsParserMixin, FieldsParserMixin, EntitiesParserMixin,
                 prov["provider"] = self.parse_string_or_expr()
             elif self.match_word("YEAR"):
                 prov["year"] = self.parse_int("YEAR")
+                import datetime
+                this_year = datetime.date.today().year
+                if not 1900 <= prov["year"] <= this_year:
+                    raise ParseError(
+                        f"YEAR {prov['year']} is not a reference year: it "
+                        f"is the year the data describes, from 1900 to "
+                        f"{this_year}.", ln)
             elif self.match_word("REASON"):
                 prov["reason"] = self.parse_string_or_expr()
             elif self.match_word("SHARE"):

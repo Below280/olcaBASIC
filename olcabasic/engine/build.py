@@ -300,6 +300,10 @@ class BuildMixin:
                 )
         return None
 
+    def knows_unit(self, unit_name: str) -> bool:
+        """True when openLCA has a flow property for this unit."""
+        return self._get_fp_ref(unit_name) is not None
+
     def _get_fp_ref(self, unit_name: str):
         """Internal: get flow property Ref for a unit.
 
@@ -464,6 +468,18 @@ class BuildMixin:
             # or every run makes another flow of the same name.
             if f.name == name and (not category
                                    or category.lower() in f_cat.lower()):
+                have = getattr(f, "flow_type", None)
+                have = getattr(have, "value", have) or ""
+                want = {"product": "PRODUCT_FLOW", "waste": "WASTE_FLOW",
+                        "elementary": "ELEMENTARY_FLOW"}.get(
+                            (flow_type or "").lower(), "")
+                if have and want and str(have).upper() != want:
+                    kind = str(have).replace("_FLOW", "").lower()
+                    return {"error": f"A flow called '{name}' already exists "
+                                     f"in {f_cat or 'the top folder'} as a "
+                                     f"{kind} flow, not a "
+                                     f"{flow_type.lower()} flow. Give the "
+                                     f"new one another name."}
                 return {
                     "flow_id": f.id,
                     "flow_name": f.name,
@@ -697,6 +713,28 @@ class BuildMixin:
         except Exception as ex:
             return {"error": str(ex)}
 
+    def _find_location(self, location: str):
+        """(descriptor, error) for a location given by code or name. An
+        exact code or name wins; a part of a name only when it fits one
+        location. Nothing found is an error, not a silent blank."""
+        locs = list(self.client.get_descriptors(o.Location))
+        want = location.strip().lower()
+        for ld in locs:
+            if (getattr(ld, "code", "") or "").lower() == want \
+                    or (ld.name or "").lower() == want:
+                return ld, None
+        part = [ld for ld in locs if want and want in (ld.name or "").lower()]
+        if len(part) == 1:
+            return part[0], None
+        if part:
+            shown = ", ".join(sorted(f"{ld.name} ({getattr(ld, 'code', '')})"
+                                     for ld in part[:6]))
+            return None, (f"Location '{location}' fits {len(part)} "
+                          f"locations: {shown}. Give the code.")
+        return None, (f"No location has the code or name '{location}'. "
+                      f"FIND LOCATION \"{location}\" searches by part of "
+                      f"a name.")
+
     def create_process(self, name: str, category: str,
                        exchanges: List[Dict],
                        parameters: Optional[List[Dict]] = None,
@@ -843,18 +881,9 @@ class BuildMixin:
 
             # Set location if provided
             if location:
-                loc_descriptors = self.client.get_descriptors(o.Location)
-                loc_ref = None
-                for ld in loc_descriptors:
-                    if ld.name == location or getattr(ld, "code", "") == location:
-                        loc_ref = ld
-                        break
-                if not loc_ref:
-                    # Try partial match
-                    for ld in loc_descriptors:
-                        if location.lower() in ld.name.lower():
-                            loc_ref = ld
-                            break
+                loc_ref, loc_err = self._find_location(location)
+                if loc_err:
+                    return {"error": loc_err}
                 if loc_ref:
                     p.location = o.Ref(
                         id=loc_ref.id, name=loc_ref.name,
@@ -1131,17 +1160,9 @@ class BuildMixin:
 
             # Update location
             if location is not None:
-                loc_descriptors = self.client.get_descriptors(o.Location)
-                loc_ref = None
-                for ld in loc_descriptors:
-                    if ld.name == location or getattr(ld, "code", "") == location:
-                        loc_ref = ld
-                        break
-                if not loc_ref:
-                    for ld in loc_descriptors:
-                        if location.lower() in ld.name.lower():
-                            loc_ref = ld
-                            break
+                loc_ref, loc_err = self._find_location(location)
+                if loc_err:
+                    return {"error": loc_err}
                 if loc_ref:
                     process.location = o.Ref(
                         id=loc_ref.id, name=loc_ref.name,

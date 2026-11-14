@@ -106,7 +106,11 @@ def test_for_step_zero(basic):
 def test_undefined_sub(basic):
     with pytest.raises(BasicError) as e:
         basic("mystery 1")
-    assert "SUB 'mystery' is not defined" in str(e.value)
+    assert "'mystery' is not a command, and no SUB has that name" in \
+        str(e.value)
+    with pytest.raises(BasicError) as e:
+        basic('RATING GEOGRAPHY "Good" REASON "x"')
+    assert "RATING does not stand on its own here" in str(e.value)
 
 
 def test_unknown_function(basic):

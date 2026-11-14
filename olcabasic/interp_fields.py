@@ -242,6 +242,19 @@ class FieldsInterpMixin:
                 f"has no uncertainty of its own.", stmt.line,
                 hint="Put UNCERTAINTY on the variables it is calculated "
                      "from.")
+        if spec is not None and spec["kind"].upper() in ("UNIFORM",
+                                                         "TRIANGLE"):
+            value = self.runtime.get_var(stmt.name) \
+                if self.runtime.has_var(stmt.name) else None
+            low, high = spec["values"][0], spec["values"][-1]
+            if isinstance(value, (int, float)) and not isinstance(
+                    value, bool) and not low <= value <= high:
+                raise BasicError(
+                    f"'{stmt.name}' is {value:g}, outside its own "
+                    f"{spec['kind'].upper()} range {low:g} to {high:g}.",
+                    stmt.line,
+                    hint="The value is the one calculated with; it lies "
+                         "inside the range the distribution gives.")
         self.runtime.var_uncertainty[stmt.name] = spec
         if stmt.name in self.runtime.synced_globals:
             self._sync_uncertainty(stmt.name, stmt.line)
