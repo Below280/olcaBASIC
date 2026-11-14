@@ -381,7 +381,9 @@ END PROCESS''',
               "calculating is refused until it has one or is accepted "
               "with IGNORE FACTORS (HELP CALCULATE).\n"
               "USE PROCESS finds an existing process and links it as the "
-              "provider; USE FLOW links a flow with no provider; MAKE FLOW "
+              "provider; USE FLOW links a flow with no provider, and is "
+              "refused for a flow that only background processes make "
+              "(that would link one with no bridge); MAKE FLOW "
               "creates the flow, or reuses one with the same name.\n"
               "A name that matches several processes or flows is an error "
               "that lists them: pick a process with LOCATION or PROVIDER, "
@@ -1994,8 +1996,17 @@ IF condition THEN statement [ELSE statement]''',
         usage="FUNCTION name(parameters) ... END FUNCTION",
         summary="Define a function; it returns the variable with its own name",
         example="FUNCTION double(x)\n  LET double = x * 2\nEND FUNCTION\nPRINT double(4)",
-        notes="Built-in functions: ABS, INT, SQR, LOG, EXP, SIN, COS, TAN, "
-              "MIN, MAX, ROUND, LEN, VAL, STR$, TRIM$, UCASE$, LCASE$.",
+        notes="Built-in functions: ABS, INT (rounds down), SQR (square "
+              "root), LOG (natural log), EXP, SIN, COS, TAN, MIN, MAX, "
+              "ROUND (halves up), SGN, LEN, VAL, STR$, TRIM$, UCASE$, "
+              "LCASE$, LEFT$, RIGHT$, MID$, INSTR.\n"
+              "An amount that uses a variable becomes an openLCA formula. "
+              "There SQR, LOG and INT are written as sqrt, ln and floor, "
+              "so they mean the same; comparisons, AND/OR/NOT, SGN, the "
+              "text functions and ROUND(x, n) are refused in such an "
+              "amount, because openLCA would read them differently.\n"
+              "a ^ b ^ c needs brackets, and -2 ^ 2 is -4. Loops stop "
+              "after 1,000,000 passes.",
         statements=("FunctionDef",)),
     Command(
         name="DATA", dialect=BASIC, topic="PROGRAMMING",

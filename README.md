@@ -87,7 +87,13 @@ A model that is built or calculated wrongly without an error is worse
 than one that does not build. Each of these stops the program with the
 line and what to type instead, and none has an override:
 
-- a background process used without a [bridge](#bridges);
+- a background process used without a [bridge](#bridges), directly or
+  through `USE FLOW`, and a bridge in a unit its provider cannot be
+  measured in (kg onto a provider in m3, say);
+- changing, moving or deleting background data: anything in a folder
+  named with an ISIC or NAICS code, as ecoinvent and the US databases
+  file theirs, is read-only; and a process that a product system still
+  uses, or a flow that anything still uses, is not deleted;
 - a name that could mean several processes or flows, and a method name
   that is not the full name;
 - a `MAKE PROCESS` block that is run again after it was changed (an
@@ -99,6 +105,8 @@ line and what to type instead, and none has an override:
 - a new emission that the method has no characterisation factor for
   (`CALCULATE ... IGNORE FACTORS "flow"` accepts it knowingly);
 - `MONTECARLO` when nothing is uncertain;
+- an amount that would mean something different as an openLCA formula
+  (see [Programming](#programming));
 - `ALLOCATE PHYSICAL` or `ECONOMIC` when a process with several
   products has no factors for it;
 - in an EPD, a module that uses another module's process, and anything
@@ -184,7 +192,9 @@ END PROCESS
 
 `USE PROCESS` must match a process, because that's how the supply chain
 gets linked. `USE FLOW` links a flow and leaves the provider to
-openLCA's linking when the system is built. `MAKE FLOW` creates a flow,
+openLCA's linking when the system is built. It is refused for a flow
+that only background processes make, because the system would then
+take one of them in with no bridge. `MAKE FLOW` creates a flow,
 or reuses one with the same name in the same folder, so running a
 program twice doesn't create duplicates. A plain `INPUT "name"` still
 works as shorthand, trying a process first and then a flow.
@@ -581,7 +591,18 @@ NEXT mass
 
 `WHILE`/`WEND`, `SUB`, `FUNCTION`, `DATA`/`READ` and `INCLUDE` are
 there too. `GOTO` and line numbers aren't; olcaBASIC says so if you
-try them.
+try them. A loop stops after 1,000,000 passes, and a SUB that calls
+itself without end is an error, not a hang.
+
+An amount that uses a variable is written into openLCA as a formula, so
+that a scenario or a sensitivity run can change it. openLCA's formula
+functions are not BASIC's: there `sqr(x)` is x squared, `log` is base
+10 and `int` cuts towards zero. olcaBASIC writes `SQR`, `LOG` and `INT`
+as `sqrt`, `ln` and `floor`, so the amount means in openLCA what it
+means in your program, and refuses what openLCA would read differently
+(a comparison, `AND`/`OR`, `SGN`, the text functions, `ROUND(x, n)`).
+`ROUND` takes halves up, as openLCA does. `a ^ b ^ c` needs brackets,
+because BASIC and maths read it differently; `-2 ^ 2` is -4.
 
 The program in memory works as it did on a BBC Micro. `LOAD "file"`
 puts a program there without running it, `LIST` shows it, `RUN` on its
@@ -604,11 +625,17 @@ DELETE PROCESS "Concrete block; at plant"
 `CONFIRM DELETE ON` skips the yes/no prompt, which is handy at the top
 of a program.
 
-olcaBASIC doesn't delete flows or flow properties. openLCA's IPC
-interface can't tell it whether a flow is used elsewhere in a model, and
-deleting one that is leaves those processes broken. Delete flows in
-openLCA, which checks first. We've asked GreenDelta to add a usage query
-to IPC ([olca-modules issue #76](https://github.com/GreenDelta/olca-modules/issues/76)).
+`DELETE PROCESS` refuses a process that a product system still uses:
+delete the system first. `DELETE FLOW` refuses a flow that a process,
+an impact category, an EPD or a stored result still uses. openLCA's IPC
+interface has no usage query, so olcaBASIC reads the processes itself:
+for a flow of your own folders, every process outside the background
+folders (seconds); for any other flow, every process in the database,
+which takes about an hour on ecoinvent. We've asked GreenDelta to add a
+usage query to IPC
+([olca-modules issue #76](https://github.com/GreenDelta/olca-modules/issues/76)).
+Background data is never deleted. Empty folders cannot be removed over
+IPC: delete them in openLCA.
 
 ## Full command reference
 
@@ -1438,20 +1465,20 @@ need your own copies.
 
 ## Help us improve it
 
-This is version 0.4. The known rough edges:
+This is version 0.4. It has been tested offline (about 1,800 tests)
+and against openLCA 2.7.0 with two ecoinvent-based databases, one with
+the `EN15804+A2 (EF 3.1)` method, where a small EPD runs end to end and
+its document is written. The known rough edges:
 
-- `DELETE PROCESS` and `DELETE SYSTEM` don't check whether other
-  processes or systems refer to what you're deleting, because IPC can't
-  tell olcaBASIC that either. Use them on your own models.
-- `DELETE FLOW` does check, by reading every process, which takes a
-  long time on a large database.
-- Functions in exchange amounts (`SQR`, `MIN` and so on) are passed to
-  openLCA as written, and openLCA's formula functions have their own
-  names.
-- The EPD workflow has been tested against a synthetic method, and its
-  storage and electricity switch against a live ecoinvent database. It
-  has not yet run end to end against the real `EN15804+A2 (EF 3.1)`
-  method pack.
+- Some of what openLCA's IPC server cannot answer is worked out by
+  reading many processes: `DELETE FLOW` of a background flow, and
+  `SHOW FLOW ... USAGE`. On ecoinvent that takes a long time.
+- `EPD DOCUMENT` writes a draft in the order the International EPD
+  System asks for. It is not the programme's own template, and it has
+  tables, not charts. It is a draft until the statements, registration,
+  dates and verification are given, and a verifier still reads it.
+- `DELETE SYSTEM` does not check whether a project or a stored result
+  refers to the system.
 
 Try it on your own models and databases. When it breaks, or when you
 want something it doesn't do, open an issue at
@@ -1475,7 +1502,8 @@ Linux form (`LS`, `CD`, `MKDIR`) beside it.
 
 ## Requirements
 
-- openLCA 2.x with IPC server running (port 8080)
+- openLCA 2 with its IPC server running (port 8080). Tested on 2.6 and
+  2.7.0; attaching a file to a source needs 2.6.2 or later
 - Python 3.11 or later
 - `olca-ipc` (installed automatically). Nothing else.
 - For tab completion on Windows: `pip install olcabasic[completion]`
