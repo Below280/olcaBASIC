@@ -328,7 +328,8 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
 def tokenise(source: str) -> List[Token]:
     """Tokenise a complete olcaBASIC program."""
     # a file saved with a byte order mark (Windows Notepad) starts with it
-    source = source.lstrip("\ufeff")
+    # (and a program pasted together from such files has them inside)
+    source = source.replace("\ufeff", "")
     all_tokens = []
     lines = source.split("\n")
     accumulated = ""
