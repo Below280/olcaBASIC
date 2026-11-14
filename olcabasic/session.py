@@ -150,8 +150,16 @@ class Session:
                 return self._result(sink, errors)
 
             if dry_run:
-                report = dryrun.check(statements, self.runtime,
-                                      connected=self.connected)
+                try:
+                    report = dryrun.check(statements, self.runtime,
+                                          connected=self.connected)
+                except RecursionError:
+                    errors.append(error_dict(
+                        "The program nests too deeply to check (an "
+                        "expression thousands of terms long).", 0,
+                        "Split the expression with LET."))
+                    sink.write(f"  Error: {errors[-1]['message']}")
+                    return self._result(sink, errors)
                 sink.lines.extend(report.text_lines())
                 sink.line = 0
                 sink.data("DRY RUN", "dry_run", report.summary())

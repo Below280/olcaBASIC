@@ -242,3 +242,8 @@ def test_let_on_a_global_says_openlca_still_has_the_old_value(monkeypatch):
 def test_which_folders_are_background(folder, background):
     from olcabasic.background import is_background_folder
     assert is_background_folder(folder) is background
+
+
+def test_a_dry_run_of_a_huge_expression(s):
+    r = s.run("PRINT " + "+".join(["1"] * 20000), dry_run=True)
+    assert not r.ok and "nests too deeply" in r.errors[0]["message"]
