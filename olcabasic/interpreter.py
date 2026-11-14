@@ -1295,7 +1295,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         self._emit("create_bridge", result)
 
         if "error" in result:
-            raise BasicError(result["error"], stmt.line)
+            raise BasicError(result["error"], stmt.line,
+                             hint=result.get("hint"))
 
         existed = result.get("already_existed", False)
         if existed:

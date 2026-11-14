@@ -600,6 +600,61 @@ class BuildMixin:
                     "already_existed": True,
                 }
 
+        # The background flow, found before anything is written, so that
+        # a unit the provider cannot be measured in stops the bridge
+        # before its flow exists
+        bg_flow_ref = None
+        bg_flow_name = None
+        bg_fp_ref = None
+        if provider_id:
+            if provider_flow_id:
+                bg_flow = self.client.get(o.Flow, provider_flow_id)
+            else:
+                bg_flow = None
+                provider_proc = self.client.get(o.Process, provider_id)
+                for ex in (provider_proc.exchanges or []) if provider_proc \
+                        else []:
+                    if getattr(ex, "is_quantitative_reference", False):
+                        if ex.flow:
+                            bg_flow = self.client.get(o.Flow, ex.flow.id)
+                        break
+            if bg_flow is not None:
+                bg_flow_ref = o.Ref(id=bg_flow.id, name=bg_flow.name,
+                                    ref_type=o.RefType.Flow)
+                bg_flow_name = bg_flow.name
+                fp_ref = self._get_fp_ref(unit_name)
+                factors = bg_flow.flow_properties or []
+                match = next((f for f in factors
+                              if fp_ref is not None and f.flow_property
+                              and f.flow_property.id == fp_ref.id), None)
+                if match is None and factors:
+                    ref_fp = next((f for f in factors
+                                   if f.is_ref_flow_property), factors[0])
+                    can = ", ".join(
+                        (f.flow_property.name or "?")
+                        for f in factors if f.flow_property)
+                    ref_name = (ref_fp.flow_property.name
+                                if ref_fp.flow_property else "?")
+                    return {"error": (
+                        f"The bridge is in {unit_name}, but the provider's "
+                        f"flow '{bg_flow.name}' is measured in "
+                        f"{ref_name}"
+                        + (f" (it also has: {can})" if len(factors) > 1
+                           else "")
+                        + f", and openLCA has no factor from {unit_name} "
+                          f"to it. 1 {unit_name} of the bridge would be "
+                          f"taken as 1 of the provider's unit."),
+                        "hint": (
+                            f"Make the bridge in the provider's unit (FIND "
+                            f"PROCESS shows it), and convert in your own "
+                            f"process: for example a density as a "
+                            f"parameter, with the amount written as "
+                            f"kg / density.")}
+                if match is not None:
+                    bg_fp_ref = o.Ref(id=match.flow_property.id,
+                                      name=match.flow_property.name,
+                                      ref_type=o.RefType.FlowProperty)
+
         # Create the bridge flow
         flow_type = "waste" if waste else "product"
         flow_result = self.create_flow(name, unit_name, category, flow_type)
@@ -620,50 +675,26 @@ class BuildMixin:
         qref_x.internal_id = 1
 
         exchanges = [qref_x]
-        bg_flow_name = None
 
-        # Build the background exchange if provider is given
-        if provider_id:
-            bg_flow_ref = None
-
-            if provider_flow_id:
-                # Use the explicitly provided flow ID
-                bg_flow = self.client.get(o.Flow, provider_flow_id)
-                if bg_flow:
-                    bg_flow_ref = o.Ref(
-                        id=bg_flow.id, name=bg_flow.name,
-                        ref_type=o.RefType.Flow,
-                    )
-                    bg_flow_name = bg_flow.name
-            else:
-                # Auto-detect: look up provider's quantitative reference flow
-                provider_proc = self.client.get(o.Process, provider_id)
-                if provider_proc and provider_proc.exchanges:
-                    for ex in provider_proc.exchanges:
-                        if getattr(ex, "is_quantitative_reference", False):
-                            if ex.flow:
-                                bg_flow_ref = o.Ref(
-                                    id=ex.flow.id, name=ex.flow.name,
-                                    ref_type=o.RefType.Flow,
-                                )
-                                bg_flow_name = ex.flow.name
-                            break
-
-            if bg_flow_ref:
-                bg_x = o.Exchange()
-                bg_x.flow = bg_flow_ref
-                bg_x.amount = 1.0
-                bg_x.unit = unit_ref
-                # For product: background flow is INPUT to bridge
-                # For waste: background flow is OUTPUT from bridge
-                bg_x.is_input = not waste
-                bg_x.is_quantitative_reference = False
-                bg_x.is_avoided_product = False
-                bg_x.default_provider = o.Ref(
-                    id=provider_id, ref_type=o.RefType.Process,
-                )
-                bg_x.internal_id = 2
-                exchanges.append(bg_x)
+        if bg_flow_ref:
+            bg_x = o.Exchange()
+            bg_x.flow = bg_flow_ref
+            bg_x.amount = 1.0
+            bg_x.unit = unit_ref
+            if bg_fp_ref is not None:
+                # 1 unit of the bridge is converted to the provider's
+                # reference unit with the flow's own factor
+                bg_x.flow_property = bg_fp_ref
+            # For product: background flow is INPUT to bridge
+            # For waste: background flow is OUTPUT from bridge
+            bg_x.is_input = not waste
+            bg_x.is_quantitative_reference = False
+            bg_x.is_avoided_product = False
+            bg_x.default_provider = o.Ref(
+                id=provider_id, ref_type=o.RefType.Process,
+            )
+            bg_x.internal_id = 2
+            exchanges.append(bg_x)
 
         # Build the bridge process
         try:
@@ -1687,6 +1718,19 @@ class BuildMixin:
                     break
             if flow_ref is None:
                 return {"error": f"'{second.name}' has no reference flow."}
+            # the second provider must be measurable in the bridge's unit
+            fp = getattr(first, "flow_property", None)
+            if fp is None:
+                fp = self._get_fp_ref(getattr(first.unit, "name", "") or "")
+            flow2 = self.client.get(o.Flow, flow_ref.id)
+            if fp is not None and flow2 is not None and not any(
+                    f.flow_property and f.flow_property.id == fp.id
+                    for f in flow2.flow_properties or []):
+                return {"error": (
+                    f"'{second.name}' gives '{flow2.name}', which openLCA "
+                    f"cannot measure in {getattr(first.unit, 'name', '?')}, "
+                    f"the bridge's unit; 1 of one would be taken as 1 of "
+                    f"the other.")}
             made = self.create_global_parameter(
                 parameter, value=0.0,
                 description="Switch used by olcaBASIC: 0 for the main "
@@ -1700,6 +1744,9 @@ class BuildMixin:
             extra.amount = 0.0
             extra.amount_formula = parameter
             extra.unit = first.unit
+            if fp is not None:
+                extra.flow_property = o.Ref(id=fp.id, name=fp.name,
+                                            ref_type=o.RefType.FlowProperty)
             extra.is_input = first.is_input
             extra.is_quantitative_reference = False
             extra.is_avoided_product = False

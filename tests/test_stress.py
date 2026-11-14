@@ -442,3 +442,21 @@ def test_a_location_is_found_by_its_code_without_reading_its_geometry():
     assert find([uk, other], "gb")[0] is uk
     assert find([uk, other], "germany")[0] is other
     assert find([uk, other], "XX")[0] is None
+
+
+def test_a_bridge_in_a_unit_its_provider_cannot_be_measured_in(s, client):
+    """Found by the agent test: a kg bridge onto a provider measured in
+    m3 was accepted, and 1 kg was taken as 1 m3 (a result 150 times too
+    big, with a clean VALIDATE)."""
+    r = s.run(SETUP + f'BRIDGE "steel by energy", kWh\n  PROVIDER "{STEEL}"'
+                      f'\nEND BRIDGE')
+    refused(r, "The bridge is in kWh", "has no factor from kWh")
+    assert not client.by_name(o.Flow, "BRIDGE | steel by energy | kWh")
+
+
+def test_a_bridge_input_carries_the_flow_property_of_its_unit(s, client):
+    assert s.run(SETUP + f'BRIDGE "steel", kg\n  PROVIDER "{STEEL}"\n'
+                         f'END BRIDGE').ok
+    p = client.by_name(o.Process, "BRIDGE | steel | kg")[0]
+    bg = next(e for e in p.exchanges if e.is_input)
+    assert bg.flow_property is not None and bg.flow_property.name == "Mass"
