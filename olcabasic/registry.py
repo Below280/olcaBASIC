@@ -2382,7 +2382,7 @@ def render(query: str = "") -> str:
         out.append("  HELP <one of these> shows its syntax and an example.")
         out.append("")
         return "\n".join(out)
-    return (f"\n  No help for: {query}\n  Type HELP for the command list. "
+    return (f"\n  No help for: {query if len(query) <= 80 else query[:77] + "..."}\n  Type HELP for the command list. "
             f"Topics: {', '.join(TOPICS)}\n")
 
 
