@@ -2570,7 +2570,45 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         if "error" in result:
             raise BasicError(result["error"], stmt.line)
         self.runtime.store_results(result, "montecarlo")
-        self.out.write(format_generic(result))
+        self._write_montecarlo(result, has.get("has_uncertainty", False))
+
+    def _write_montecarlo(self, result: Dict, foreground_uncertain: bool):
+        """The statistics as a table, with what the reader needs to know
+        about them: too few runs for percentiles, and where the spread
+        comes from."""
+        stats = result.get("statistics") or {}
+        n = result.get("iterations", 0)
+        self.out.write(f"  System: {result.get('system', '')}   Method: "
+                       f"{result.get('method', '')}   Runs: {n}")
+
+        def num(v):
+            return "-" if v is None else f"{v:.4g}"
+        head = (f"  {'Impact category':<50}  {'Unit':<12}  {'Mean':>10}  "
+                f"{'SD':>10}  {'CV %':>6}  {'Min':>10}  {'P5':>10}  "
+                f"{'Median':>10}  {'P95':>10}  {'Max':>10}")
+        self.out.write(head)
+        self.out.write("  " + "-" * (len(head) - 2))
+        for name in sorted(stats):
+            st = stats[name]
+            shown = name if len(name) <= 50 else name[:47] + "..."
+            self.out.write(
+                f"  {shown:<50}  {str(st.get('unit', ''))[:12]:<12}  "
+                f"{num(st.get('mean')):>10}  {num(st.get('std_dev')):>10}  "
+                f"{st.get('cv_pct', 0):>6.1f}  {num(st.get('min')):>10}  "
+                f"{num(st.get('p5')):>10}  {num(st.get('median')):>10}  "
+                f"{num(st.get('p95')):>10}  {num(st.get('max')):>10}")
+        if n < 20:
+            self.out.write(f"  NOTE: P5 and P95 need 20 runs or more; "
+                           f"{n} runs give only a rough idea of the spread.")
+        elif n < 1000:
+            self.out.write(f"  NOTE: {n} runs. For results you report, "
+                           f"1,000 or more is usual.")
+        if not foreground_uncertain:
+            self.out.write("  NOTE: nothing in your own processes has an "
+                           "uncertainty distribution, so all of this spread "
+                           "comes from the background database.")
+        if result.get("warning"):
+            self.out.write(f"  WARNING: {result['warning']}")
 
     def _exec_scenario(self, stmt: ScenarioStmt):
         """Accumulate a scenario definition."""
