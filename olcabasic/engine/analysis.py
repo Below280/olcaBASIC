@@ -213,7 +213,7 @@ class AnalysisMixin:
             return {"error": f"File not found: {csv_path}"}
 
         try:
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames
                 rows = list(reader)
@@ -296,7 +296,7 @@ class AnalysisMixin:
         results = calc_result["results"]
 
         try:
-            with open(output_path, "w", newline="") as f:
+            with open(output_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
 
                 # Header
@@ -479,7 +479,7 @@ class AnalysisMixin:
 
         try:
             names = []
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
                 for line in f:
                     name = line.strip()
                     if not name or name.startswith("#"):
@@ -535,7 +535,7 @@ class AnalysisMixin:
         testable = calc_result["tested"]
 
         try:
-            with open(output_path, "w", newline="") as f:
+            with open(output_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
 
                 # Header: Impact Category | Unit | Baseline | p1 -X% | p1 +X% | ...
