@@ -297,7 +297,13 @@ END EDIT''')
     proc = process(client, "Widget")
     steel = next(e for e in proc.exchanges
                  if client._flow_name(e.flow.id) == B_STEEL)
-    assert steel.amount == 1.5 and steel.amount_formula is None
+    # the amount keeps the parameter it was given when the process was
+    # built, and the parameter has the new value (the agent test of
+    # 14/11/2026 found the old parameter left behind at its old value)
+    assert steel.amount == 1.5
+    param = next(q for q in proc.parameters
+                 if q.name == steel.amount_formula)
+    assert param.value == 1.5
     assert len(proc.exchanges) == 5 and proc.description == "Edited"
 
 

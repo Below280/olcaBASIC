@@ -1260,10 +1260,27 @@ class BuildMixin:
                                 changes.append(
                                     f"exchange '{ex.flow.name}' formula set to '{upd['formula']}'")
                             elif "amount" in upd:
+                                # an amount made into a parameter when the
+                                # process was built keeps its parameter:
+                                # the parameter gets the new value, so a
+                                # scenario or sensitivity on it still works
+                                own = next((
+                                    q for q in process.parameters or []
+                                    if q.name == (ex.amount_formula or "")
+                                    and q.is_input_parameter
+                                    and re.match(r"^p\d{2}_", q.name or "")),
+                                    None)
                                 ex.amount = float(upd["amount"])
-                                ex.amount_formula = None
-                                changes.append(
-                                    f"exchange '{ex.flow.name}' amount set to {upd['amount']}")
+                                if own is not None:
+                                    own.value = float(upd["amount"])
+                                    changes.append(
+                                        f"exchange '{ex.flow.name}' amount "
+                                        f"set to {upd['amount']} (parameter "
+                                        f"{own.name})")
+                                else:
+                                    ex.amount_formula = None
+                                    changes.append(
+                                        f"exchange '{ex.flow.name}' amount set to {upd['amount']}")
                             if "unit" in upd:
                                 fp_ref, u_ref, u_err = self._exchange_unit(
                                     ex.flow.id, upd["unit"])
