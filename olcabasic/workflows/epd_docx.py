@@ -118,7 +118,12 @@ def _runs(text: str) -> str:
     return "".join(out) or _run("")
 
 
+# characters XML 1.0 does not allow, which would make Word refuse the file
+_NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
 def _run(text: str, bold: bool = False, small: bool = False) -> str:
+    text = _NOT_XML.sub("", text)
     props = ("<w:b/>" if bold else "") + ('<w:sz w:val="16"/>' if small
                                          else "")
     props = f"<w:rPr>{props}</w:rPr>" if props else ""
@@ -257,7 +262,10 @@ def markdown_to_docx(markdown: str, path: str, title: str = "") -> List[str]:
                 r"^(#|\||!\[|> |- )", lines[i]):
             text.append(lines[i])
             i += 1
-        body.append(_para(" ".join(t.strip() for t in text)))
+        para = " ".join(t.strip() for t in text)
+        if re.match(r"^\\[#|!>\-*\d]", para):      # escaped by prose()
+            para = para[1:]
+        body.append(_para(para))
 
     section = ('<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
                '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" '

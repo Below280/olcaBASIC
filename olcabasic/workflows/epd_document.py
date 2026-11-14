@@ -70,6 +70,22 @@ def cell(text) -> str:
     return str(text).replace("|", "/").replace("\n", " ").strip()
 
 
+def alt(text) -> str:
+    """Text for the [...] of a Markdown picture."""
+    return cell(text).replace("[", "(").replace("]", ")")
+
+
+def prose(text) -> str:
+    """Free text as one paragraph of its own: a line break becomes a
+    space, and a start that Markdown would read as a heading, a table,
+    a picture, a quote or a list item is escaped with a backslash, so
+    the text stays text in the .md and in the .docx."""
+    text = " ".join(str(text).split())
+    if re.match(r"^(#|\||!\[|>|- |\* |\d+\. )", text):
+        text = "\\" + text
+    return text
+
+
 def read_statements(path: str) -> Dict[str, str]:
     """A statements file: 'key: text' lines; a line that starts with a
     space or a tab carries on the one before; # starts a comment."""
@@ -256,6 +272,15 @@ class DocumentMixin:
         # every module: declared with a geography, or left out for a
         # reason
         declared = set(d["modules"])
+        for key in ("GEOGRAPHY", "OMITTED", "SCENARIO"):
+            seen: Dict[str, int] = {}
+            for e in g.get(key, []):
+                for m in e["modules"]:
+                    if m in seen:
+                        errors.append(f"{key}: module {m} is on line "
+                                      f"{seen[m]} and again on line "
+                                      f"{e['line']}; give each module once")
+                    seen.setdefault(m, e["line"])
         geo = self._modules_covered(g, "GEOGRAPHY")
         for m in ALL_MODULES:
             if m in declared and m not in geo:
@@ -285,9 +310,9 @@ class DocumentMixin:
         for dup in sorted({n for n in names if names.count(n) > 1}):
             errors.append(f"CONTENT: '{dup}' is listed twice")
         for e in g.get("CONTENT", []):
-            if e["args"][1] < 0:
+            if e["args"][1] <= 0:
                 errors.append(f"CONTENT '{e['args'][0]}' (line {e['line']}) "
-                              f"has a negative mass")
+                              f"needs a mass above 0")
             for word, value in e["options"].items():
                 if not 0 <= value <= 100:
                     errors.append(f"CONTENT '{e['args'][0]}' (line "
@@ -299,6 +324,28 @@ class DocumentMixin:
                     f"product has biogenic carbon, so each material says "
                     f"its biogenic share, BIOGENIC n% "
                     f"({p.clause('content')})")
+        for e in g.get("PACKAGING", []):
+            if e["args"][1] <= 0:
+                errors.append(f"PACKAGING '{e['args'][0]}' (line "
+                              f"{e['line']}) needs a mass above 0")
+        content = g.get("CONTENT", [])
+        if content and all(e["unit"] in MASS_UNITS for e in content):
+            total = sum(e["args"][1] * MASS_UNITS[e["unit"]]
+                        for e in content)
+            if unit in MASS_UNITS:
+                expected = [d["unit_amount"] * MASS_UNITS[unit]]
+            elif g.get("MASS PER UNIT"):
+                mpu = g["MASS PER UNIT"][0]["args"][0]
+                expected = [mpu, mpu * d["unit_amount"]]
+            else:
+                expected = []
+            if expected and total > 0 and not any(
+                    abs(total - x) <= 0.01 * x for x in expected if x > 0):
+                errors.append(
+                    f"CONTENT: the materials add up to {total:g} kg, but "
+                    f"one declared unit ({d['unit_amount']:g} {d['unit']}) "
+                    f"is {expected[-1]:g} kg; the content declaration "
+                    f"covers the whole declared unit")
         svhc = g.get("SVHC", [])
         if any(e["args"] == ["NONE"] for e in svhc) and len(svhc) > 1:
             errors.append("SVHC: NONE and a list of substances are both "
@@ -422,10 +469,10 @@ class DocumentMixin:
         add(f"# Environmental Product Declaration: {d['name']}")
         add("")
         if one("LOGO"):
-            add(f"![Logo of {one('OWNER')}]({one('LOGO')})")
+            add(f"![Logo of {alt(one('OWNER'))}]({one('LOGO')})")
             add("")
         if one("IMAGE"):
-            add(f"![{d['name']}]({one('IMAGE')})")
+            add(f"![{alt(d['name'])}]({one('IMAGE')})")
             add("")
         cover = [["Product", d["name"]],
                  ["EPD owner", one("OWNER")],
@@ -439,9 +486,9 @@ class DocumentMixin:
                   ["Version date", one("VERSION DATE") or "[DRAFT]"],
                   ["Validity date", one("VALID UNTIL") or "[DRAFT]"]]
         table(["", ""], cover)
-        add(self._say(statements, "cover"))
+        add(prose(self._say(statements, "cover")))
         add("")
-        add(self._say(statements, "iso14025"))
+        add(prose(self._say(statements, "iso14025")))
 
         # general information (7.4.2)
         heading(2, "General information")
@@ -469,9 +516,9 @@ class DocumentMixin:
                      else ("Yes" if follow else "No")])
         table(["", ""], rows)
         heading(3, "Ownership and limitations on use of the EPD")
-        add(self._say(statements, "ownership"))
+        add(prose(self._say(statements, "ownership")))
         add("")
-        add(self._say(statements, "comparability"))
+        add(prose(self._say(statements, "comparability")))
 
         # EPD owner (7.4.3)
         heading(2, "Information about the EPD owner")
@@ -480,7 +527,7 @@ class DocumentMixin:
                          ["Contact", one("OWNER CONTACT")]]
               + ([["LCA practitioner", one("PRACTITIONER")]]
                  if one("PRACTITIONER") else []))
-        add(one("OWNER DESCRIPTION"))
+        add(prose(one("OWNER DESCRIPTION")))
 
         # product (7.4.4)
         heading(2, "Product information")
@@ -497,7 +544,7 @@ class DocumentMixin:
         for e in g.get("WEBSITE", []):
             rows.append(["More information", e["args"][0]])
         table(["", ""], rows)
-        add(one("PRODUCT DESCRIPTION"))
+        add(prose(one("PRODUCT DESCRIPTION")))
         add("")
         add(f"**Manufacturing.** {one('MANUFACTURING')}")
 
@@ -579,10 +626,10 @@ class DocumentMixin:
         # environmental performance (7.4.7)
         heading(2, "Environmental performance")
         self._result_tables(table, heading)
-        add(self._say(statements, "relative"))
+        add(prose(self._say(statements, "relative")))
         if any(m in declared for m in ("C1", "C2", "C3", "C4")):
             add("")
-            add(self._say(statements, "end_of_life"))
+            add(prose(self._say(statements, "end_of_life")))
         if "D" in declared:
             add("")
             add("Module D is declared on its own and is not added to any "
@@ -592,7 +639,7 @@ class DocumentMixin:
         if extra:
             heading(2, "Additional environmental information")
             for e in extra:
-                add(e["args"][0])
+                add(prose(e["args"][0]))
                 add("")
 
         # version history, abbreviations, references (7.4.11 to 7.4.13)
@@ -732,7 +779,7 @@ class DocumentMixin:
         add(f"Share of primary data ({dq.get('indicator', 'GWP-GHG')}, "
             f"A1-A3): {dq.get('primary_share_text', 'not calculated')}.")
         add("")
-        add(self._say(statements, "primary_share"))
+        add(prose(self._say(statements, "primary_share")))
 
         heading(3, "Data quality")
         needed = [r for r in register if r["needed_for"]]

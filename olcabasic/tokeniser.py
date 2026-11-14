@@ -11,6 +11,13 @@ from enum import Enum, auto
 from typing import List, Optional
 
 
+def _finite(text: str, line_number: int) -> None:
+    """A number written in the program that is too large to hold."""
+    if float(text) in (float("inf"), float("-inf")):
+        raise TokeniseError(f"The number {text} is too large for a number "
+                            f"(the largest is about 1.8e308)", line_number)
+
+
 class TokeniseError(Exception):
     """Raised for characters or literals the tokeniser cannot accept."""
     def __init__(self, message: str, line: int = 0):
@@ -233,6 +240,7 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
                 # Try negative number
                 m = _NUMBER_PAT.match(text, pos + 1)
                 if m and m.start() == pos + 1:
+                    _finite(m.group(1), line_number)
                     tokens.append(Token(TokenType.NUMBER,
                                         "-" + m.group(1),
                                         line_number, pos))
@@ -279,6 +287,7 @@ def tokenise_line(text: str, line_number: int = 0) -> List[Token]:
         # Number literal
         m = _NUMBER_PAT.match(text, pos)
         if m and m.start() == pos:
+            _finite(m.group(1), line_number)
             tokens.append(Token(TokenType.NUMBER, m.group(1),
                                 line_number, pos))
             pos = m.end()

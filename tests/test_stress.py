@@ -262,3 +262,57 @@ def test_a_program_file_saved_by_notepad_in_cp1252(s, tmp_path):
     path.write_bytes(b"\xef\xbb\xbfPRINT 7\n")          # UTF-8 with a BOM
     r = s.run(f'INCLUDE "{path}"')
     assert r.ok and "7" in r.text
+
+
+def test_a_number_too_large_to_hold_is_refused(s):
+    refused(s.run("PRINT 1e400"), "too large for a number")
+    assert s.run("PRINT 1.7e308").ok
+
+
+# ── EPD DOCUMENT with awkward lines ──────────────────────────
+
+def _document(monkeypatch, tmp_path, old, new, out="epd.md"):
+    import test_epd_document as td
+    import test_epd_toolkit as t
+    monkeypatch.setattr(EpdWorkflow, "today",
+                        staticmethod(lambda: datetime.date(2026, 11, 12)))
+    c = t.add_epd_methods(seed_ecoinvent_like())
+    s = Session(client=c)
+    s.run('DATABASE FAMILY "ecoinvent"')
+    t.ready(s, c)
+    assert s.run(f'EPD DATA QUALITY\nEPD REPORT "{tmp_path / "r.csv"}"').ok
+    block = td.full_block(tmp_path, out=out)
+    assert old in block
+    return s.run(block.replace(old, new))
+
+
+@pytest.mark.parametrize("old, new, words", [
+    ('CONTENT "Timber", 1 kg BIOGENIC 100%',
+     'CONTENT "Timber", 0 kg BIOGENIC 100%', "needs a mass above 0"),
+    ('CONTENT "Timber", 1 kg BIOGENIC 100%',
+     'CONTENT "Timber", 5 kg BIOGENIC 100%', "the materials add up to 5 kg"),
+    ('SVHC NONE', 'SVHC NONE\n  PACKAGING "Wrap", 0 kg',
+     "PACKAGING 'Wrap'"),
+    ('GEOGRAPHY A1, A2, A3, C1, C2, C3, C4, D "GB"',
+     'GEOGRAPHY A1, A2, A3, C1, C2, C3, C4, D "GB"\n  GEOGRAPHY A1 "FR"',
+     "module A1 is on line"),
+])
+def test_document_lines_that_do_not_add_up(monkeypatch, tmp_path, old, new,
+                                           words):
+    refused(_document(monkeypatch, tmp_path, old, new), words)
+
+
+@pytest.mark.parametrize("out", ["epd.md", "epd.docx"])
+def test_free_text_that_looks_like_markup_stays_text(monkeypatch, tmp_path,
+                                                     out):
+    import zipfile
+    r = _document(monkeypatch, tmp_path, 'OWNER DESCRIPTION "A sawmill."',
+                  'OWNER DESCRIPTION "# Not a heading\x01"', out)
+    assert r.ok, r.errors
+    if out == "epd.md":
+        assert "\\# Not a heading" in (tmp_path / out).read_text("utf-8")
+    else:
+        xml = zipfile.ZipFile(tmp_path / out).read(
+            "word/document.xml").decode("utf-8")
+        assert '<w:t xml:space="preserve"># Not a heading</w:t>' in xml
+        assert "\x01" not in xml
