@@ -45,7 +45,19 @@ def matching_baseline(engine):
     if not paths:
         pytest.skip("no live baseline: set OLCA_LIVE_BASELINE to the path of "
                     "a live_baseline file")
-    info = engine.get_database_info()
+    info = dict(engine.get_database_info())
+    # The live tests leave some flows and processes behind to reuse on
+    # the next run (deleting a flow used to read the whole database).
+    # They are named after olcaBASIC, so they are left out of the count.
+    import olca_schema as o
+    for kind, otype in (("flows", o.Flow), ("processes", o.Process)):
+        try:
+            ours = sum(1 for d in engine.client.get_descriptors(otype)
+                       if "olcaBASIC" in (d.name or ""))
+        except Exception:
+            ours = 0
+        if kind in info:
+            info[kind] = info[kind] - ours
     reasons = []
     for path in paths:
         data = json.loads(path.read_text(encoding="utf-8"))

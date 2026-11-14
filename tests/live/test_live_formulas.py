@@ -65,4 +65,5 @@ def test_formulas_come_out_in_openlca_as_in_olcabasic(runner):
                 f"{got.get(k)} in openLCA"
     finally:
         s.run(f'CONFIRM DELETE ON\nDELETE SYSTEM "{NAME}"\n'
-              f'DELETE PROCESS "{NAME}"')
+              f'DELETE PROCESS "{NAME}"\n'
+              + "\n".join(f'DELETE FLOW "{flow(k)}"' for k in CASES))
