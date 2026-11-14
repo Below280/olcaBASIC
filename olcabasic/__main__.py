@@ -27,6 +27,7 @@ BANNER = r"""
                          by Below280
 """
 
+from .errors import BasicError
 from . import __version__ as VERSION
 
 
@@ -93,13 +94,13 @@ def main():
 
     if args.command == "run" and args.file:
         # Program mode: run a .baslca file
+        from .interpreter import read_program_file
         try:
-            with open(args.file, "r", encoding="utf-8") as f:
-                source = f.read()
-            interpreter.run_program(source, filename=args.file)
-        except FileNotFoundError:
-            print(f"File not found: {args.file}")
+            source = read_program_file(args.file)
+        except BasicError as e:
+            print(e.message)
             sys.exit(1)
+        interpreter.run_program(source, filename=args.file)
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)

@@ -140,6 +140,28 @@ def _command_word(stmt) -> str:
 LOOP_LIMIT = 1_000_000
 
 
+def read_program_file(path: str) -> str:
+    """The text of a program file: UTF-8 (with or without a byte order
+    mark), or, failing that, the Windows code page Notepad used to save
+    in. A missing file, a folder or an unreadable file is a plain
+    error."""
+    if os.path.isdir(path):
+        raise BasicError(f"'{path}' is a folder, not a program file.")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        raise BasicError(f"Include file not found: {path}")
+    except OSError as e:
+        raise BasicError(f"Could not read '{path}': {e.strerror or e}.")
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise BasicError(f"'{path}' is not a text file olcaBASIC can read.")
+
+
 def _arity(kind: str, name: str, params, args, line: int = 0):
     if len(args) != len(params):
         want = ", ".join(params) or "nothing"
@@ -319,21 +341,20 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         for line in lines:
             stripped = line.strip().upper()
-            if stripped.startswith("INCLUDE"):
+            if re.match(r"INCLUDE\b", stripped):
                 # Extract filename
                 parts = line.strip().split('"')
                 if len(parts) >= 2:
                     inc_file = parts[1]
+                    if not inc_file.strip():
+                        raise BasicError("INCLUDE needs a file name.",
+                                         hint='For example: INCLUDE '
+                                              '"bridges.baslca"')
                     inc_path = os.path.join(base_dir, inc_file)
                     if os.path.abspath(inc_path) in seen:
                         raise BasicError(
                             f"INCLUDE loop: {inc_file} includes itself")
-                    try:
-                        with open(inc_path, "r", encoding="utf-8") as f:
-                            inc_source = f.read()
-                    except FileNotFoundError:
-                        raise BasicError(
-                            f"Include file not found: {inc_path}")
+                    inc_source = read_program_file(inc_path)
                     # Recursive includes
                     inc_source = self._process_includes(
                         inc_source, inc_path, seen)
@@ -2806,10 +2827,10 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         refused and the program in memory stays as it was."""
         filename = self._eval_str(stmt.filename)
         try:
-            with open(filename, "r", encoding="utf-8") as f:
-                source = f.read()
-        except FileNotFoundError:
-            raise BasicError(f"File not found: {filename}", stmt.line)
+            source = read_program_file(filename)
+        except BasicError as e:
+            raise BasicError(e.message.replace("Include file not found",
+                                               "File not found"), stmt.line)
         try:
             parse(self._process_includes(source, filename))
         except ParseError as e:
@@ -2857,11 +2878,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
     def _exec_run_file(self, stmt: RunFileStmt):
         filename = self._eval_str(stmt.filename)
         try:
-            with open(filename, "r", encoding="utf-8") as f:
-                source = f.read()
-            self.run_program(source, filename)
-        except FileNotFoundError:
-            raise BasicError(f"File not found: {filename}", stmt.line)
+            source = read_program_file(filename)
+        except BasicError as e:
+            raise BasicError(e.message.replace("Include file not found",
+                                               "File not found"), stmt.line)
+        self.run_program(source, filename)
 
     def _exec_update_param(self, stmt: UpdateParamStmt):
         """UPDATE PARAMETER: set the variable, and write the openLCA

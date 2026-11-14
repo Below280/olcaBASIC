@@ -247,3 +247,18 @@ def test_which_folders_are_background(folder, background):
 def test_a_dry_run_of_a_huge_expression(s):
     r = s.run("PRINT " + "+".join(["1"] * 20000), dry_run=True)
     assert not r.ok and "nests too deeply" in r.errors[0]["message"]
+
+
+def test_include_with_no_name_or_a_folder(s, tmp_path):
+    refused(s.run('INCLUDE ""'), "INCLUDE needs a file name")
+    refused(s.run(f'INCLUDE "{tmp_path}"'), "is a folder")
+
+
+def test_a_program_file_saved_by_notepad_in_cp1252(s, tmp_path):
+    path = tmp_path / "old.baslca"
+    path.write_bytes('PRINT "caf\xe9"\n'.encode("cp1252"))
+    r = s.run(f'RUN "{path}"')
+    assert r.ok and "café" in r.text
+    path.write_bytes(b"\xef\xbb\xbfPRINT 7\n")          # UTF-8 with a BOM
+    r = s.run(f'INCLUDE "{path}"')
+    assert r.ok and "7" in r.text
