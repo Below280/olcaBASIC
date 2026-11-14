@@ -696,6 +696,17 @@ class DocumentMixin:
                    "Reference year", "Data category",
                    f"Share of {dq.get('indicator', 'GWP-GHG')} in A1-A3 (%)",
                    "Share from primary data (%)"], rows)
+        if dq.get("a3_years"):
+            table(["Other A3 (core) process", "Reference year"],
+                  [[r["process"], r["year"] or ""] for r in dq["a3_years"]])
+        if dq.get("downstream"):
+            table(["Process after A3", "Modules", "Source type",
+                   "Database and version",
+                   f"Share of {dq.get('indicator', 'GWP-GHG')} over all "
+                   f"declared stages (%)"],
+                  [[r["process"], " ".join(r["modules"]), r["source_type"],
+                    r["source"], f"{r['share_of_gwp']:.2g}"]
+                   for r in dq["downstream"]])
         add(f"Share of primary data ({dq.get('indicator', 'GWP-GHG')}, "
             f"A1-A3): {dq.get('primary_share_text', 'not calculated')}.")
         add("")

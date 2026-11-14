@@ -349,6 +349,60 @@ class EpdToolkitMixin:
         primary_text = (f">{p.primary_share_cap_pct:g}%"
                         if primary_total > p.primary_share_cap_pct
                         else _pct(primary_total))
+        for r in rows:
+            if r["year"] is None:
+                errors.append(
+                    f"'{r['process']}' gives more than "
+                    f"{p.gwp_row_threshold_pct:g}% of '{gwp}' in A1-A3 and "
+                    f"its DATA line has no YEAR: the reference year is "
+                    f"declared ({p.clause('data_quality')}).")
+
+        # The reference year of every A3 (core) process is declared,
+        # however small its share (A.5.4).
+        listed = {r["process"] for r in rows}
+        a3_years = []
+        for e in sorted(entries.values(), key=lambda e: e["name"]):
+            if "A3" not in e["modules"] or e["is_total"] \
+                    or e["name"] in listed or not e.get("category"):
+                continue
+            if e["year"] is None:
+                errors.append(
+                    f"'{e['name']}' is an A3 (core) process and its DATA "
+                    f"line has no YEAR: the reference year of core data is "
+                    f"declared whatever its share "
+                    f"({p.clause('data_quality')}).")
+            a3_years.append({"process": e["name"], "year": e["year"]})
+
+        # Processes after A3 that give more than the threshold of GWP-GHG
+        # over all the stages declared: their database is declared too.
+        later = [c for c in self.d["modules"]
+                 if c not in p.product_stage and c != "D"]
+        downstream = []
+        if later:
+            every = [c for c in self.d["modules"] if c != "D"]
+            whole = sum(magnitude(e, gwp, every) for e in entries.values())
+            for e in sorted(entries.values(),
+                            key=lambda e: -magnitude(e, gwp, later)):
+                amount = magnitude(e, gwp, later)
+                if not whole or not amount or e["is_total"]:
+                    continue
+                share = 100.0 * amount / whole
+                if share <= p.gwp_row_threshold_pct:
+                    continue
+                source = e["tags"].get("provider", "")
+                if not source:
+                    errors.append(
+                        f"'{e['name']}' gives {_pct(share)} of '{gwp}' over "
+                        f"all declared stages, in "
+                        f"{', '.join(m for m in e['modules'] if m in later)}: "
+                        f"its database and version are declared, and its "
+                        f"DATA line names no PROVIDER "
+                        f"({p.clause('data_quality')}).")
+                downstream.append({
+                    "process": e["name"],
+                    "modules": [m for m in e["modules"] if m in later],
+                    "source_type": e["tags"].get("source", ""),
+                    "source": source, "share_of_gwp": share})
 
         # Proxy data, per impact indicator: A to C together, D on its own
         groups = [("A to C", [c for c in self.d["modules"] if c != "D"])]
@@ -409,6 +463,7 @@ class EpdToolkitMixin:
         return {
             "passed": not errors, "label": label, "indicator": gwp,
             "rows": rows, "others": others, "primary_share": primary_total,
+            "a3_years": a3_years, "downstream": downstream,
             "primary_share_text": primary_text, "proxy": proxy,
             "coverage": [{"process": e["name"], "indicators": n}
                          for e, n in coverage],
@@ -447,6 +502,19 @@ class EpdToolkitMixin:
                       + _pct(others["primary"]).rjust(9))
         out.write(f"  Share of primary data in '{gwp}', A1-A3: "
                   f"{a['primary_share_text']}")
+        if a.get("a3_years"):
+            out.write("  Reference years of the other A3 (core) processes:")
+            for r in a["a3_years"]:
+                out.write(f"    {r['process']}: {r['year'] or 'none given'}")
+        if a.get("downstream"):
+            out.write(f"  Processes after A3 above "
+                      f"{p.gwp_row_threshold_pct:g}% of '{gwp}' over all "
+                      f"declared stages:")
+            for r in a["downstream"]:
+                out.write(f"    {r['process']} ({' '.join(r['modules'])}): "
+                          f"{r['source_type'] or 'source type not given'}, "
+                          f"{r['source'] or 'no source'}, "
+                          f"{_pct(r['share_of_gwp'])}")
         if a["proxy"]:
             worst = max(a["proxy"], key=lambda r: r["share"])
             out.write(f"  Proxy data: at most {_pct(worst['share'])} of an "

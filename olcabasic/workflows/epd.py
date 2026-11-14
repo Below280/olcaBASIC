@@ -1588,6 +1588,23 @@ class EpdWorkflow(EpdToolkitMixin, DocumentMixin):
                      round(o["share"], 2), round(o["primary"], 2)])
             add(["Total share of primary data", "", "", "", "", "", "",
                  self.dq["primary_share_text"]])
+            if self.dq.get("a3_years"):
+                add([])
+                add(["Reference years of the other A3 (core) processes"])
+                add(["Process", "Reference year"])
+                for r in self.dq["a3_years"]:
+                    add([r["process"], r["year"] or ""])
+            if self.dq.get("downstream"):
+                add([])
+                add([f"Processes after A3 above "
+                     f"{p.gwp_row_threshold_pct:g}% of "
+                     f"{self.dq['indicator']} over all declared stages"])
+                add(["Process", "Modules", "Source type", "Source",
+                     "Share of result (%)"])
+                for r in self.dq["downstream"]:
+                    add([r["process"], " ".join(r["modules"]),
+                         r["source_type"], r["source"],
+                         round(r["share_of_gwp"], 2)])
             add([])
             add([f"Data quality assessment: processes that give "
                  f"{p.coverage_pct:g}% of each indicator (modules A to C)"])

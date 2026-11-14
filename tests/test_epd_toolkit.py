@@ -1445,3 +1445,43 @@ END PROCESS''')
     assert "built from another process of that name" in refusal["error"]
     assert "FOLDER" in refusal["hint"]
     assert len(client.store["ProductSystem"]) == 1
+
+
+# ── A.5.4: core reference years and the database of large later steps ─
+
+def test_every_a3_process_has_its_reference_year_listed(session, client):
+    ready(session, client)
+    r = session.run("EPD DATA QUALITY")
+    assert r.ok, r.text
+    dq = next(x["result"] for x in r.data if x["call"] == "epd_data_quality")
+    assert {"process": "A3 | Kilning and planing", "year": 2025} in \
+        dq["a3_years"]
+    assert "Reference years of the other A3 (core) processes" in r.text
+
+
+def test_a_core_process_without_a_year_is_refused(session, client):
+    ready(session, client)
+    proc = next(p for p in client.store["Process"].values()
+                if p.name == "A3 | Kilning and planing")
+    from olcabasic.workflows.epd import TAG_PREFIX
+    proc.tags = [t for t in proc.tags if not t.startswith(TAG_PREFIX + ":year")]
+    session.engine.clear_caches()
+    r = session.run("EPD DATA QUALITY")
+    assert not r.ok
+    assert "is an A3 (core) process and its DATA line has no YEAR" in r.text
+
+
+def test_a_large_step_after_a3_has_its_database_listed(session, client):
+    r = session.run(PARAMS + block() + bridges(client)
+                    + modules().replace('"BRIDGE | Electricity | kWh", 0.02',
+                                        '"BRIDGE | Electricity | kWh", 20'))
+    assert r.ok, r.text
+    assert session.run(STEPS).ok
+    r = session.run("EPD DATA QUALITY")
+    dq = next(x["result"] for x in r.data if x["call"] == "epd_data_quality")
+    late = {d["process"]: d for d in dq["downstream"]}
+    assert "C3 | Chipping for reuse" in late or \
+        "BRIDGE | Electricity | kWh" in late, dq["downstream"]
+    row = next(iter(late.values()))
+    assert row["source"] and row["share_of_gwp"] > 10
+    assert "Processes after A3 above 10%" in r.text
