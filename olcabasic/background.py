@@ -12,13 +12,17 @@ under ISIC sections, 'A:Agriculture...' to 'U:...'; the US databases
 (LCA Commons, US LCI) under NAICS sectors, '11: ...' to '92: ...'. A top
 folder named like that is background, whatever a program says, and
 olcaBASIC does not build in it, edit it, move things into or out of it,
-or delete from it. Model folders such as '00: My model' are not
+or delete from it. ecoinvent's 'Recycled content cut-off' folder is
+background too. Model folders such as '00: My model' are not
 classification codes ('00' is no NAICS sector).
 """
 
 import re
 
 _ISIC = re.compile(r"^[A-U]\s*:")
+# Top folders of background databases that carry no classification code
+# (ecoinvent files its cut-off dummies for recycled content here).
+_NAMED = {"recycled content cut-off"}
 _NAICS = re.compile(r"^(1[1-9]|[2-9]\d)(\s*-\s*\d{2})?\s*:")
 
 
@@ -30,7 +34,8 @@ def is_background_folder(category: str) -> bool:
     """True when the top folder of `category` is a classification code
     of a background database."""
     top = top_folder(category)
-    return bool(top) and bool(_ISIC.match(top) or _NAICS.match(top))
+    return bool(top) and bool(_ISIC.match(top) or _NAICS.match(top)
+                              or top.lower() in _NAMED)
 
 
 REFUSAL_HINT = ("Background data is filed under classification codes "

@@ -228,3 +228,17 @@ def test_let_on_a_global_says_openlca_still_has_the_old_value(monkeypatch):
     r = s.run("LET kiln_kwh = 99")
     assert r.ok
     assert "kiln_kwh is a global parameter in openLCA, where it is 2" in r.text
+
+
+@pytest.mark.parametrize("folder, background", [
+    ("C:Manufacturing/24:Manufacture of basic metals", True),
+    ("E:Water supply; sewerage, waste management and remediation "
+     "activities", True),
+    ("31-33: Manufacturing", True), ("21: Mining", True),
+    ("Recycled content cut-off", True),
+    ("00: My model", False), ("00: olcaBASIC live test/Bridges", False),
+    ("My model", False), ("Examples", False), ("", False),
+])
+def test_which_folders_are_background(folder, background):
+    from olcabasic.background import is_background_folder
+    assert is_background_folder(folder) is background
