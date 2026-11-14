@@ -304,3 +304,15 @@ def test_a_picture_that_is_not_one_is_named_instead(reported, tmp_path):
 def test_other_formats_are_refused(reported, tmp_path):
     refused(reported.run(full_block(tmp_path, out="epd.pdf")),
             "Word file (.docx) or Markdown (.md)", "LibreOffice")
+
+
+def test_indicator_names_of_the_installed_pack():
+    from olcabasic.workflows.epd_document import DocumentMixin
+    plain = DocumentMixin._plain_name
+    assert plain("01 Core - Global Warming Potential - total (GWP-total) "
+                 "- v3.1") == "Global Warming Potential - total"
+    assert plain("PCR - Global warming potential except emissions and "
+                 "uptake of biogenic carbon (GWP-IOBC/GHG) - v3.1") == (
+        "Global warming potential except emissions and uptake of "
+        "biogenic carbon")
+    assert plain("Test climate change, total") == "Test climate change, total"

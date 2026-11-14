@@ -633,7 +633,7 @@ class DocumentMixin:
     def _plain_name(name: str) -> str:
         """'01 Core - Global Warming Potential - total (GWP-total) -
         v3.1' -> 'Global Warming Potential - total'"""
-        text = re.sub(r"^\d+\s+\w+\s+-\s+", "", name)
+        text = re.sub(r"^(?:\d+\s+)?[A-Za-z]+\s+-\s+", "", name)
         text = re.sub(r"\s*-\s*v\d+(\.\d+)*\s*$", "", text)
         text = re.sub(r"\s*\([^()]*\)\s*$", "", text)
         return text.strip()
@@ -796,9 +796,13 @@ class DocumentMixin:
         cols = self._columns()
         stage = self._stage_total(self.results)
         groups: Dict[str, List] = {}
-        for c in self.categories:
-            m = re.match(r"^\d+\s+(.+?)\s+-\s+", c["name"])
-            group = m.group(1) if m else "Results"
+        numbered = sorted(self.categories, key=lambda c: (
+            not re.match(r"^\d", c["name"]), c["name"]))
+        for c in numbered:
+            m = re.match(r"^(?:\d+\s+)?([A-Za-z]+)\s+-\s+", c["name"])
+            group = m.group(1).capitalize() if m else "Results"
+            if group == "Pcr":
+                group = "PCR"
             row = [en15804.indicator_code(c["name"])
                    or self._plain_name(c["name"]), c["unit"]]
             for col in cols:
@@ -807,7 +811,11 @@ class DocumentMixin:
                 row.append(sig(value, p.result_digits))
             groups.setdefault(group, []).append(row)
         unit = f"{self.d['unit_amount']:g} {self.d['unit']}"
-        for group, rows in groups.items():
+        order = ["Core", "PCR", "Additional", "Resource", "Waste", "Output"]
+        ranked = sorted(groups, key=lambda g: (
+            order.index(g) if g in order else len(order), g))
+        for group in ranked:
+            rows = groups[group]
             heading(3, f"{group} indicators, per {unit}"
                     if group != "Results" else f"Results per {unit}")
             table(["Indicator", "Unit"] + cols, rows)
