@@ -2484,6 +2484,11 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                   f"VALIDATE \"{sys_name}\" checks the one that is there.")
         else:
             self.out.write(f"  System created: {sys_name}")
+            if sys_name != proc_ref:
+                self.out.write(
+                    f"  NOTE: openLCA named the system '{sys_name}', not "
+                    f"'{proc_ref}'. Use that name in VALIDATE, CALCULATE "
+                    f"and the rest.")
             self._forget_validation(result.get("system_id", ""))
             self._system_rebuilt(result.get("system_id", ""))
         if result.get("warnings"):
