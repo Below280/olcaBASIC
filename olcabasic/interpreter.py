@@ -583,7 +583,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
             self.runtime.confirm_delete = stmt.enabled
 
         elif isinstance(stmt, SetFolderStmt):
-            folder = self._eval_str(stmt.folder)
+            folder = "/".join(
+                part.strip()
+                for part in self._eval_str(stmt.folder).strip().strip(
+                    "/").split("/"))
+            if any(not part for part in folder.split("/")) and folder:
+                raise BasicError(f"'{folder}' has an empty folder name in "
+                                 f"it.", stmt.line,
+                                 hint="Folders are separated by one /.")
             self._refuse_background_folder(
                 folder, f"SET {stmt.target or 'PROCESS'} FOLDER", stmt.line)
             if not folder.strip().strip("/"):
@@ -1120,7 +1127,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         name = self._bridge_name(given, stmt.unit, stmt.line)
         epd = self.runtime.epd
         if stmt.folder:
-            folder = self._eval_str(stmt.folder)
+            folder = "/".join(
+                part.strip()
+                for part in self._eval_str(stmt.folder).strip().strip(
+                    "/").split("/"))
+            if any(not part for part in folder.split("/")) and folder:
+                raise BasicError(f"'{folder}' has an empty folder name in "
+                                 f"it.", stmt.line,
+                                 hint="Folders are separated by one /.")
             self._refuse_background_folder(folder, "BRIDGE ... FOLDER",
                                            stmt.line)
         elif epd is not None:
@@ -1899,6 +1913,16 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
     def _refuse_background_folder(self, folder: str, command: str,
                                   line: int):
+        if "\\" in folder:
+            raise BasicError(
+                f"{command}: '{folder}' has a \\ in it. openLCA folders are "
+                f"separated by /, and a \\ would become part of a folder's "
+                f"name.", line, hint='For example: "00: My model/Bridges"')
+        if any(part.strip() in (".", "..") for part in folder.split("/")):
+            raise BasicError(
+                f"{command}: '{folder}' has a . or .. folder in it. openLCA "
+                f"has no such folders: give the whole path from the top.",
+                line, hint='For example: "00: My model/Bridges"')
         if is_background_folder(folder):
             raise BasicError(
                 f"{command} refused: '{folder}' is a background folder.",
@@ -3799,7 +3823,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
     def _exec_mkdir(self, stmt):
         """MKDIR "name": create a folder and stay where you are (the
         Linux meaning). CDIR creates it and goes in (the Acorn one)."""
-        name = self._eval_str(stmt.name).strip("/")
+        name = "/".join(part.strip() for part in
+                        self._eval_str(stmt.name).strip().strip("/").split("/"))
         if not name:
             raise BasicError("MKDIR needs a folder name.", stmt.line,
                              hint='For example: MKDIR "00: My model"')

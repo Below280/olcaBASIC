@@ -19,7 +19,9 @@ classification codes ('00' is no NAICS sector).
 
 import re
 
-_ISIC = re.compile(r"^[A-U]\s*:")
+# openLCA does not tell folder names apart by case alone, so neither
+# does this
+_ISIC = re.compile(r"^[A-U]\s*:", re.IGNORECASE)
 # Top folders of background databases that carry no classification code
 # (ecoinvent files its cut-off dummies for recycled content here).
 _NAMED = {"recycled content cut-off"}

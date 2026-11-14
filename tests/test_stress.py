@@ -345,3 +345,21 @@ def test_a_bad_sub_or_function_head_is_an_error_not_a_hang(s, code, words):
 ])
 def test_function_calls_and_loops_with_wrong_values(s, code, words):
     refused(s.run(code), words)
+
+
+@pytest.mark.parametrize("folder, words", [
+    ("00: A/../B", "has a . or .. folder in it"),
+    ("00: A\\B", "has a \\ in it"),
+    ("c:manufacturing", "is a background folder"),
+    ("00: A//B", "has an empty folder name"),
+])
+def test_folder_paths_that_would_mislead(s, folder, words):
+    refused(s.run(f'SET PROCESS FOLDER "{folder}"'), words)
+    refused(s.run(f'MKDIR "{folder}"'), words)
+
+
+def test_folder_paths_are_tidied(s):
+    r = s.run('SET PROCESS FOLDER "/00: A/ B /"\nMKDIR " 00: C / D "\nPWD')
+    assert r.ok, r.errors
+    assert "Build processes:  00: A/B" in r.text
+    assert "Created: 00: C/D" in r.text
