@@ -363,3 +363,12 @@ def test_folder_paths_are_tidied(s):
     assert r.ok, r.errors
     assert "Build processes:  00: A/B" in r.text
     assert "Created: 00: C/D" in r.text
+
+
+def test_a_program_past_its_time_limit_is_stopped(s):
+    r = s.run("LET i = 0\nWHILE i < 500000\n  LET i = i + 1\nWEND\nPRINT i",
+              time_limit=0.05)
+    refused(r, "past its time limit of 0.05 seconds")
+    # the next run has no limit left over
+    assert s.run("PRINT 1").ok
+    assert s.interpreter.deadline is None

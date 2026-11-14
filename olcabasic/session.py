@@ -26,6 +26,7 @@ the Python process.
 
 import atexit
 import threading
+import time
 import weakref
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -118,12 +119,17 @@ class Session:
     # ── running programs ─────────────────────────────────────
 
     def run(self, code: str, dry_run: bool = False,
-            filename: str = "") -> RunResult:
+            filename: str = "",
+            time_limit: Optional[float] = None) -> RunResult:
         """Run olcaBASIC code. The program stops at its first error.
 
         dry_run=True parses the program and checks what can be checked
         without openLCA (names, blocks, files, things that would need
         an answer from the keyboard). Nothing is executed.
+
+        time_limit (seconds) stops the program before the first line
+        that starts after the limit. A single long openLCA calculation
+        is not cut short: it finishes, and the next line is refused.
         """
         with self.lock:
             sink = RecordingSink()
@@ -170,6 +176,14 @@ class Session:
                 self.connect()
 
             interp._stop_requested = False
+            # a run inside a run (session.run from python_exec) keeps the
+            # outer run's limit if that ends sooner
+            outer_limit = (interp.deadline, interp.time_limit)
+            if time_limit and (interp.deadline is None or
+                               time.monotonic() + time_limit
+                               < interp.deadline):
+                interp.time_limit = time_limit
+                interp.deadline = time.monotonic() + time_limit
             # a program always starts at the top level, whatever the last
             # one was doing when it stopped
             interp.runtime.current_scope = interp.runtime.global_scope
@@ -203,6 +217,7 @@ class Session:
                                                  err["hint"]) if p)
                     sink.write(f"  Error: Line {line}: {shown}")
                     break
+            interp.deadline, interp.time_limit = outer_limit
             if not errors and not all(
                     type(st).__name__ in ("SaveProgramStmt", "HelpStmt",
                                           "LoadStmt", "ListStmt",

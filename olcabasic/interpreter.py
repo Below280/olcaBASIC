@@ -9,6 +9,7 @@ control flow, output).
 import os
 import re
 import math
+import time as _time
 from typing import Any, Dict, List, Optional
 
 from .ast_nodes import *
@@ -236,6 +237,8 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
                  out: Optional[OutputSink] = None,
                  runtime: Optional[Runtime] = None):
         self.bridge = bridge
+        self.deadline: Optional[float] = None    # time.monotonic() value
+        self.time_limit: Optional[float] = None  # seconds, for the message
         self.runtime = runtime or Runtime()
         self.out = out or PrintSink()      # where output goes
         self._stop_requested = False
@@ -408,6 +411,14 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
         """Execute a single statement. An error raised without a line
         number (from deep inside an expression, say) gets the line of
         the statement, or of the line inside a block, being run."""
+        if self.deadline is not None and _time.monotonic() > self.deadline:
+            raise BasicError(
+                f"The program has run past its time limit of "
+                f"{self.time_limit:g} seconds, so it was stopped before "
+                f"this line.", stmt.line,
+                hint="Run it in smaller parts. The limit is set by "
+                     "whoever started olcaBASIC (for the MCP: "
+                     "OLCA_MCP_RUN_TIMEOUT).")
         outer = (self._line, self._command)
         self._line = stmt.line or self._line
         self._command = _command_word(stmt)
