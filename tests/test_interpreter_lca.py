@@ -580,7 +580,7 @@ def test_delete_asks_when_confirm_is_off(run, client, monkeypatch):
 def test_delete_ambiguous_name_is_refused(interp):
     with pytest.raises(BasicError) as e:
         interp.run_program(f'CONFIRM DELETE ON\nDELETE PROCESS "{ELECTRICITY}"')
-    assert "3 processs are called" in str(e.value) and "Nothing was deleted" in str(e.value)
+    assert "3 processes are called" in str(e.value) and "Nothing was deleted" in str(e.value)
 
 
 # ── SHOW, LINK, MOVE, navigation ─────────────────────────────

@@ -10,6 +10,15 @@ import csv
 import io
 
 
+def _plural(word: str) -> str:
+    """process -> processes, flow -> flows, currency -> currencies."""
+    if word.endswith(("s", "x", "ch", "sh")):
+        return word + "es"
+    if word.endswith("y") and word[-2:-1] not in "aeiou":
+        return word[:-1] + "ies"
+    return word + "s"
+
+
 def format_table(headers: List[str], rows: List[List[str]],
                  max_widths: Optional[List[int]] = None) -> str:
     """Format a list of rows as an aligned text table."""
@@ -913,7 +922,7 @@ def format_entities(result: Dict) -> str:
     if not rows:
         term = result.get("term")
         return (f"  No {label} matches '{term}'." if term
-                else f"  This database has no {label}s.")
+                else f"  This database has no {_plural(label)}.")
     extra = next((k for k in ("location", "unit") if k in rows[0]), None)
     headers = ["Name"] + ([extra.capitalize()] if extra else []) \
         + ["Folder", "UUID"]

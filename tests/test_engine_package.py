@@ -142,7 +142,7 @@ def test_resolve_entity_strict(engine, client):
     assert engine.resolve_entity_strict("process", STEEL) == {
         "id": steel.id, "name": STEEL}
     assert engine.resolve_entity_strict("process", "zzz") == {"not_found": True}
-    assert "3 processs are called" in engine.resolve_entity_strict(
+    assert "3 processes are called" in engine.resolve_entity_strict(
         "process", ELECTRICITY)["error"]
     assert "Unknown entity type" in engine.resolve_entity_strict("method", "x")["error"]
 

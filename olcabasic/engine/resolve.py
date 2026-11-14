@@ -15,6 +15,15 @@ from typing import Dict, Optional
 import olca_schema as o
 
 
+def _plural(word: str) -> str:
+    """process -> processes, flow -> flows, currency -> currencies."""
+    if word.endswith(("s", "x", "ch", "sh")):
+        return word + "es"
+    if word.endswith("y") and word[-2:-1] not in "aeiou":
+        return word[:-1] + "ies"
+    return word + "s"
+
+
 class ResolveMixin:
     """Resolution methods of the Engine."""
 
@@ -358,7 +367,7 @@ class ResolveMixin:
             cats = sorted({getattr(d, "category", "") or "(root)"
                            for d in exact})
             return {"error": (
-                f"{len(exact)} {label}s are called '{ref}' (in: "
+                f"{len(exact)} {_plural(label)} are called '{ref}' (in: "
                 f"{'; '.join(cats[:5])}). Nothing was deleted. "
                 f"Delete by UUID instead.")}
         return {"not_found": True}

@@ -81,6 +81,15 @@ _USERS: Dict[str, Tuple[Any, ...]] = {
 _FORMULA_KEYS = ("formula", "amountFormula", "costFormula")
 
 
+def _plural(word: str) -> str:
+    """process -> processes, flow -> flows, currency -> currencies."""
+    if word.endswith(("s", "x", "ch", "sh")):
+        return word + "es"
+    if word.endswith("y") and word[-2:-1] not in "aeiou":
+        return word[:-1] + "ies"
+    return word + "s"
+
+
 class EntitiesMixin:
     """The generic verbs and the MAKE blocks for every entity type."""
 
@@ -162,7 +171,7 @@ class EntitiesMixin:
             f"    {self._folder(d) or '(no folder)':<40} "
             f"{getattr(d, 'location', '') or '':<10} {d.id}"
             for d in found[:12])
-        return {"error": f"'{ref}' matches {len(found)} {label}s:\n{listing}",
+        return {"error": f"'{ref}' matches {len(found)} {_plural(label)}:\n{listing}",
                 "hint": "Use the UUID in place of the name."}
 
     def _get_one(self, word: str, ref: str):
