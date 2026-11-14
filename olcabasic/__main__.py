@@ -96,11 +96,15 @@ def main():
         # Program mode: run a .baslca file
         from .interpreter import read_program_file
         try:
-            source = read_program_file(args.file)
+            source = read_program_file(args.file, "Program file")
         except BasicError as e:
             print(e.message)
             sys.exit(1)
-        interpreter.run_program(source, filename=args.file)
+        try:
+            interpreter.run_program(source, filename=args.file)
+        except BasicError as e:
+            print(f"Error: {e.message}")
+            sys.exit(1)
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)

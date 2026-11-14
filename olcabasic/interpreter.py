@@ -140,7 +140,7 @@ def _command_word(stmt) -> str:
 LOOP_LIMIT = 1_000_000
 
 
-def read_program_file(path: str) -> str:
+def read_program_file(path: str, what: str = "Include file") -> str:
     """The text of a program file: UTF-8 (with or without a byte order
     mark), or, failing that, the Windows code page Notepad used to save
     in. A missing file, a folder or an unreadable file is a plain
@@ -151,7 +151,7 @@ def read_program_file(path: str) -> str:
         with open(path, "rb") as f:
             raw = f.read()
     except FileNotFoundError:
-        raise BasicError(f"Include file not found: {path}")
+        raise BasicError(f"{what} not found: {path}")
     except OSError as e:
         raise BasicError(f"Could not read '{path}': {e.strerror or e}.")
     for encoding in ("utf-8-sig", "cp1252"):
