@@ -81,8 +81,11 @@ class Report:
         for w in self.warnings:
             out.append(f"  WARNING: Line {w['line']}: {w['message']}")
         if not self.errors:
-            out.append("  No problems found. Names in the database are "
-                       "checked when the program runs.")
+            out.append("  No problems found in the program itself. A dry "
+                       "run does not read the database: names, units, and "
+                       "whether a process or flow is background data that "
+                       "the rules refuse to change are checked when the "
+                       "program runs.")
         return out
 
 
