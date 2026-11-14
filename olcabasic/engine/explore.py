@@ -443,7 +443,8 @@ class ExploreMixin:
 
     def find_flow_usage(self, flow_id: str, max_hits: int = 10,
                         progress=None, prefer_categories=None,
-                        workers: int = 8) -> Dict:
+                        workers: int = 8,
+                        skip_background: bool = False) -> Dict:
         """
         Find where a flow is used: by processes that produce it, in
         process exchanges, and (for elementary flows) in impact category
@@ -456,6 +457,12 @@ class ExploreMixin:
         folders) before the rest, (3) reads several processes at once,
         and (4) stops as soon as max_hits uses are found. progress, if
         given, is called with (checked, total) as it goes.
+
+        skip_background leaves out processes in background folders. Used
+        for a flow in a model folder: a background process can only hold
+        it if it was edited outside olcaBASIC, which the rules refuse,
+        and reading every process of ecoinvent takes about an hour over
+        IPC (26,500 processes, openLCA 2.7.0, 14/11/2026).
         """
         import threading
         from concurrent.futures import ThreadPoolExecutor
@@ -491,6 +498,10 @@ class ExploreMixin:
                 return out
 
             descs = list(self.client.get_descriptors(o.Process))
+            if skip_background:
+                from ..background import is_background_folder as _bg
+                descs = [d for d in descs
+                         if not _bg(getattr(d, "category", "") or "")]
             if len(used_by) >= max_hits:
                 return result([], 0, len(descs))
 

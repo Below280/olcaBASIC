@@ -1861,9 +1861,13 @@ class BuildMixin:
             # those processes and methods broken. Refuse instead.
             if entity_type == "flow" and not usage_checked:
                 # One use is enough to refuse, so stop at the first
+                from ..background import is_background_folder
+                own_flow = not is_background_folder(
+                    getattr(entity, "category", "") or "")
                 usage = self.find_flow_usage(
                     entity_id, max_hits=1,
-                    prefer_categories=prefer_categories)
+                    prefer_categories=prefer_categories,
+                    skip_background=own_flow)
                 if "error" in usage:
                     return usage
                 if (not usage["in_use"] and usage["processes_checked"]

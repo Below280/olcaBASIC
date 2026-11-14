@@ -515,3 +515,18 @@ def test_a_second_flow_usage_check_does_not_read_the_background_again(
     assert not s.engine.find_flow_usage(two)["in_use"]
     second = [c for c in client.calls if c[:2] == ("get", "Process")]
     assert ("get", "Process", background) not in second
+
+
+def test_deleting_a_flow_of_a_model_folder_does_not_read_the_background(
+        s, client):
+    """ecoinvent has 26,500 processes: reading them all for one DELETE
+    FLOW took about an hour (the agent test)."""
+    from fake_client import STEEL as _S
+    assert s.run(SETUP + 'MAKE FLOW "Spare", kg, PRODUCT').ok
+    background = client.by_name(o.Process, _S)[0].id
+    client.calls.clear()
+    r = s.run('CONFIRM DELETE ON\nDELETE FLOW "Spare"')
+    assert r.ok, r.errors
+    assert "outside the background folders" in r.text
+    assert ("get", "Process", background) not in client.calls
+    assert not client.by_name(o.Flow, "Spare")

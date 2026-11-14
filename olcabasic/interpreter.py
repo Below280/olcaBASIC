@@ -2869,14 +2869,23 @@ class Interpreter(ResultsInterpMixin, FieldsInterpMixin, EntitiesInterpMixin,
 
         if etype == "flow":
             # Deleting a flow that is still used leaves processes and
-            # impact categories broken, so look for uses first. Every
-            # process is read: this is slow on a large database.
-            self.out.write(f"  Checking where '{target['name']}' is used "
-                           f"(this reads every process)...")
+            # impact categories broken, so look for uses first. A flow of
+            # a model folder is looked for in every process outside the
+            # background folders (background data is not edited, so it
+            # cannot hold one); a background flow in every process, which
+            # takes about an hour on ecoinvent.
+            own_flow = not is_background_folder(target.get("category")
+                                                or "")
+            self.out.write(
+                f"  Checking where '{target['name']}' is used (this reads "
+                + ("every process outside the background folders"
+                   if own_flow else "every process in the database, which "
+                   "is slow on a large one") + ")...")
             usage = self.bridge.find_flow_usage(
                 target["id"], 1, prefer_categories=[
                     f for f in (self.runtime.process_folder,
-                                self.runtime.flow_folder) if f])
+                                self.runtime.flow_folder) if f],
+                skip_background=own_flow)
             self._emit("find_flow_usage", usage)
             if "error" in usage:
                 raise BasicError(

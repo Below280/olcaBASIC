@@ -608,18 +608,30 @@ def test_delete_flow_after_its_process(session, client):
     assert "Checking where 'Widget' is used" in r.text
 
 
-def test_delete_flow_reads_every_process(session, client):
+def _not_background(client):
+    from olcabasic.background import is_background_folder
+    return {pid for pid, p in client.store["Process"].items()
+            if not is_background_folder(p.category or "")}
+
+
+def test_delete_flow_reads_every_process_outside_the_background(session,
+                                                                 client):
+    """A flow of a model folder: every process outside the background
+    folders is read (background data is not edited, so it cannot hold
+    the flow); reading all of ecoinvent took about an hour."""
     session.run(SETUP + 'MAKE FLOW "Orphan", kg, PRODUCT')
     client.calls.clear()
     assert session.run('DELETE FLOW "Orphan"').ok
     read = {c[2] for c in client.calls if c[:2] == ("get", "Process")}
-    assert read >= set(client.store["Process"])
+    assert read >= _not_background(client)
 
 
 def test_delete_flow_refused_if_a_process_cannot_be_read(session, client):
-    session.run(SETUP + 'MAKE FLOW "Orphan", kg, PRODUCT')
+    session.run(SETUP + 'MAKE FLOW "Orphan", kg, PRODUCT\nMAKE PROCESS '
+                        '"Own"\n  OUTPUT MAKE FLOW "Own", 1, kg, PRODUCT\n'
+                        'END PROCESS')
     original = client.get
-    victim = next(iter(client.store["Process"]))
+    victim = next(iter(_not_background(client)))
 
     def flaky(model_type, uid=None, name=None):
         if model_type is o.Process and uid == victim:

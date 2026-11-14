@@ -88,7 +88,8 @@ class ResolveMixin:
                 return {"id": m.id, "name": m.name}
         exact = [m for m in methods if m.name == ref]
         if len(exact) == 1:
-            return {"id": exact[0].id, "name": exact[0].name}
+            return {"id": exact[0].id, "name": exact[0].name,
+                    "category": getattr(exact[0], "category", "") or ""}
         if len(exact) > 1:
             return {"error": f"{len(exact)} impact methods are called "
                              f"'{ref}'. Use the UUID of the one you mean.",
@@ -358,7 +359,8 @@ class ResolveMixin:
         items = self.get_descriptors(otype)
         by_id = [d for d in items if d.id == ref]
         if by_id:
-            return {"id": by_id[0].id, "name": by_id[0].name}
+            return {"id": by_id[0].id, "name": by_id[0].name,
+                    "category": getattr(by_id[0], "category", "") or ""}
         exact = [d for d in items if d.name == ref]
         if len(exact) == 1:
             return {"id": exact[0].id, "name": exact[0].name}
