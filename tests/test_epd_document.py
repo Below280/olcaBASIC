@@ -252,3 +252,55 @@ def test_dry_run_and_help(tmp_path):
     r = s.run(full_block(tmp_path), dry_run=True)
     assert any("EPD DOCUMENT needs an EPD" in e["message"]
                for e in r.errors)
+
+
+# ── the Word file ────────────────────────────────────────────
+
+def _png(path, w=40, h=20):
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * w for _ in range(h))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n"
+                     + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2,
+                                                  0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def test_a_word_file(reported, tmp_path):
+    import zipfile
+    from xml.dom.minidom import parseString
+    block = full_block(tmp_path, out="epd.docx")
+    for name in ("flow.png", "product.png", "logo.png"):
+        _png(tmp_path / name)
+    r = reported.run(block)
+    assert r.ok, f"{r.errors}\n{r.text}"
+    with zipfile.ZipFile(tmp_path / "epd.docx") as z:
+        names = set(z.namelist())
+        assert {"word/document.xml", "word/styles.xml", "[Content_Types].xml",
+                "word/_rels/document.xml.rels"} <= names
+        assert sum(n.startswith("word/media/") for n in names) == 3
+        xml = z.read("word/document.xml").decode("utf-8")
+        parseString(xml)                       # well-formed
+        parseString(z.read("word/styles.xml"))
+        parseString(z.read("word/_rels/document.xml.rels"))
+    for text in ("Environmental Product Declaration: Test timber",
+                 "Content declaration", "EPD-IES-0000000", "GWP-GHG",
+                 "Stand-in statement ownership."):
+        assert text in xml, text
+    assert xml.count("<w:tbl>") >= 10
+    assert 'w:val="Heading2"' in xml
+
+
+def test_a_picture_that_is_not_one_is_named_instead(reported, tmp_path):
+    r = reported.run(full_block(tmp_path, out="epd.docx"))  # b"png" files
+    assert r.ok, r.text
+    assert "is not a PNG, JPEG or GIF picture" in r.text
+
+
+def test_other_formats_are_refused(reported, tmp_path):
+    refused(reported.run(full_block(tmp_path, out="epd.pdf")),
+            "Word file (.docx) or Markdown (.md)", "LibreOffice")

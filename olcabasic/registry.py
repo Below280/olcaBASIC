@@ -1723,9 +1723,9 @@ END EPD SENSITIVITY''',
         statements=("EpdSensitivityStmt",)),
     Command(
         name="EPD DOCUMENT", topic="EPD",
-        usage='EPD DOCUMENT "file.md" ... END EPD DOCUMENT',
+        usage='EPD DOCUMENT "file.docx" ... END EPD DOCUMENT',
         summary="Write the EPD itself, in the sections of the International EPD System",
-        syntax='''EPD DOCUMENT "file.md"
+        syntax='''EPD DOCUMENT "file.docx" | "file.md"
   STATEMENTS "statements.txt"
   OWNER "name"
   OWNER ADDRESS "address"
@@ -1754,7 +1754,7 @@ END EPD SENSITIVITY''',
   [HISTORY "YYYY-MM-DD", "what changed"] [REFERENCE "text"]
   [ABBREVIATION "short", "meaning"] [ADDITIONAL "text"]
 END EPD DOCUMENT''',
-        example='''EPD DOCUMENT "epd.md"
+        example='''EPD DOCUMENT "epd.docx"
   STATEMENTS "ies_statements.txt"
   OWNER "Example Timber Ltd"
   OWNER ADDRESS "1 Mill Lane, Hexham, United Kingdom"
@@ -1770,7 +1770,9 @@ END EPD DOCUMENT''',
   SCENARIO C1, C2, C3, C4, D "Demolished by hand, 90% burnt for energy"
   OMITTED A4, A5, B1, B2, B3, B4, B5, B6, B7 "Depend on the building"
 END EPD DOCUMENT''',
-        notes="Writes the EPD as a Markdown document, in the sections and "
+        notes="Writes the EPD as a Word file (.docx, which LibreOffice "
+              "and Google Docs open too, and LibreOffice saves as .odt or "
+              "PDF) or as Markdown (.md), in the sections and "
               "order of GPI 5.1.0, 7.4: cover page, general information, "
               "the EPD owner, the product, the content declaration, LCA "
               "information, environmental performance, version history, "

@@ -166,7 +166,7 @@ EPD REPORT "epd_results.csv"
 ' The statements file is your own copy of the programme's required
 ' wording (keys: cover, iso14025, operator, ownership, comparability,
 ' relative, end_of_life, primary_share). HELP EPD DOCUMENT lists it all.
-' EPD DOCUMENT "epd.md"
+' EPD DOCUMENT "epd.docx"
 '   STATEMENTS "ies_statements.txt"
 '   OWNER "Company name"
 '   OWNER ADDRESS "Street, town, postcode, country"

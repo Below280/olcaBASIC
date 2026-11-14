@@ -1,5 +1,5 @@
 """
-EPD DOCUMENT: the EPD itself, as a Markdown document, in the sections
+EPD DOCUMENT: the EPD itself, as a Word file (.docx) or Markdown, in the sections
 and order the programme's General Programme Instructions set out
 (GPI 5.1.0, section 7.4).
 
@@ -112,7 +112,14 @@ class DocumentMixin:
                      'declares what the report declares.')
         if not filename.strip():
             raise BasicError("EPD DOCUMENT needs a file name.", line,
-                             hint='For example: EPD DOCUMENT "epd.md"')
+                             hint='For example: EPD DOCUMENT "epd.docx"')
+        kind = os.path.splitext(filename)[1].lower()
+        if kind not in (".docx", ".md"):
+            raise BasicError(
+                f"EPD DOCUMENT writes a Word file (.docx) or Markdown "
+                f"(.md), not '{kind or filename}'.", line,
+                hint='For example: EPD DOCUMENT "epd.docx". LibreOffice '
+                     'opens the .docx and saves it as .odt or PDF.')
 
         g = self._gather(lines)
         errors, draft = self._document_checks(g, line)
@@ -131,12 +138,22 @@ class DocumentMixin:
 
         register = self._remember_register(self._dq_analyse(line))
         text = self._render(g, statements, register, draft)
+        skipped: List[str] = []
         try:
-            with open(filename, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(text)
+            if kind == ".docx":
+                from .epd_docx import markdown_to_docx
+                skipped = markdown_to_docx(text, filename,
+                                           title=f"EPD: {self.d['name']}")
+            else:
+                with open(filename, "w", encoding="utf-8",
+                          newline="\n") as fh:
+                    fh.write(text)
         except OSError as e:
             raise BasicError(f"Could not write '{filename}': {e}", line)
         self.out.write(f"  EPD document saved to {filename}")
+        for path in skipped:
+            self.out.write(f"  WARNING: '{path}' is not a PNG, JPEG or GIF "
+                           f"picture, so its file name stands in its place.")
         if draft:
             self.out.write(
                 f"  It is a DRAFT: {len(draft)} item"

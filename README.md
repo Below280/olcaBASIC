@@ -1169,7 +1169,7 @@ EPD SENSITIVITY BY n% [SAVE "file.csv"]
   GROUP "name" VARY parameter, parameter, ...
   ...
 END EPD SENSITIVITY
-EPD DOCUMENT "file.md"
+EPD DOCUMENT "file.docx" | "file.md"
   STATEMENTS "statements.txt"
   OWNER "name"
   OWNER ADDRESS "address"
