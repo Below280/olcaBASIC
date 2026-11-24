@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use olcaBASIC, please cite it as below."
+title: "olcaBASIC"
+type: software
+abstract: >-
+  A BASIC-like language for openLCA that enforces life cycle assessment
+  modelling rules in code: background data reached only through bridges,
+  validation before calculation, and EN 15804+A2 environmental product
+  declarations built to the rules of the International EPD System.
+authors:
+  - given-names: Tom
+    family-names: Bradley
+    orcid: "https://orcid.org/0000-0002-4021-6493"
+    affiliation: Below280 Limited
+  - name: Below280 Limited
+    website: "https://below280.com"
+version: 0.4.0
+date-released: "2026-11-24"
+license: MPL-2.0
+repository-code: "https://github.com/Below280/olcaBASIC"
+url: "https://pypi.org/project/olcabasic/"
+keywords:
+  - openLCA
+  - life cycle assessment
+  - LCA
+  - EPD
+  - EN 15804
+  - BASIC
