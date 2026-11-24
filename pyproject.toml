@@ -7,7 +7,7 @@ name = "olcabasic"
 version = "0.4.0"
 description = "A BASIC-like language for controlling openLCA"
 readme = "README.md"
-license = {text = "MPL-2.0"}
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 authors = [{name = "Below280", email = "info@below280.com"}]
 keywords = ["lca", "openlca", "basic", "dsl", "life-cycle-assessment"]
